@@ -661,9 +661,6 @@ ipc_right_destroy(
 
 		dnrequest = ipc_right_dncancel_macro(space, port, name, entry);
 
-		OBJECT_CLEAR(entry, name);
-		ipc_entry_dealloc(space, name, entry);
-
 		if (type & MACH_PORT_TYPE_SEND) {
 			assert(port->ip_srights > 0);
 			if (--port->ip_srights == 0
@@ -680,18 +677,24 @@ ipc_right_destroy(
 			assert(ip_active(port));
 			assert(port->ip_receiver == space);
 
+			OBJECT_CLEAR(entry, name);
 			ipc_port_clear_receiver(port);
 			ipc_port_destroy(port); /* consumes our ref, unlocks */
+			/* ipc_entry_dealloc() closes the backing file descriptor. */
+			ipc_entry_dealloc(space, name, entry);
 		} else if (type & MACH_PORT_TYPE_SEND_ONCE) {
 			assert(port->ip_sorights > 0);
+			OBJECT_CLEAR(entry, name);
 			ip_unlock(port);
-
+			ipc_entry_dealloc(space, name, entry);
 			ipc_notify_send_once(port); /* consumes our ref */
 		} else {
 			assert(port->ip_receiver != space);
 
+			OBJECT_CLEAR(entry, name);
 			ip_unlock(port);
 			ip_release(port);
+			ipc_entry_dealloc(space, name, entry);
 		}
 
 		if (nsrequest != IP_NULL)
@@ -986,9 +989,9 @@ ipc_right_delta(
 		assert(port->ip_receiver_name == name);
 		assert(port->ip_receiver == space);
 
-		if (bits & MACH_PORT_TYPE_SEND) {
-			assert(IE_BITS_TYPE(bits) ==
-					MACH_PORT_TYPE_SEND_RECEIVE);
+			if (bits & MACH_PORT_TYPE_SEND) {
+				assert(IE_BITS_TYPE(bits) ==
+						MACH_PORT_TYPE_SEND_RECEIVE);
 			assert(ipc_entry_refs(entry) > 0);
 			assert(port->ip_srights > 0);
 
@@ -1008,25 +1011,27 @@ ipc_right_delta(
 				ipc_entry_hold(entry); /* increment urefs */
 			}
 
-			entry->ie_bits = bits;
-			OBJECT_CLEAR(entry, name);
-			is_write_unlock(space);
-		} else {
-			assert(IE_BITS_TYPE(bits) == MACH_PORT_TYPE_RECEIVE);
+				entry->ie_bits = bits;
+				OBJECT_CLEAR(entry, name);
+				is_write_unlock(space);
+			} else {
+				assert(IE_BITS_TYPE(bits) == MACH_PORT_TYPE_RECEIVE);
 
-			dnrequest = ipc_right_dncancel_macro(space, port,
+				dnrequest = ipc_right_dncancel_macro(space, port,
 							     name, entry);
-			OBJECT_CLEAR(entry, name);
-			/* drops the space lock */
-			ipc_entry_dealloc(space, name, entry);
-		}
+				OBJECT_CLEAR(entry, name);
+			}
 
 
-		ipc_port_clear_receiver(port);
-		ipc_port_destroy(port);	/* consumes ref, unlocks */
+			ipc_port_clear_receiver(port);
+			ipc_port_destroy(port);	/* consumes ref, unlocks */
+			if ((bits & MACH_PORT_TYPE_SEND) == 0)
+				/* ipc_entry_dealloc() closes the backing file descriptor. */
+				/* drops the space lock */
+				ipc_entry_dealloc(space, name, entry);
 
-		if (dnrequest != IP_NULL)
-			ipc_notify_port_deleted(dnrequest, name);
+			if (dnrequest != IP_NULL)
+				ipc_notify_port_deleted(dnrequest, name);
 		break;
 	    }
 
