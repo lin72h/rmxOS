@@ -35,6 +35,10 @@
 #include <sys/sysproto.h>
 #include <sys/types.h>
 #include <sys/systm.h>
+#include <sys/proc.h>
+#include <sys/mach/task.h>
+#include <sys/mach/ipc/ipc_entry.h>
+#include <sys/mach/ipc/ipc_space.h>
 
 
 int mach_debug_enable;
@@ -44,6 +48,77 @@ SYSCTL_ROOT_NODE(OID_AUTO,  mach, CTLFLAG_RW, 0,
 
 SYSCTL_INT(_mach, OID_AUTO, debug_enable, CTLFLAG_RWTUN,
 		   &mach_debug_enable, 0, "enable mach debug logging");
+
+static int
+sysctl_mach_current_task_space_stats(SYSCTL_HANDLER_ARGS)
+{
+	char buf[192];
+	struct proc *p;
+	task_t task;
+	ipc_space_t space;
+	ipc_entry_num_t tsize, tree_total, table_next;
+	unsigned int inuse, recv, send, send_once, pset, dead;
+	ipc_entry_t entry;
+
+	p = curthread != NULL ? curthread->td_proc : NULL;
+	task = p != NULL ? p->p_machdata : TASK_NULL;
+	if (task == TASK_NULL || (space = task->itk_space) == IS_NULL) {
+		strlcpy(buf, "status=unavailable reason=no_space", sizeof(buf));
+		return (sysctl_handle_string(oidp, buf, sizeof(buf), req));
+	}
+
+	inuse = recv = send = send_once = pset = dead = 0;
+	table_next = 0;
+	tree_total = 0;
+
+	is_read_lock(space);
+	if (!space->is_active) {
+		is_read_unlock(space);
+		strlcpy(buf, "status=unavailable reason=inactive", sizeof(buf));
+		return (sysctl_handle_string(oidp, buf, sizeof(buf), req));
+	}
+
+	tsize = space->is_table_size;
+	tree_total = space->is_tree_total;
+	if (space->is_table_next != NULL)
+		table_next = space->is_table_next->its_size;
+	is_read_unlock(space);
+
+	PROC_LOCK(p);
+	LIST_FOREACH(entry, &space->is_entry_list, ie_space_link) {
+		ipc_entry_bits_t bits;
+		mach_port_type_t type;
+
+		bits = entry->ie_bits;
+		type = IE_BITS_TYPE(bits);
+		if (type == MACH_PORT_TYPE_NONE)
+			continue;
+
+		inuse++;
+		if (type & MACH_PORT_TYPE_RECEIVE)
+			recv++;
+		if (type & MACH_PORT_TYPE_SEND)
+			send++;
+		if (type & MACH_PORT_TYPE_SEND_ONCE)
+			send_once++;
+		if (type & MACH_PORT_TYPE_PORT_SET)
+			pset++;
+		if (type & MACH_PORT_TYPE_DEAD_NAME)
+			dead++;
+	}
+	PROC_UNLOCK(p);
+
+	snprintf(buf, sizeof(buf),
+	    "status=ok table=%u next=%u tree=%u inuse=%u recv=%u send=%u send_once=%u pset=%u dead=%u",
+	    (unsigned int)tsize, (unsigned int)table_next, (unsigned int)tree_total,
+	    inuse, recv, send, send_once, pset, dead);
+	return (sysctl_handle_string(oidp, buf, sizeof(buf), req));
+}
+
+SYSCTL_PROC(_mach, OID_AUTO, current_task_space_stats,
+    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, 0, 0,
+    sysctl_mach_current_task_space_stats, "A",
+    "current task Mach space statistics");
 
 
 extern struct filterops machport_filtops;
@@ -150,5 +225,3 @@ static moduledata_t mach_moduledata = {
 };
 
 DECLARE_MODULE(mach, mach_moduledata, SI_SUB_KLD, SI_ORDER_ANY);
-
-
