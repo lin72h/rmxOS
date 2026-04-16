@@ -611,7 +611,6 @@ ipc_right_destroy(
 		assert(entry->ie_object == IO_NULL);
 
 		ipc_entry_dealloc(space, name, entry);
-		is_write_unlock(space);
 		break;
 
 	    case MACH_PORT_TYPE_PORT_SET: {
@@ -657,7 +656,6 @@ ipc_right_destroy(
 			entry->ie_request = 0;
 			OBJECT_CLEAR(entry, name);
 			ipc_entry_dealloc(space, name, entry);
-			is_write_unlock(space);
 			break;
 		}
 
@@ -665,7 +663,6 @@ ipc_right_destroy(
 
 		OBJECT_CLEAR(entry, name);
 		ipc_entry_dealloc(space, name, entry);
-		is_write_unlock(space);
 
 		if (type & MACH_PORT_TYPE_SEND) {
 			assert(port->ip_srights > 0);
