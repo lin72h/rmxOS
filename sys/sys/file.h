@@ -73,6 +73,9 @@ struct nameidata;
 #define	DTYPE_TIMERFD	14	/* timerfd */
 #define	DTYPE_INOTIFY	15	/* inotify descriptor */
 #define	DTYPE_JAILDESC	16	/* jail descriptor */
+#ifdef COMPAT_MACH
+#define	DTYPE_MACH_IPC	17	/* Mach port or port set */
+#endif
 
 #ifdef _KERNEL
 

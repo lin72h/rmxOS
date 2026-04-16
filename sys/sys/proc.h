@@ -383,6 +383,9 @@ struct thread {
 	int		td_ma_cnt;	/* (k) size of *td_ma */
 	/* LP64 hole */
 	void		*td_emuldata;	/* Emulator state data */
+#ifdef COMPAT_MACH
+	void		*td_machdata;	/* (k) Mach state data. */
+#endif
 	int		td_lastcpu;	/* (t) Last cpu we were on. */
 	int		td_oncpu;	/* (t) Which cpu we are on. */
 	void		*td_lkpi_task;	/* LinuxKPI task struct pointer */
@@ -777,6 +780,9 @@ struct proc {
 
 	TAILQ_HEAD(, kq_timer_cb_data)	p_kqtim_stop;	/* (c) */
 	LIST_ENTRY(proc) p_jaillist;	/* (d) Jail process linkage. */
+#ifdef COMPAT_MACH
+	void		*p_machdata;	/* (c) Mach state data. */
+#endif
 };
 
 #define	p_session	p_pgrp->pg_session

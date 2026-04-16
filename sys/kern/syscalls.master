@@ -117,6 +117,9 @@
 #include <sys/param.h>
 #include <sys/sysent.h>
 #include <sys/sysproto.h>
+#include <sys/mach/mach_types.h>
+#include <sys/mach/mach_time.h>
+#include <sys/mach/message.h>
 %%ABI_HEADERS%%
 
 0	AUE_NULL	SYSMUX {
@@ -1493,7 +1496,23 @@
 		    _In_opt_ _Contains_long_ptr_ struct sigevent *sig
 		);
 	}
-258-271	AUE_NULL	RESERVED
+258	AUE_NULL	NOSTD {
+		int __proc_info(
+		    int callnum,
+		    int pid,
+		    int flavor,
+		    uint64_t arg,
+		    _Out_writes_bytes_opt_(buffersize) void *buffer,
+		    int buffersize
+		);
+	}
+259	AUE_NULL	NOSTD {
+		int __iopolicysys(
+		    int cmd,
+		    _Inout_opt_ struct _iopol_param_t *param
+		);
+	}
+260-271	AUE_NULL	RESERVED
 272	AUE_O_GETDENTS	COMPAT11|CAPENABLED {
 		int getdents(
 		    int fd,
@@ -3420,6 +3439,324 @@
 		    int newfd,
 		    _In_z_ const char *new,
 		    int flags
+		);
+	}
+603-609	AUE_NULL	RESERVED
+; The Mach syscall number space is negative on Darwin.  NextBSD maps the
+; Darwin Mach trap index to 600 + -index, so the compatibility entry points
+; begin at 610.  Keep existing FreeBSD syscalls below this block intact.
+610	AUE_NULL	NOSTD {
+		int _kernelrpc_mach_vm_allocate_trap(
+		    uint32_t target,
+		    _Inout_ uint64_t *address,
+		    uint64_t size,
+		    int flags
+		);
+	}
+611	AUE_NULL	UNIMPL	nosys
+612	AUE_NULL	NOSTD {
+		int _kernelrpc_mach_vm_deallocate_trap(
+		    uint32_t target,
+		    uint64_t address,
+		    uint64_t size
+		);
+	}
+613	AUE_NULL	UNIMPL	nosys
+614	AUE_NULL	NOSTD {
+		int _kernelrpc_mach_vm_protect_trap(
+		    uint32_t target,
+		    uint64_t address,
+		    uint64_t size,
+		    int set_maximum,
+		    int new_protection
+		);
+	}
+615	AUE_MMAP	NOSTD {
+		int _kernelrpc_mach_vm_map_trap(
+		    uint32_t target,
+		    _Inout_ uint64_t *address,
+		    uint64_t size,
+		    uint64_t mask,
+		    int flags,
+		    int cur_protection
+		);
+	}
+616	AUE_NULL	NOSTD {
+		int _kernelrpc_mach_port_allocate_trap(
+		    uint32_t target,
+		    uint32_t right,
+		    _Out_ uint32_t *name
+		);
+	}
+617	AUE_NULL	NOSTD {
+		int _kernelrpc_mach_port_destroy_trap(
+		    uint32_t target,
+		    uint32_t name
+		);
+	}
+618	AUE_NULL	NOSTD {
+		int _kernelrpc_mach_port_deallocate_trap(
+		    uint32_t target,
+		    uint32_t name
+		);
+	}
+619	AUE_NULL	NOSTD {
+		int _kernelrpc_mach_port_mod_refs_trap(
+		    uint32_t target,
+		    uint32_t name,
+		    uint32_t right,
+		    int delta
+		);
+	}
+620	AUE_NULL	NOSTD {
+		int _kernelrpc_mach_port_move_member_trap(
+		    uint32_t target,
+		    uint32_t member,
+		    uint32_t after
+		);
+	}
+621	AUE_NULL	NOSTD {
+		int _kernelrpc_mach_port_insert_right_trap(
+		    uint32_t target,
+		    uint32_t name,
+		    uint32_t poly,
+		    uint32_t polyPoly
+		);
+	}
+622	AUE_NULL	NOSTD {
+		int _kernelrpc_mach_port_insert_member_trap(
+		    uint32_t target,
+		    uint32_t name,
+		    uint32_t pset
+		);
+	}
+623	AUE_NULL	NOSTD {
+		int _kernelrpc_mach_port_extract_member_trap(
+		    uint32_t target,
+		    uint32_t name,
+		    uint32_t pset
+		);
+	}
+624	AUE_NULL	NOSTD {
+		int _kernelrpc_mach_port_construct_trap(
+		    uint32_t target,
+		    _In_ struct mach_port_options *options,
+		    uint64_t context,
+		    _Out_ uint32_t *name
+		);
+	}
+625	AUE_NULL	NOSTD {
+		int _kernelrpc_mach_port_destruct_trap(
+		    uint32_t target,
+		    uint32_t name,
+		    int srdelta,
+		    uint64_t guard
+		);
+	}
+626	AUE_NULL	NOSTD {
+		int mach_reply_port(void);
+	}
+627	AUE_NULL	NOSTD {
+		int thread_self_trap(void);
+	}
+628	AUE_NULL	NOSTD {
+		int task_self_trap(void);
+	}
+629	AUE_NULL	NOSTD {
+		int host_self_trap(void);
+	}
+630	AUE_NULL	UNIMPL	nosys
+631	AUE_NULL	NOSTD {
+		int mach_msg_trap(
+		    _Inout_ void *msg,
+		    int option,
+		    uint32_t send_size,
+		    uint32_t rcv_size,
+		    uint32_t rcv_name,
+		    uint32_t timeout,
+		    uint32_t notify
+		);
+	}
+632	AUE_NULL	NOSTD {
+		int mach_msg_overwrite_trap(
+		    _Inout_ void *msg,
+		    int option,
+		    uint32_t send_size,
+		    uint32_t rcv_size,
+		    uint32_t rcv_name,
+		    uint32_t timeout,
+		    uint32_t notify,
+		    _Out_ void *rcv_msg,
+		    uint32_t scatter_list_size
+		);
+	}
+633	AUE_NULL	NOSTD {
+		int semaphore_signal_trap(
+		    uint32_t signal_name
+		);
+	}
+634	AUE_NULL	NOSTD {
+		int semaphore_signal_all_trap(
+		    uint32_t signal_name
+		);
+	}
+635	AUE_NULL	NOSTD {
+		int semaphore_signal_thread_trap(
+		    uint32_t signal_name,
+		    uint32_t thread
+		);
+	}
+636	AUE_NULL	NOSTD {
+		int semaphore_wait_trap(
+		    uint32_t wait_name
+		);
+	}
+637	AUE_NULL	NOSTD {
+		int semaphore_wait_signal_trap(
+		    uint32_t wait_name,
+		    uint32_t signal_name
+		);
+	}
+638	AUE_NULL	NOSTD {
+		int semaphore_timedwait_trap(
+		    uint32_t wait_name,
+		    unsigned int sec,
+		    int nsec
+		);
+	}
+639	AUE_NULL	NOSTD {
+		int semaphore_timedwait_signal_trap(
+		    uint32_t wait_name,
+		    uint32_t signal_name,
+		    unsigned int sec,
+		    int nsec
+		);
+	}
+640	AUE_NULL	UNIMPL	nosys
+641	AUE_NULL	NOSTD {
+		int _kernelrpc_mach_port_guard_trap(
+		    uint32_t target,
+		    uint32_t name,
+		    uint64_t guard,
+		    int strict
+		);
+	}
+642	AUE_NULL	NOSTD {
+		int _kernelrpc_mach_port_unguard_trap(
+		    uint32_t target,
+		    uint32_t name,
+		    uint64_t guard
+		);
+	}
+643	AUE_NULL	OBSOL	mach_map_fd
+644	AUE_NULL	NOSTD {
+		int task_name_for_pid(
+		    uint32_t target_tport,
+		    int pid,
+		    _Out_ uint32_t *tn
+		);
+	}
+645	AUE_NULL	NOSTD {
+		int task_for_pid(
+		    uint32_t target_tport,
+		    int pid,
+		    _Out_ uint32_t *t
+		);
+	}
+646	AUE_NULL	NOSTD {
+		int pid_for_task(
+		    uint32_t t,
+		    _Out_ int *pid
+		);
+	}
+647	AUE_NULL	UNIMPL	nosys
+648	AUE_NULL	NOSTD {
+		int macx_swapon(
+		    _In_z_ char *name,
+		    int flags,
+		    int size,
+		    int priority
+		);
+	}
+649	AUE_NULL	NOSTD {
+		int macx_swapoff(
+		    _In_z_ char *name,
+		    int flags
+		);
+	}
+650	AUE_NULL	UNIMPL	nosys
+651	AUE_NULL	NOSTD {
+		int macx_triggers(
+		    int hi_water,
+		    int low_water,
+		    int flags,
+		    uint32_t alert_port
+		);
+	}
+652	AUE_NULL	NOSTD {
+		int macx_backing_store_suspend(
+		    int suspend
+		);
+	}
+653	AUE_NULL	NOSTD {
+		int macx_backing_store_recovery(
+		    int pid
+		);
+	}
+654-658	AUE_NULL	UNIMPL	nosys
+659	AUE_NULL	NOSTD {
+		int swtch_pri(
+		    int pri
+		);
+	}
+660	AUE_NULL	NOSTD {
+		int swtch(void);
+	}
+661	AUE_NULL	NOSTD {
+		int thread_switch(
+		    uint32_t thread_name,
+		    int option,
+		    uint32_t option_time
+		);
+	}
+662	AUE_NULL	NOSTD {
+		int clock_sleep_trap(
+		    uint32_t clock_name,
+		    int sleep_type,
+		    int sleep_sec,
+		    int sleep_nsec,
+		    _Out_ void *wakeup_time
+		);
+	}
+663-688	AUE_NULL	UNIMPL	nosys
+689	AUE_NULL	NOSTD {
+		int mach_timebase_info(
+		    _Out_ struct mach_timebase_info *info
+		);
+	}
+690	AUE_NULL	NOSTD {
+		int mach_wait_until(
+		    uint64_t deadline
+		);
+	}
+691	AUE_NULL	NOSTD {
+		int mk_timer_create(void);
+	}
+692	AUE_NULL	NOSTD {
+		int mk_timer_destroy(
+		    uint32_t name
+		);
+	}
+693	AUE_NULL	NOSTD {
+		int mk_timer_arm(
+		    uint32_t name,
+		    int expire_time
+		);
+	}
+694	AUE_NULL	NOSTD {
+		int mk_timer_cancel(
+		    uint32_t name,
+		    _Out_ int *result_time
 		);
 	}
 ; vim: syntax=off
