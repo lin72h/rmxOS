@@ -38,16 +38,22 @@
 #include <sys/proc.h>
 #include <sys/mach/task.h>
 #include <sys/mach/ipc/ipc_entry.h>
+#include <sys/mach/ipc/ipc_port.h>
 #include <sys/mach/ipc/ipc_space.h>
 
 
 int mach_debug_enable;
+static unsigned int mach_current_task_port_name;
 
 SYSCTL_ROOT_NODE(OID_AUTO,  mach, CTLFLAG_RW, 0,
 	"mach subsystem parameters");
 
 SYSCTL_INT(_mach, OID_AUTO, debug_enable, CTLFLAG_RWTUN,
 		   &mach_debug_enable, 0, "enable mach debug logging");
+
+SYSCTL_UINT(_mach, OID_AUTO, current_task_port_name, CTLFLAG_RWTUN,
+    &mach_current_task_port_name, 0,
+    "current task Mach port name targeted by mach.current_task_port_status");
 
 static int
 sysctl_mach_current_task_space_stats(SYSCTL_HANDLER_ARGS)
@@ -119,6 +125,76 @@ SYSCTL_PROC(_mach, OID_AUTO, current_task_space_stats,
     CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, 0, 0,
     sysctl_mach_current_task_space_stats, "A",
     "current task Mach space statistics");
+
+static int
+sysctl_mach_current_task_port_status(SYSCTL_HANDLER_ARGS)
+{
+	char buf[256];
+	struct proc *p;
+	task_t task;
+	ipc_space_t space;
+	ipc_entry_t entry;
+	ipc_object_t object;
+	ipc_port_t port;
+	mach_port_name_t name;
+	mach_port_type_t type;
+	unsigned int active, refs, srights, sorights, mscount, msgcount;
+	unsigned int nsrequest, receiver_current, receiver_name;
+
+	p = curthread != NULL ? curthread->td_proc : NULL;
+	task = p != NULL ? p->p_machdata : TASK_NULL;
+	if (task == TASK_NULL || (space = task->itk_space) == IS_NULL) {
+		strlcpy(buf, "status=unavailable reason=no_space", sizeof(buf));
+		return (sysctl_handle_string(oidp, buf, sizeof(buf), req));
+	}
+
+	name = (mach_port_name_t)mach_current_task_port_name;
+	if (!MACH_PORT_NAME_VALID(name)) {
+		strlcpy(buf, "status=unavailable reason=no_name", sizeof(buf));
+		return (sysctl_handle_string(oidp, buf, sizeof(buf), req));
+	}
+
+	entry = ipc_entry_lookup(space, name);
+	if (entry == IE_NULL) {
+		snprintf(buf, sizeof(buf),
+		    "status=unavailable reason=lookup_failed name=%u",
+		    name);
+		return (sysctl_handle_string(oidp, buf, sizeof(buf), req));
+	}
+
+	type = IE_BITS_TYPE(entry->ie_bits);
+	object = entry->ie_object;
+	if (object == IO_NULL || io_otype(object) != IOT_PORT) {
+		snprintf(buf, sizeof(buf),
+		    "status=unavailable reason=not_port name=%u type=0x%x",
+		    name, type);
+		return (sysctl_handle_string(oidp, buf, sizeof(buf), req));
+	}
+
+	port = (ipc_port_t)object;
+	ip_lock(port);
+	active = ip_active(port) ? 1U : 0U;
+	refs = port->ip_references;
+	srights = port->ip_srights;
+	sorights = port->ip_sorights;
+	mscount = port->ip_mscount;
+	msgcount = port->ip_msgcount;
+	nsrequest = port->ip_nsrequest != IP_NULL;
+	receiver_current = port->ip_receiver == space;
+	receiver_name = port->ip_receiver_name;
+	ip_unlock(port);
+
+	snprintf(buf, sizeof(buf),
+	    "status=ok name=%u type=0x%x active=%u refs=%u srights=%u sorights=%u mscount=%u msgcount=%u nsrequest=%u receiver_current=%u receiver_name=%u",
+	    name, type, active, refs, srights, sorights, mscount, msgcount,
+	    nsrequest, receiver_current, receiver_name);
+	return (sysctl_handle_string(oidp, buf, sizeof(buf), req));
+}
+
+SYSCTL_PROC(_mach, OID_AUTO, current_task_port_status,
+    CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, 0, 0,
+    sysctl_mach_current_task_port_status, "A",
+    "current task Mach port object status for mach.current_task_port_name");
 
 
 extern struct filterops machport_filtops;

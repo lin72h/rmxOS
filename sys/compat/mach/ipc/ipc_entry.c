@@ -234,6 +234,7 @@ mach_port_close(struct file *fp, struct thread *td)
 {
 	ipc_entry_t entry;
 	ipc_object_t object;
+	mach_port_type_t type;
 	ipc_pset_t pset;
 	ipc_port_t port;
 
@@ -246,6 +247,7 @@ mach_port_close(struct file *fp, struct thread *td)
 	PROC_LOCK(td->td_proc);
 	LIST_REMOVE(entry, ie_space_link);
 	PROC_UNLOCK(td->td_proc);
+	type = IE_BITS_TYPE(entry->ie_bits);
 	if ((object = entry->ie_object) != NULL) {
 		if (entry->ie_bits & MACH_PORT_TYPE_PORT_SET) {
 			pset = (ipc_pset_t)object;
@@ -253,7 +255,11 @@ mach_port_close(struct file *fp, struct thread *td)
 			ipc_pset_destroy(pset);
 		} else {
 			port = (ipc_port_t)object;
-			if (port->ip_receiver == current_space()) {
+			if (type == MACH_PORT_TYPE_SEND) {
+				ipc_object_destroy(object, MACH_MSG_TYPE_PORT_SEND);
+			} else if (type == MACH_PORT_TYPE_SEND_ONCE) {
+				ipc_object_destroy(object, MACH_MSG_TYPE_PORT_SEND_ONCE);
+			} else if (port->ip_receiver == current_space()) {
 				ip_lock(port);
 				ipc_port_clear_receiver(port);
 				ipc_port_destroy(port);
