@@ -554,9 +554,9 @@ ipc_entry_alloc_name(
 	mach_port_name_t	name,
 	ipc_entry_t	*entryp)
 {
+	ipc_entry_t free_entry;
 	mach_port_name_t newname;
 	struct file *fp;
-	kern_return_t kr;
 	struct thread *td = curthread;
 
 	if (!space->is_active) {
@@ -578,22 +578,41 @@ ipc_entry_alloc_name(
 		kern_fddealloc(td, newname);
 		return (KERN_NAME_EXISTS);
 	}
+	free_entry = malloc(sizeof(*free_entry), M_MACH_IPC_ENTRY,
+	    M_WAITOK | M_ZERO);
+	if (free_entry == NULL) {
+		kern_fddealloc(td, newname);
+		return (KERN_RESOURCE_SHORTAGE);
+	}
 	if (falloc_noinstall(td, &fp)) {
+		free(free_entry, M_MACH_IPC_ENTRY);
 		kern_fddealloc(td, newname);
 		return (KERN_RESOURCE_SHORTAGE);
 	}
 	if (kern_finstall(td, fp, &name, FNOFDALLOC, NULL)) {
+		free(free_entry, M_MACH_IPC_ENTRY);
 		kern_fddealloc(td, newname);
 		fdrop(fp, td);
 		return (KERN_RESOURCE_SHORTAGE);
 	}
-	kr = ipc_entry_get(space, 0, &name, entryp);
-	if (kr != KERN_SUCCESS) {
-		kern_fddealloc(td, newname);
-		return (KERN_INVALID_TASK);
-	}
+
+	free_entry->ie_bits = 0;
+	free_entry->ie_request = 0;
+	free_entry->ie_name = name;
+	free_entry->ie_fp = fp;
+	free_entry->ie_index = UINT_MAX;
+	free_entry->ie_link = NULL;
+	free_entry->ie_space = space;
+	PROC_LOCK(curproc);
+	LIST_INSERT_HEAD(&space->is_entry_list, free_entry, ie_space_link);
+	PROC_UNLOCK(curproc);
+	finit(fp, 0, DTYPE_MACH_IPC, free_entry, &mach_fileops);
+	fdrop(fp, td);
+	assert(fp->f_count == 1);
+	*entryp = free_entry;
+
 	is_write_lock(space);
-	return (kr);
+	return (KERN_SUCCESS);
 }
 
 void
