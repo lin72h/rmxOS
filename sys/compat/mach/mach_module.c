@@ -129,7 +129,7 @@ SYSCTL_PROC(_mach, OID_AUTO, current_task_space_stats,
 static int
 sysctl_mach_current_task_port_status(SYSCTL_HANDLER_ARGS)
 {
-	char buf[256];
+	char buf[320];
 	struct proc *p;
 	task_t task;
 	ipc_space_t space;
@@ -138,7 +138,7 @@ sysctl_mach_current_task_port_status(SYSCTL_HANDLER_ARGS)
 	ipc_port_t port;
 	mach_port_name_t name;
 	mach_port_type_t type;
-	unsigned int active, refs, srights, sorights, mscount, msgcount;
+	unsigned int entry_refs, active, refs, srights, sorights, mscount, msgcount;
 	unsigned int nsrequest, receiver_current, receiver_name;
 
 	p = curthread != NULL ? curthread->td_proc : NULL;
@@ -163,11 +163,12 @@ sysctl_mach_current_task_port_status(SYSCTL_HANDLER_ARGS)
 	}
 
 	type = IE_BITS_TYPE(entry->ie_bits);
+	entry_refs = ipc_entry_refs(entry);
 	object = entry->ie_object;
 	if (object == IO_NULL || io_otype(object) != IOT_PORT) {
 		snprintf(buf, sizeof(buf),
-		    "status=unavailable reason=not_port name=%u type=0x%x",
-		    name, type);
+		    "status=unavailable reason=not_port name=%u type=0x%x entry_refs=%u",
+		    name, type, entry_refs);
 		return (sysctl_handle_string(oidp, buf, sizeof(buf), req));
 	}
 
@@ -185,9 +186,9 @@ sysctl_mach_current_task_port_status(SYSCTL_HANDLER_ARGS)
 	ip_unlock(port);
 
 	snprintf(buf, sizeof(buf),
-	    "status=ok name=%u type=0x%x active=%u refs=%u srights=%u sorights=%u mscount=%u msgcount=%u nsrequest=%u receiver_current=%u receiver_name=%u",
-	    name, type, active, refs, srights, sorights, mscount, msgcount,
-	    nsrequest, receiver_current, receiver_name);
+	    "status=ok name=%u type=0x%x entry_refs=%u active=%u refs=%u srights=%u sorights=%u mscount=%u msgcount=%u nsrequest=%u receiver_current=%u receiver_name=%u",
+	    name, type, entry_refs, active, refs, srights, sorights, mscount,
+	    msgcount, nsrequest, receiver_current, receiver_name);
 	return (sysctl_handle_string(oidp, buf, sizeof(buf), req));
 }
 
