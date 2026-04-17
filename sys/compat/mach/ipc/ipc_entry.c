@@ -678,6 +678,14 @@ ipc_entry_dealloc(
 		is_write_unlock(space);
 	}
 	MPASS(entry->ie_link == NULL);
+	/*
+	 * ipc_entry_close() intentionally leaves the knote holding the final
+	 * file reference, so the entry can remain on is_entry_list until the
+	 * deferred fo_close runs.  Clear the logical right bits now so the
+	 * entry is no longer visible as live state during that deferred close
+	 * window.
+	 */
+	entry->ie_bits &= IE_BITS_GEN_MASK;
 
 	ipc_entry_close(space, name);
 }
