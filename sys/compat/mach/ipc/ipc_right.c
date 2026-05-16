@@ -1632,7 +1632,7 @@ ipc_right_copyin(
 	    }
 
 	    default:
-		panic("ipc_right_copyin: strange rights");
+		goto invalid_right;
 	}
 
 	return KERN_SUCCESS;
