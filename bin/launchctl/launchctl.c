@@ -52,6 +52,7 @@
 #include "vproc.h"
 #include "vproc_priv.h"
 #include "vproc_internal.h"
+#include "plist_to_launch_data.h"
 
 #define N(x)    ((sizeof(x)) / (sizeof(x[0])))
 
@@ -59,11 +60,16 @@
 
 static launch_data_t to_launchd(json_t *json);
 static launch_data_t to_launchd_sockets(json_t *json);
-static launch_data_t create_socket(json_t *json);
+static launch_data_t create_sockets_from_launch_data(launch_data_t sockets);
+static launch_data_t create_socket_from_launch_data(launch_data_t spec);
+static void materialize_job_sockets(launch_data_t job);
 static void to_json_dict(const launch_data_t lval, const char *key, void *ctx);
 static json_t *to_json(launch_data_t ld);
 static json_t *launch_msg_json(json_t *msg);
+static int submit_job(launch_data_t job);
 static int load_job(const char *filename);
+static bool bootstrap_scan_has_plist_peer(struct dirent **files, int nfiles,
+    const char *name);
 
 static int cmd_start_stop(int argc, char * const argv[]);
 static int cmd_bootstrap(int argc, char * const argv[]);
@@ -97,64 +103,158 @@ static const char *bootstrap_paths[] = {
 	"/usr/local/etc/launchd.d",
 };
 
+static bool
+has_suffix(const char *name, const char *suffix)
+{
+	size_t name_len, suffix_len;
+
+	name_len = strlen(name);
+	suffix_len = strlen(suffix);
+	return (name_len >= suffix_len &&
+	    strcmp(name + name_len - suffix_len, suffix) == 0);
+}
+
+static bool
+bootstrap_scan_has_entry(struct dirent **files, int nfiles, const char *name)
+{
+	int i;
+
+	for (i = 0; i < nfiles; i++) {
+		if (strcmp(files[i]->d_name, name) == 0)
+			return (true);
+	}
+	return (false);
+}
+
+static bool
+bootstrap_scan_has_plist_peer(struct dirent **files, int nfiles,
+    const char *name)
+{
+	char *plist_name;
+	size_t prefix_len;
+	bool found;
+
+	if (!has_suffix(name, ".json"))
+		return (false);
+
+	prefix_len = strlen(name) - strlen(".json");
+	plist_name = malloc(prefix_len + strlen(".plist") + 1);
+	if (plist_name == NULL)
+		return (false);
+
+	memcpy(plist_name, name, prefix_len);
+	memcpy(plist_name + prefix_len, ".plist", strlen(".plist") + 1);
+	found = bootstrap_scan_has_entry(files, nfiles, plist_name);
+	free(plist_name);
+
+	return (found);
+}
+
 static launch_data_t
 to_launchd_sockets(json_t *json)
 {
+	launch_data_t result, spec;
+
+	spec = to_launchd(json);
+	result = create_sockets_from_launch_data(spec);
+	launch_data_free(spec);
+
+	return (result);
+}
+
+static void
+create_socket_array(launch_data_t socket_spec, const char *key, void *ctx)
+{
 	launch_data_t result, arr;
-	const char *key;
-	size_t idx;
-	json_t *val, *val2;
+	size_t i, count;
+
+	result = ctx;
+	arr = launch_data_alloc(LAUNCH_DATA_ARRAY);
+
+	switch (launch_data_get_type(socket_spec)) {
+	case LAUNCH_DATA_DICTIONARY:
+		launch_data_array_set_index(arr,
+		    create_socket_from_launch_data(socket_spec), 0);
+		break;
+
+	case LAUNCH_DATA_ARRAY:
+		count = launch_data_array_get_count(socket_spec);
+		for (i = 0; i < count; i++) {
+			launch_data_array_set_index(arr,
+			    create_socket_from_launch_data(
+			    launch_data_array_get_index(socket_spec, i)), i);
+		}
+		break;
+
+	default:
+		errx(EX_OSERR, "Invalid jlist specification");
+	}
+
+	launch_data_dict_insert(result, arr, key);
+}
+
+static launch_data_t
+create_sockets_from_launch_data(launch_data_t sockets)
+{
+	launch_data_t result;
+
+	if (sockets == NULL ||
+	    launch_data_get_type(sockets) != LAUNCH_DATA_DICTIONARY)
+		errx(EX_OSERR, "Invalid jlist specification");
 
 	result = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
-
-	json_object_foreach(json, key, val) {
-		arr = launch_data_alloc(LAUNCH_DATA_ARRAY);
-
-		switch (json_typeof(val)) {
-			case JSON_OBJECT:
-				launch_data_array_set_index(arr,
-				    create_socket(val), 0);
-				break;
-
-			case JSON_ARRAY:
-				json_array_foreach(val, idx, val2) {
-					launch_data_array_set_index(arr,
-					    create_socket(val2), idx);
-				}
-				break;
-
-			default:
-				errx(EX_OSERR, "Invalid jlist specification");
-		}
-
-		launch_data_dict_insert(result, arr, key);
-	}
+	launch_data_dict_iterate(sockets, create_socket_array, result);
 
 	return (result);
 }
 
 static launch_data_t
-create_socket(json_t *json)
+socket_dict_lookup(launch_data_t spec, const char *key)
+{
+
+	if (spec == NULL ||
+	    launch_data_get_type(spec) != LAUNCH_DATA_DICTIONARY)
+		return (NULL);
+
+	return (launch_data_dict_lookup(spec, key));
+}
+
+static const char *
+socket_dict_string(launch_data_t spec, const char *key)
+{
+	launch_data_t val;
+
+	val = socket_dict_lookup(spec, key);
+	if (val == NULL || launch_data_get_type(val) != LAUNCH_DATA_STRING)
+		return (NULL);
+
+	return (launch_data_get_string(val));
+}
+
+static launch_data_t
+create_socket_from_launch_data(launch_data_t spec)
 {
 	int st = SOCK_STREAM;
 	int sfd;
 	int saved_errno;
 	bool passive = true;
-	json_t *val;
+	launch_data_t val;
+	const char *str;
 
-	if ((val = json_object_get(json, LAUNCH_JOBSOCKETKEY_TYPE))) {
-		if (!strcasecmp(json_string_value(val), "stream"))
+	if ((str = socket_dict_string(spec, LAUNCH_JOBSOCKETKEY_TYPE))) {
+		if (!strcasecmp(str, "stream"))
 			st = SOCK_STREAM;
-		else if (!strcasecmp(json_string_value(val), "dgram"))
+		else if (!strcasecmp(str, "dgram"))
 			st = SOCK_DGRAM;
-		else if (!strcasecmp(json_string_value(val), "seqpacket"))
+		else if (!strcasecmp(str, "seqpacket"))
 			st = SOCK_SEQPACKET;
 	}
 
-	if ((val = json_object_get(json, LAUNCH_JOBSOCKETKEY_PASSIVE)))
-		passive = json_is_true(val);
+	if ((val = socket_dict_lookup(spec, LAUNCH_JOBSOCKETKEY_PASSIVE)))
+		passive = (launch_data_get_type(val) == LAUNCH_DATA_BOOL &&
+		    launch_data_get_bool(val));
 
-	if ((val = json_object_get(json, LAUNCH_JOBSOCKETKEY_PATHNAME))) {
+	if ((str = socket_dict_string(spec, LAUNCH_JOBSOCKETKEY_PATHNAME))) {
 		struct sockaddr_un sun;
 		mode_t sun_mode = 0;
 		mode_t oldmask;
@@ -164,13 +264,13 @@ create_socket(json_t *json)
 
 		sun.sun_family = AF_UNIX;
 
-		strncpy(sun.sun_path, json_string_value(val), sizeof(sun.sun_path));
+		strncpy(sun.sun_path, str, sizeof(sun.sun_path));
 
 		if ((sfd = socket(AF_UNIX, st, 0)) == -1)
 			errx(EX_OSERR, "socket(): %s", strerror(errno));
 
-		if ((val = json_object_get(json, LAUNCH_JOBSOCKETKEY_PATHMODE))) {
-			sun_mode = (mode_t)json_integer_value(val);
+		if ((val = socket_dict_lookup(spec, LAUNCH_JOBSOCKETKEY_PATHMODE))) {
+			sun_mode = (mode_t)launch_data_get_integer(val);
 			setm = true;
 		}
 
@@ -217,31 +317,31 @@ create_socket(json_t *json)
 		if (passive)
 			hints.ai_flags |= AI_PASSIVE;
 
-		if ((val = json_object_get(json, LAUNCH_JOBSOCKETKEY_NODENAME)))
-			node = json_string_value(val);
+		if ((str = socket_dict_string(spec, LAUNCH_JOBSOCKETKEY_NODENAME)))
+			node = str;
 
-		if ((val = json_object_get(json, LAUNCH_JOBSOCKETKEY_MULTICASTGROUP)))
-			mgroup = json_string_value(val);
+		if ((str = socket_dict_string(spec, LAUNCH_JOBSOCKETKEY_MULTICASTGROUP)))
+			mgroup = str;
 
-		if ((val = json_object_get(json, LAUNCH_JOBSOCKETKEY_SERVICENAME))) {
-			if (json_typeof(val) == JSON_INTEGER) {
-				sprintf(servnbuf, "%ld", json_integer_value(val));
+		if ((val = socket_dict_lookup(spec, LAUNCH_JOBSOCKETKEY_SERVICENAME))) {
+			if (launch_data_get_type(val) == LAUNCH_DATA_INTEGER) {
+				sprintf(servnbuf, "%lld", launch_data_get_integer(val));
 				serv = servnbuf;
 			} else
-				serv = json_string_value(val);
+				serv = launch_data_get_string(val);
 		}
 
-		if ((val = json_object_get(json, LAUNCH_JOBSOCKETKEY_FAMILY))) {
-			if (!strcasecmp(json_string_value(val), "IPv4"))
+		if ((str = socket_dict_string(spec, LAUNCH_JOBSOCKETKEY_FAMILY))) {
+			if (!strcasecmp(str, "IPv4"))
 				hints.ai_family = AF_INET;
-			else if (!strcasecmp(json_string_value(val), "IPv6"))
+			else if (!strcasecmp(str, "IPv6"))
 				hints.ai_family = AF_INET6;
 		}
 
-		if ((val = json_object_get(json, LAUNCH_JOBSOCKETKEY_PROTOCOL))) {
-			if (!strcasecmp(json_string_value(val), "TCP"))
+		if ((str = socket_dict_string(spec, LAUNCH_JOBSOCKETKEY_PROTOCOL))) {
+			if (!strcasecmp(str, "TCP"))
 				hints.ai_protocol = IPPROTO_TCP;
-			else if (!strcasecmp(json_string_value(val), "UDP"))
+			else if (!strcasecmp(str, "UDP"))
 				hints.ai_protocol = IPPROTO_UDP;
 		}
 
@@ -291,6 +391,22 @@ create_socket(json_t *json)
 
 	errx(EX_OSERR, "Invalid socket specification");
 	return (NULL);
+}
+
+static void
+materialize_job_sockets(launch_data_t job)
+{
+	launch_data_t sockets, materialized;
+
+	if (job == NULL || launch_data_get_type(job) != LAUNCH_DATA_DICTIONARY)
+		return;
+
+	sockets = launch_data_dict_lookup(job, LAUNCH_JOBKEY_SOCKETS);
+	if (sockets == NULL)
+		return;
+
+	materialized = create_sockets_from_launch_data(sockets);
+	launch_data_dict_insert(job, materialized, LAUNCH_JOBKEY_SOCKETS);
 }
 
 static launch_data_t
@@ -412,6 +528,34 @@ launch_msg_json(json_t *input)
 		return (NULL);
 	
 	return to_json(result);
+}
+
+static int
+submit_job(launch_data_t job)
+{
+	launch_data_t msg, result;
+	int ret;
+
+	msg = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
+	launch_data_dict_insert(msg, job, "SubmitJob");
+
+	result = launch_msg(msg);
+	launch_data_free(msg);
+	if (result == NULL)
+		return (-1);
+
+	ret = 0;
+	if (launch_data_get_type(result) == LAUNCH_DATA_ERRNO &&
+	    launch_data_get_errno(result) != 0) {
+		errno = launch_data_get_errno(result);
+		ret = -1;
+	}
+	/*
+	 * launch_msg_internal() returns the MIG reply unpacked in-place from
+	 * out-of-line message memory. That storage is not malloc-owned, so
+	 * launch_data_free() can fault on the one-shot SubmitJob reply.
+	 */
+	return (ret);
 }
 
 static void
@@ -588,17 +732,44 @@ load_job(const char *filename)
 {
 	FILE *input;
 	json_error_t error;
-	json_t *msg, *plist;
+	json_t *plist;
+	launch_data_t job;
+	char plist_error[256];
+	const char *suffix;
+	size_t filename_len;
+
+	filename_len = strlen(filename);
+	suffix = ".plist";
+	if (filename_len >= strlen(suffix) &&
+	    strcmp(filename + filename_len - strlen(suffix), suffix) == 0) {
+		job = plist_to_launch_data_file(filename, plist_error,
+		    sizeof(plist_error));
+		if (job == NULL) {
+			warnx("%s", plist_error);
+			errno = EINVAL;
+			return (-1);
+		}
+		materialize_job_sockets(job);
+		return (submit_job(job));
+	}
 
 	input = strcmp(filename, "-") ? fopen(filename, "r") : stdin;
 	if (input == NULL)
 		return (-1);
 
 	plist = json_loadf(input, JSON_DECODE_ANY, &error);
-	msg = json_object();
-	json_object_set_new(msg, "SubmitJob", plist);
+	if (strcmp(filename, "-") != 0)
+		fclose(input);
+	if (plist == NULL) {
+		warnx("%s:%d:%d: %s", filename, error.line, error.column,
+		    error.text);
+		errno = EINVAL;
+		return (-1);
+	}
 
-	return (launch_msg_json(msg) == NULL ? -1 : 0); 
+	job = to_launchd(plist);
+	json_decref(plist);
+	return (submit_job(job));
 }
 
 /*
@@ -623,7 +794,7 @@ cmd_bootstrap(int argc, char * const argv[])
 	struct dirent **files;
 	char *name, *path;
 	unsigned long i;
-	int n;
+	int file_count, j, n;
 
 	while ((ch = getopt(argc, __DECONST(char **, argv), "sS:")) != -1) {
 		switch (ch) {
@@ -654,19 +825,30 @@ cmd_bootstrap(int argc, char * const argv[])
 			n = scandir(bootstrap_paths[i], &files, NULL, alphasort);
 			if (n < 0)
 				continue;
-			
+			file_count = n;
 			while (n--) {
 				name = files[n]->d_name;
 				if (name[0] == '.')
 					continue;
+				if (bootstrap_scan_has_plist_peer(files,
+				    file_count, name))
+					continue;
 				
 				printf("Loading job: %s: ", name);
-				asprintf(&path, "%s/%s", bootstrap_paths[i], name);
+				if (asprintf(&path, "%s/%s", bootstrap_paths[i],
+				    name) == -1) {
+					printf("failed: %s\n", strerror(errno));
+					continue;
+				}
 				if (load_job(path) == 0)
 					printf("ok\n");
 				else
 					printf("failed: %s\n", strerror(errno));
+				free(path);
 			}
+			for (j = 0; j < file_count; j++)
+				free(files[j]);
+			free(files);
 		}
 		// give jobs time to start
 		sleep(2);
