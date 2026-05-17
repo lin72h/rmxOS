@@ -931,6 +931,15 @@ launch_msg_internal(launch_data_t d)
 		&reply_fds,
 		&reply_fdsCnt,
 		0);
+	/*
+	 * The generated MIG client sends the request OOL descriptor with
+	 * deallocate=TRUE. On success the kernel consumes that mapping, and the
+	 * reply OOL region may be mapped back at the same address. Do not
+	 * deallocate request here or the reply can be unmapped before callers
+	 * inspect it.
+	 */
+	request = 0;
+	requestCnt = 0;
 
 	if (kr != KERN_SUCCESS) {
 		fprintf(stderr, "vproc_mig_ipc_request: kr=%x\n", kr);
