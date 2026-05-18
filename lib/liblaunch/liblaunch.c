@@ -870,15 +870,16 @@ launch_data_unpack(uint8_t *data, size_t data_size, int *fds, size_t fd_cnt, siz
 launch_data_t
 launch_msg_internal(launch_data_t d)
 {
-	vm_offset_t request;
-	mach_msg_type_number_t requestCnt;
-	mach_port_array_t request_fds;
-	mach_msg_type_number_t request_fdsCnt;
-	vm_offset_t reply ;
-	mach_msg_type_number_t replyCnt;
-	mach_port_array_t reply_fds;
-	mach_msg_type_number_t reply_fdsCnt;
-	launch_data_t ldreply;
+	vm_offset_t request = 0;
+	mach_msg_type_number_t requestCnt = 0;
+	mach_port_array_t request_fds = NULL;
+	mach_msg_type_number_t request_fdsCnt = 0;
+	vm_offset_t reply = 0;
+	mach_msg_type_number_t replyCnt = 0;
+	mach_port_array_t reply_fds = NULL;
+	mach_msg_type_number_t reply_fdsCnt = 0;
+	launch_data_t ldreply = NULL;
+	launch_data_t safe_reply = NULL;
 	size_t i;
 	size_t nfds = 0;
 	kern_return_t kr;
@@ -943,13 +944,13 @@ launch_msg_internal(launch_data_t d)
 
 	if (kr != KERN_SUCCESS) {
 		fprintf(stderr, "vproc_mig_ipc_request: kr=%x\n", kr);
-		return NULL;
+		goto out_bad;
 	}
 
 	nfds = reply_fdsCnt / sizeof((reply_fds)[0]);
 	if (nfds > 128) {
 		fprintf(stderr, "Too many incoming descriptors: %zu", nfds);
-		return NULL;
+		goto out_bad;
 	}
 
 	int in_fds[128];
@@ -969,9 +970,29 @@ launch_msg_internal(launch_data_t d)
 		goto out_bad;
 	}
 
-	mig_deallocate(request, requestCnt);
+	/*
+	 * launch_data_unpack() deserializes in place. The returned tree points
+	 * into the vm-allocated OOL reply buffer, including string and opaque
+	 * payloads. Detach it before returning so callers can use
+	 * launch_data_free() normally.
+	 */
+	safe_reply = launch_data_copy(ldreply);
+	if (!safe_reply) {
+		goto out_bad;
+	}
 
-	return (ldreply);
+	if (reply) {
+		mig_deallocate(reply, replyCnt);
+		reply = 0;
+		replyCnt = 0;
+	}
+	if (reply_fds) {
+		mig_deallocate((vm_address_t)reply_fds, reply_fdsCnt);
+		reply_fds = NULL;
+		reply_fdsCnt = 0;
+	}
+
+	return (safe_reply);
 
 out_bad:
 	for (i = 0; i < nfds; i++) {
@@ -986,8 +1007,16 @@ out_bad:
 		mig_deallocate(request, requestCnt);
 	}
 
-	if (ldreply) {
-		launch_data_free(ldreply);
+	if (reply) {
+		mig_deallocate(reply, replyCnt);
+	}
+
+	if (reply_fds) {
+		mig_deallocate((vm_address_t)reply_fds, reply_fdsCnt);
+	}
+
+	if (safe_reply) {
+		launch_data_free(safe_reply);
 	}
 
 	return (NULL);
