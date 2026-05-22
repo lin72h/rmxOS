@@ -1515,6 +1515,7 @@ ipc_right_copyin(
 	    case MACH_MSG_TYPE_MOVE_SEND: {
 		ipc_port_t port;
 		ipc_port_t dnrequest = IP_NULL;
+		mach_port_urefs_t urefs;
 
 		if (bits & MACH_PORT_TYPE_DEAD_NAME)
 			goto move_dead;
@@ -1547,7 +1548,13 @@ ipc_right_copyin(
 
 		assert(port->ip_srights > 0);
 
-		if (ipc_entry_refs(entry) == 1) {
+		urefs = ipc_entry_mach_urefs(entry);
+		if (urefs == 0) {
+			ip_unlock(port);
+			ELOG;
+			goto invalid_right;
+		}
+		if (urefs == 1) {
 			if (bits & MACH_PORT_TYPE_RECEIVE) {
 				assert(port->ip_receiver_name == name);
 				assert(port->ip_receiver == space);
@@ -1566,10 +1573,11 @@ ipc_right_copyin(
 								name, entry);
 				OBJECT_CLEAR(entry, name);
 			}
+			ipc_entry_release(entry); /* decrement urefs */
 			entry->ie_bits = bits &~
 				(IE_BITS_UREFS_MASK|MACH_PORT_TYPE_SEND);
 		} else {
-			MPASS(ipc_entry_refs(entry) > 1);
+			MPASS(urefs > 1);
 			port->ip_srights++;
 			ip_reference(port);
 			ipc_entry_release(entry); /* decrement urefs */
