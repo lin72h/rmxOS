@@ -223,6 +223,9 @@ extern void ipc_entry_dealloc(
 extern int ipc_entry_refs(
 	ipc_entry_t entry);
 
+extern int ipc_entry_mach_urefs(
+	ipc_entry_t entry);
+
 extern void ipc_entry_add_refs(
 	ipc_entry_t entry, int delta);
 
