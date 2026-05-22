@@ -1255,7 +1255,7 @@ ipc_right_info(
 		type |= MACH_PORT_TYPE_DNREQUEST;
 
 	*typep = type;
-	*urefsp = ipc_entry_refs(entry);
+	*urefsp = ipc_entry_mach_urefs(entry);
 	return KERN_SUCCESS;
 }
 

@@ -656,6 +656,19 @@ ipc_entry_refs(
 	return (entry->ie_fp->f_count);
 }
 
+mach_port_urefs_t
+ipc_entry_mach_urefs(
+	ipc_entry_t entry)
+{
+	int refs;
+
+	if (IE_BITS_TYPE(entry->ie_bits) == MACH_PORT_TYPE_DEAD_NAME)
+		return (ipc_entry_refs(entry));
+
+	refs = ipc_entry_refs(entry);
+	return (refs > 0 ? refs - 1 : 0);
+}
+
 void
 ipc_entry_add_refs(
 	ipc_entry_t entry,
