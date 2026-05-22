@@ -225,7 +225,7 @@ sys__kernelrpc_mach_port_deallocate_trap(struct thread *td, struct _kernelrpc_ma
 {
 	ipc_space_t space = current_task()->itk_space;
 
-	mach_port_deallocate(space, uap->name);
+	td->td_retval[0] = mach_port_deallocate(space, uap->name);
 	return (0);
 }
 

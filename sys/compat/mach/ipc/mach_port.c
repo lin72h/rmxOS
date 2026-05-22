@@ -729,6 +729,9 @@ mach_port_deallocate(
 	if (space == IS_NULL)
 		return KERN_INVALID_TASK;
 
+	if (!MACH_PORT_NAME_VALID(name))
+		return KERN_SUCCESS;
+
 	kr = ipc_right_lookup_write(space, name, &entry);
 	if (kr != KERN_SUCCESS)
 		return kr;
