@@ -548,7 +548,7 @@ _dispatch_source_kevent_resume(dispatch_source_t ds, uint32_t new_flags)
 static void
 _dispatch_source_kevent_register(dispatch_source_t ds)
 {
-	dispatch_assert_zero(ds->ds_is_installed);
+	dispatch_assert_zero((bool)ds->ds_is_installed);
 	switch (ds->ds_dkev->dk_kevent.filter) {
 	case DISPATCH_EVFILT_TIMER:
 		return _dispatch_timers_update(ds);
@@ -3992,7 +3992,7 @@ _dispatch_mach_invoke2(dispatch_object_t dou,
 		// will be woken up when the lock is dropped <rdar://15132939&15203957>
 		return NULL;
 	} else if (dr->dm_tail) {
-		if (slowpath(dr->dm_needs_mgr) || (slowpath(dr->dm_disconnect_cnt) &&
+		if (slowpath((bool)dr->dm_needs_mgr) || (slowpath(dr->dm_disconnect_cnt) &&
 				(dm->dm_dkev || !TAILQ_EMPTY(&dm->dm_refs->dm_replies)))) {
 			// Send/reply kevents need to be installed or uninstalled
 			if (dq != &_dispatch_mgr_q) {
