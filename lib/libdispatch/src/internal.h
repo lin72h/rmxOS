@@ -300,8 +300,16 @@ DISPATCH_EXPORT DISPATCH_NOTHROW void dispatch_atfork_child(void);
 
 /* I wish we had __builtin_expect_range() */
 #if __GNUC__
-#define fastpath(x) (long)__builtin_expect((long)(x), ~0l)
-#define slowpath(x) (long)__builtin_expect((long)(x), 0l)
+#define fastpath(x) __extension__ ({ \
+	__typeof__(x) _dispatch_fastpath_value = (x); \
+	__builtin_expect(!!_dispatch_fastpath_value, 1) ? \
+			_dispatch_fastpath_value : _dispatch_fastpath_value; \
+})
+#define slowpath(x) __extension__ ({ \
+	__typeof__(x) _dispatch_slowpath_value = (x); \
+	__builtin_expect(!!_dispatch_slowpath_value, 0) ? \
+			_dispatch_slowpath_value : _dispatch_slowpath_value; \
+})
 #else
 #define fastpath(x) (x)
 #define slowpath(x) (x)
