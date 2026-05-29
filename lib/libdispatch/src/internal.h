@@ -411,7 +411,7 @@ static inline void _dispatch_assert_zero(long e, long line) {
  */
 #if __GNUC__
 #define dispatch_assume(e) ({ \
-		long _e = fastpath(e); /* always eval 'e' */ \
+		__typeof__(e) _e = fastpath(e); /* always eval 'e' */ \
 		if (!_e) { \
 			if (__builtin_constant_p(e)) { \
 				char __compile_time_assert__[(bool)(e) ? 1 : -1]; \
@@ -435,7 +435,7 @@ static inline long _dispatch_assume(long e, long line) {
  */
 #if __GNUC__
 #define dispatch_assume_zero(e) ({ \
-		long _e = slowpath(e); /* always eval 'e' */ \
+		__typeof__(e) _e = slowpath(e); /* always eval 'e' */ \
 		if (_e) { \
 			if (__builtin_constant_p(e)) { \
 				char __compile_time_assert__[(bool)(e) ? -1 : 1]; \
