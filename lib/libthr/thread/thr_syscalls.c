@@ -94,6 +94,8 @@
 #include "libc_private.h"
 #include "thr_private.h"
 
+#define	THR_SYS_PDWAIT	601
+
 static int
 __thr_accept(int s, struct sockaddr *addr, socklen_t *addrlen)
 {
@@ -593,7 +595,7 @@ __thr_pdwait(int fd, int *status, int options, struct __wrusage *ru,
 
 	curthread = _get_curthread();
 	_thr_cancel_enter(curthread);
-	ret = __sys_pdwait(fd, status, options, ru, infop);
+	ret = (pid_t)syscall(THR_SYS_PDWAIT, fd, status, options, ru, infop);
 	_thr_cancel_leave(curthread, ret == -1);
 	return (ret);
 }

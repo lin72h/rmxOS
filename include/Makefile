@@ -4,7 +4,7 @@
 
 PACKAGE=clibs
 CLEANFILES= osreldate.h version
-SUBDIR= arpa protocols rpcsvc rpc ssp xlocale
+SUBDIR= arpa protocols pthread rpcsvc rpc ssp xlocale
 .if ${MACHINE_CPUARCH} == "amd64"
 SUBDIR+=		i386
 INCLUDE_SUBDIRS+=	i386
@@ -38,6 +38,7 @@ INCS=	a.out.h ar.h assert.h bitstring.h byteswap.h \
 
 .PATH: ${SRCTOP}/contrib/libc-vis
 INCS+=	vis.h
+INCS+=	pthread_workqueue.h
 
 MHDRS=	float.h floatingpoint.h
 
