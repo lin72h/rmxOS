@@ -965,6 +965,7 @@ ipc_right_delta(
 	    case MACH_PORT_RIGHT_RECEIVE: {
 		ipc_port_t port;
 		ipc_port_t dnrequest = IP_NULL;
+		boolean_t dealloc_entry;
 
 		if ((bits & MACH_PORT_TYPE_RECEIVE) == 0)
 			goto invalid_right;
@@ -977,6 +978,7 @@ ipc_right_delta(
 
 		port = (ipc_port_t) entry->ie_object;
 		assert(port != IP_NULL);
+		dealloc_entry = ((bits & MACH_PORT_TYPE_SEND) == 0);
 
 		/*
 		 *	The port lock is needed for ipc_right_dncancel;
@@ -1025,7 +1027,7 @@ ipc_right_delta(
 
 			ipc_port_clear_receiver(port);
 			ipc_port_destroy(port);	/* consumes ref, unlocks */
-			if ((bits & MACH_PORT_TYPE_SEND) == 0)
+			if (dealloc_entry)
 				/* ipc_entry_dealloc() closes the backing file descriptor. */
 				/* drops the space lock */
 				ipc_entry_dealloc(space, name, entry);
