@@ -153,7 +153,8 @@ __FBSDID("$FreeBSD$");
 static void fdunused(struct filedesc *fdp, int fd);
 static int kern_fdalloc(struct thread *td, int minfd, int *result);
 static void kern_fddealloc(struct thread *td, int fd);
-static inline void kern_fdfree(struct filedesc *fdp, int fd);
+static inline void kern_fdfree(struct filedesc *fdp, int fd,
+    struct filecaps *fcaps);
 static int kern_finstall(struct thread *td, struct file *fp, int *fd, int flags,
 			 struct filecaps *fcaps);
 
@@ -628,6 +629,7 @@ ipc_entry_close(
 {
 	struct filedesc *fdp;
 	struct file *fp;
+	struct filecaps fcaps;
 	struct thread *td;
 
 	td = curthread;
@@ -642,8 +644,9 @@ ipc_entry_close(
 	/* we deliberately skip closing the knote so that it will
 	 * have the last reference to the fp
 	 */
-	kern_fdfree(fdp, fd);
+	kern_fdfree(fdp, fd, &fcaps);
 	FILEDESC_XUNLOCK(fdp);
+	filecaps_free(&fcaps);
 	fdrop(fp, td);
 }
 
@@ -730,11 +733,13 @@ ipc_entry_dealloc(
 static void
 kern_last_close(struct thread *td, struct file *fp, struct filedesc *fdp, int fd)
 {
+	struct filecaps fcaps;
 
 	FILEDESC_XLOCK(fdp);
 	knote_fdclose(td, fd);
-	kern_fdfree(fdp, fd);
+	kern_fdfree(fdp, fd, &fcaps);
 	FILEDESC_XUNLOCK(fdp);
+	filecaps_free(&fcaps);
 	fdrop(fp, td);
 }
 
@@ -920,7 +925,7 @@ kern_fddealloc(struct thread *td, int fd)
 }
 
 static inline void
-kern_fdfree(struct filedesc *fdp, int fd)
+kern_fdfree(struct filedesc *fdp, int fd, struct filecaps *fcaps)
 {
 	struct filedescent *fde;
 
@@ -929,7 +934,8 @@ kern_fdfree(struct filedesc *fdp, int fd)
 	seqc_write_begin(&fde->fde_seqc);
 #endif
 	fde->fde_file = NULL;
-	filecaps_free(&fde->fde_caps);
+	*fcaps = fde->fde_caps;
+	bzero(&fde->fde_caps, sizeof(*fcaps));
 	fdunused(fdp, fd);
 #ifdef CAPABILITIES
 	seqc_write_end(&fde->fde_seqc);
