@@ -633,13 +633,12 @@ ipc_entry_close(
 	td = curthread;
 	fdp = td->td_proc->p_fd;
 
-	AUDIT_SYSCLOSE(td, fd);
-
 	FILEDESC_XLOCK(fdp);
 	if ((fp = fget_noref(fdp, fd)) == NULL) {
 		FILEDESC_XUNLOCK(fdp);
 		return;
 	}
+	AUDIT_SYSCLOSE(td, fd, fp);
 	/* we deliberately skip closing the knote so that it will
 	 * have the last reference to the fp
 	 */
