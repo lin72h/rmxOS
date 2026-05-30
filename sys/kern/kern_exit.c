@@ -67,6 +67,7 @@
 #include <sys/sysent.h>
 #include <sys/syslog.h>
 #include <sys/sysproto.h>
+#include <sys/thrworkq.h>
 #include <sys/timers.h>
 #include <sys/tty.h>
 #include <sys/umtxvar.h>
@@ -304,6 +305,7 @@ exit1(struct thread *td, int rval, int signo)
 	/* Let event handler change exit status */
 	p->p_xexit = rval;
 	p->p_xsig = signo;
+	twq_proc_exit(p);
 
 	/*
 	 * Ignore any pending request to stop due to a stop signal.

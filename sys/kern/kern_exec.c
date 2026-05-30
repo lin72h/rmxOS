@@ -69,6 +69,7 @@
 #include <sys/sysctl.h>
 #include <sys/sysent.h>
 #include <sys/sysproto.h>
+#include <sys/thrworkq.h>
 #include <sys/timers.h>
 #include <sys/ucoredump.h>
 #include <sys/umtxvar.h>
@@ -314,6 +315,8 @@ pre_execve(struct thread *td, struct vmspace **oldvmspace)
 	}
 	KASSERT(error != 0 || (td->td_pflags & TDP_EXECVMSPC) == 0,
 	    ("nested execve"));
+	if (error == 0)
+		twq_proc_exec(p);
 	*oldvmspace = p->p_vmspace;
 	return (error);
 }
