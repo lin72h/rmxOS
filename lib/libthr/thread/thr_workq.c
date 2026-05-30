@@ -88,6 +88,22 @@ twq_priority_is_overcommit(pthread_priority_t priority)
 	return ((priority & TWQ_PRIORITY_OVERCOMMIT_FLAG) != 0);
 }
 
+static pthread_priority_t
+twq_priority_for_kernel(pthread_priority_t priority)
+{
+
+	/*
+	 * Donor libdispatch uses 0x20000000 as its internal root-queue flag.
+	 * The TWQ kernel ABI uses the same bit as SCHED_PRI.  A root queue also
+	 * carries a QoS token, while a SCHED_PRI request does not, so strip the
+	 * colliding bit before kernel calls for QoS work.  Userspace lane
+	 * selection applies the same QoS-token discriminator.
+	 */
+	if ((priority & TWQ_PRIORITY_QOS_CLASS_MASK) != 0)
+		priority &= ~((pthread_priority_t)TWQ_PRIORITY_SCHED_PRI_FLAG);
+	return (priority);
+}
+
 static inline int
 twq_lane_make(int bucket, bool overcommit)
 {
@@ -357,7 +373,8 @@ twq_bucket_from_priority(pthread_priority_t priority)
 	uint32_t qos;
 	qos_class_t qos_class;
 
-	if ((priority & TWQ_PRIORITY_SCHED_PRI_FLAG) != 0) {
+	if ((priority & TWQ_PRIORITY_SCHED_PRI_FLAG) != 0 &&
+	    (priority & TWQ_PRIORITY_QOS_CLASS_MASK) == 0) {
 		return (twq_bucket_from_sched_priority((uint32_t)(priority &
 		    TWQ_PRIORITY_PRIORITY_MASK)));
 	}
@@ -663,6 +680,7 @@ twq_kernel_sync_request(uint16_t desired, pthread_priority_t priority)
 	struct twq_reqthreads_args req;
 	int ret;
 
+	priority = twq_priority_for_kernel(priority);
 	memset(&req, 0, sizeof(req));
 	req.tqr_version = TWQ_REQTHREADS_VERSION;
 	req.tqr_reqcount = desired;
@@ -679,6 +697,7 @@ twq_kernel_thread_enter(pthread_priority_t priority)
 {
 	int ret;
 
+	priority = twq_priority_for_kernel(priority);
 	ret = twq_sys_kernreturn(TWQ_OP_THREAD_ENTER, NULL,
 	    (int)((uint32_t)priority), 0);
 	if (ret == -1)
@@ -691,6 +710,7 @@ twq_kernel_thread_return(pthread_priority_t priority)
 {
 	int ret;
 
+	priority = twq_priority_for_kernel(priority);
 	ret = twq_sys_kernreturn(TWQ_OP_THREAD_RETURN, NULL,
 	    (int)((uint32_t)priority), 0);
 	if (ret == -1)
@@ -705,6 +725,8 @@ twq_kernel_thread_transfer(uint16_t from_desired,
 	struct twq_thread_transfer_args transfer;
 	int ret;
 
+	from_priority = twq_priority_for_kernel(from_priority);
+	to_priority = twq_priority_for_kernel(to_priority);
 	memset(&transfer, 0, sizeof(transfer));
 	transfer.tqt_version = TWQ_THREAD_TRANSFER_VERSION;
 	transfer.tqt_from_reqcount = from_desired;
@@ -723,6 +745,7 @@ twq_kernel_should_narrow(pthread_priority_t priority)
 {
 	int ret;
 
+	priority = twq_priority_for_kernel(priority);
 	ret = twq_sys_kernreturn(TWQ_OP_SHOULD_NARROW, NULL,
 	    (int)((uint32_t)priority), 0);
 	if (ret == -1)
