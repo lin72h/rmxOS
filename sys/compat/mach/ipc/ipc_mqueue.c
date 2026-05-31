@@ -793,6 +793,11 @@ ipc_mqueue_receive(
 	/* must block waiting for a message */
 	if (option & MACH_RCV_TIMEOUT) {
 		if (timeout == 0) {
+			self->ith_state = MACH_RCV_TIMED_OUT;
+			io_unlock(self->ith_object);
+			io_release(self->ith_object);
+			self->ith_kmsg = NULL;
+			self->ith_object = NULL;
 			return MACH_RCV_TIMED_OUT;
 		}
 
