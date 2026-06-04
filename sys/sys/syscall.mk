@@ -320,6 +320,7 @@ MIASM =  \
 	thr_set_name.o \
 	aio_fsync.o \
 	rtprio_thread.o \
+	twq_kernreturn.o \
 	sctp_peeloff.o \
 	sctp_generic_sendmsg.o \
 	sctp_generic_sendmsg_iov.o \

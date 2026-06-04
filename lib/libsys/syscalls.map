@@ -583,6 +583,8 @@ FBSDprivate_1.0 {
 	__sys_aio_fsync;
 	_rtprio_thread;
 	__sys_rtprio_thread;
+	_twq_kernreturn;
+	__sys_twq_kernreturn;
 	_sctp_peeloff;
 	__sys_sctp_peeloff;
 	_sctp_generic_sendmsg;

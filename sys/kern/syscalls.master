@@ -2526,7 +2526,16 @@
 		    _Inout_ struct rtprio *rtp
 		);
 	}
-467-470	AUE_NULL	RESERVED
+467	AUE_NULL	RESERVED
+468	AUE_NULL	STD|CAPENABLED {
+		int twq_kernreturn(
+		    int op,
+		    _In_opt_ _Contains_long_ptr_ void *arg2,
+		    int arg3,
+		    int arg4
+		);
+	}
+469-470	AUE_NULL	RESERVED
 471	AUE_SCTP_PEELOFF	NOSTD|CAPENABLED {
 		int sctp_peeloff(
 		    int sd,
