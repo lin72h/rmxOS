@@ -451,7 +451,7 @@ ipc_right_check(
 		ipc_hash_delete(space, (ipc_object_t) port, name, entry);
 	} else {
 		assert(IE_BITS_TYPE(bits) == MACH_PORT_TYPE_SEND_ONCE);
-		MACH_VERIFY(ipc_entry_mach_urefs(entry) == 1, ("urefs expected 1 got %d", ipc_entry_mach_urefs(entry)));
+		MACH_VERIFY(ipc_entry_refs(entry) == 1, ("urefs expected 1 got %d", ipc_entry_refs(entry)));
 	}
 
 	ipc_port_release(port);
@@ -745,7 +745,7 @@ ipc_right_dealloc(
 		assert(entry->ie_request == 0);
 		assert(entry->ie_object == IO_NULL);
 
-		if (ipc_entry_mach_urefs(entry) > 1) {
+		if (ipc_entry_refs(entry) > 1) {
 			ipc_entry_release(entry);
 			is_write_unlock(space);
 		} else
@@ -757,7 +757,7 @@ ipc_right_dealloc(
 	    case MACH_PORT_TYPE_SEND_ONCE: {
 		ipc_port_t port, dnrequest;
 
-		MACH_VERIFY(ipc_entry_mach_urefs(entry) == 1, ("urefs expected 1 got %d", ipc_entry_mach_urefs(entry)));
+		MACH_VERIFY(ipc_entry_refs(entry) == 1, ("urefs expected 1 got %d", ipc_entry_refs(entry)));
 		port = (ipc_port_t) entry->ie_object;
 		assert(port != IP_NULL);
 
@@ -806,7 +806,7 @@ ipc_right_dealloc(
 
 		assert(port->ip_srights > 0);
 
-		if (ipc_entry_mach_urefs(entry) > 1) {
+		if (ipc_entry_refs(entry) > 1) {
 			ip_unlock(port);
 			ipc_entry_release(entry); /* decrement urefs */
 			is_write_unlock(space);
@@ -859,7 +859,7 @@ ipc_right_dealloc(
 		assert(port->ip_receiver == space);
 		assert(port->ip_srights > 0);
 
-		if (ipc_entry_mach_urefs(entry) > 1) {
+		if (ipc_entry_refs(entry) > 1) {
 			ipc_entry_release(entry);
 		} else {
 			if (--port->ip_srights == 0
@@ -1042,7 +1042,7 @@ ipc_right_delta(
 			goto invalid_right;
 
 		assert(IE_BITS_TYPE(bits) == MACH_PORT_TYPE_SEND_ONCE);
-		MACH_VERIFY(ipc_entry_mach_urefs(entry) == 1, ("urefs expected 1 got %d", ipc_entry_mach_urefs(entry)));
+		MACH_VERIFY(ipc_entry_refs(entry) == 1, ("urefs expected 1 got %d", ipc_entry_refs(entry)));
 
 		port = (ipc_port_t) entry->ie_object;
 		assert(port != IP_NULL);
@@ -1101,7 +1101,7 @@ ipc_right_delta(
 		assert(entry->ie_object == IO_NULL);
 		assert(entry->ie_request == 0);
 
-		urefs = ipc_entry_mach_urefs(entry);
+		urefs = ipc_entry_refs(entry);
 		if (MACH_PORT_UREFS_UNDERFLOW(urefs, delta))
 			goto invalid_value;
 
@@ -1138,7 +1138,7 @@ ipc_right_delta(
 
 		assert(port->ip_srights > 0);
 
-		urefs = ipc_entry_mach_urefs(entry);
+		urefs = ipc_entry_refs(entry);
 		if (MACH_PORT_UREFS_UNDERFLOW(urefs, delta)) {
 			ip_unlock(port);
 			goto invalid_value;
@@ -1255,7 +1255,7 @@ ipc_right_info(
 		type |= MACH_PORT_TYPE_DNREQUEST;
 
 	*typep = type;
-	*urefsp = ipc_entry_mach_urefs(entry);
+	*urefsp = ipc_entry_refs(entry);
 	return KERN_SUCCESS;
 }
 
@@ -1547,7 +1547,7 @@ ipc_right_copyin(
 
 		assert(port->ip_srights > 0);
 
-		if (ipc_entry_mach_urefs(entry) == 1) {
+		if (ipc_entry_refs(entry) == 1) {
 			if (bits & MACH_PORT_TYPE_RECEIVE) {
 				assert(port->ip_receiver_name == name);
 				assert(port->ip_receiver == space);
@@ -1569,7 +1569,7 @@ ipc_right_copyin(
 			entry->ie_bits = bits &~
 				(IE_BITS_UREFS_MASK|MACH_PORT_TYPE_SEND);
 		} else {
-			MPASS(ipc_entry_mach_urefs(entry) > 1);
+			MPASS(ipc_entry_refs(entry) > 1);
 			port->ip_srights++;
 			ip_reference(port);
 			ipc_entry_release(entry); /* decrement urefs */
@@ -1617,7 +1617,7 @@ ipc_right_copyin(
 		}
 
 		assert(IE_BITS_TYPE(bits) == MACH_PORT_TYPE_SEND_ONCE);
-		MACH_VERIFY(ipc_entry_mach_urefs(entry) == 1, ("urefs expected 1 got %d", ipc_entry_mach_urefs(entry)));
+		MACH_VERIFY(ipc_entry_refs(entry) == 1, ("urefs expected 1 got %d", ipc_entry_refs(entry)));
 		assert(port->ip_sorights > 0);
 
 		dnrequest = ipc_right_dncancel_macro(space, port, name, entry);
@@ -1661,7 +1661,7 @@ ipc_right_copyin(
 		ELOG;
 		goto invalid_right;
 	}
-	if (ipc_entry_mach_urefs(entry) > 1)
+	if (ipc_entry_refs(entry) > 1)
 		ipc_entry_release(entry); /* decrement urefs */
 	else
 		entry->ie_bits = bits &~ MACH_PORT_TYPE_DEAD_NAME;
@@ -1786,7 +1786,7 @@ ipc_right_copyin_two(
 	if ((bits & MACH_PORT_TYPE_SEND) == 0)
 		goto invalid_right;
 
-	urefs = ipc_entry_mach_urefs(entry);
+	urefs = ipc_entry_refs(entry);
 	if (urefs < 2)
 		goto invalid_right;
 

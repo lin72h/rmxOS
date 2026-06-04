@@ -631,22 +631,6 @@ ipc_entry_refs(
 	return (entry->ie_fp->f_count);
 }
 
-/*
- *	Routine:	ipc_entry_mach_urefs
- *	Purpose:
- *		Returns the Mach user reference count for an entry.
- *		Subtracts the base fd reference from falloc_noinstall().
- *	Conditions:
- *		The entry must be valid.
- */
-int
-ipc_entry_mach_urefs(ipc_entry_t entry)
-{
-
-	MPASS(entry->ie_fp->f_count >= 1);
-	return (entry->ie_fp->f_count - 1);
-}
-
 void
 ipc_entry_add_refs(
 	ipc_entry_t entry,
