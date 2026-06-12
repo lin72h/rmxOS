@@ -41,6 +41,7 @@
 #include "notifyd.h"
 #include "service.h"
 #include "notify_ipc.h"
+#include "n2_markers.h"
 
 kern_return_t __notify_server_post_3(mach_port_t server __unused,
     uint64_t name_id, audit_token_t audit);
@@ -191,6 +192,7 @@ cancel_proc(void *px)
 	if (global.notify_state == NULL) return;
 
 	pid = lpid;
+	notifyd_n2_proc_source_event(pid);
 	x = NULL;
 
 	tt = _nc_table_traverse_start(global.notify_state->client_table);
@@ -263,6 +265,8 @@ port_event(void *px)
 	}
 
 	data = dispatch_source_get_data(pp->src);
+	notifyd_n2_kernel_dead_name_receive(port, data);
+	notifyd_n2_mach_send_dead_event(port, data);
 
 	if (data & DISPATCH_MACH_SEND_DEAD)
 	{
@@ -320,6 +324,7 @@ register_pid(pid_t pid)
 	if (pp != NULL) return;
 
 	src = dispatch_source_create(DISPATCH_SOURCE_TYPE_PROC, pid, DISPATCH_PROC_EXIT, global.work_q);
+	notifyd_n2_proc_source_create(pid);
 	dispatch_source_set_event_handler_f(src, (dispatch_function_t)cancel_proc);
 
 	lpid = pid;
@@ -350,6 +355,8 @@ register_port(client_t *c)
 	if (pp != NULL) return;
 
 	src = dispatch_source_create(DISPATCH_SOURCE_TYPE_MACH_SEND, c->port, DISPATCH_MACH_SEND_DEAD | DISPATCH_MACH_SEND_POSSIBLE, global.work_q);
+	notifyd_n2_kernel_dead_name_request(global.server_port, c->port);
+	notifyd_n2_mach_send_source_create(c->port);
 
 	dispatch_source_set_event_handler_f(src, (dispatch_function_t)port_event);
 
@@ -387,6 +394,7 @@ server_preflight(caddr_t name, mach_msg_type_number_t nameCnt, audit_token_t aud
 	}
 
 	audit_token_to_au32(audit, NULL, uid, gid, NULL, NULL, &xpid, NULL, NULL);
+	notifyd_n2_kernel_audit_trailer(audit);
 	if (pid != NULL) *pid = xpid;
 
 	if (token > 0)

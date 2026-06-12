@@ -31,7 +31,7 @@ notify_ipc.h notify_ipcServer.c: ${.CURDIR}/../../lib/libnotify/notify_ipc.defs
 notify_proc: notify_ipcServer.c
 
 LDFLAGS+= -lutil -lauditd -lbsm -ldispatch -lmach -lBlocksRuntime -llaunch -losxsupport -lxpc -lnv -lsbuf -lnotify
-SRCS=notify_proc.c notifyd.c service.c timer.c	notify_ipcServer.c
+SRCS=notify_proc.c notifyd.c service.c timer.c n2_markers.c notify_ipcServer.c
 
 
 CLEANFILES+= *Server.c *User.c job.h helper.h job_reply.h job_forward.h notify.h \

@@ -43,6 +43,7 @@
 #include "service.h"
 #include "pathwatch.h"
 #include "timer.h"
+#include "n2_markers.h"
 
 #include "notify_ipc.h"
 #include "notify_private.h"
@@ -740,33 +741,42 @@ init_launch_config(const char *name)
 	tmp = launch_data_new_string(LAUNCH_KEY_CHECKIN);
 	global.launch_dict = launch_msg(tmp);
 	launch_data_free(tmp);
+	notifyd_n2_launchd_checkin_request(global.launch_dict);
 
 	if (global.launch_dict == NULL)
 	{
+		notifyd_n2_launchd_terminal(1);
 		fprintf(stderr, "%d launchd checkin failed\n", getpid());
 		exit(1);
 	}
 
 	tmp = launch_data_dict_lookup(global.launch_dict, LAUNCH_JOBKEY_MACHSERVICES);
+	notifyd_n2_launchd_mach_services(tmp);
 	if (tmp == NULL)
 	{
+		notifyd_n2_launchd_terminal(2);
 		fprintf(stderr, "%d launchd lookup of LAUNCH_JOBKEY_MACHSERVICES failed\n", getpid());
 		exit(1);
 	}
 
 	pdict = launch_data_dict_lookup(tmp, name);
+	notifyd_n2_launchd_service_entry(name, pdict);
 	if (pdict == NULL)
 	{
+		notifyd_n2_launchd_terminal(3);
 		fprintf(stderr, "%d launchd lookup of name %s failed\n", getpid(), name);
 		exit(1);
 	}
 
 	global.server_port = launch_data_get_machport(pdict);
+	notifyd_n2_launchd_receive_right(name, global.server_port);
 	if (global.server_port == MACH_PORT_NULL)
 	{
+		notifyd_n2_launchd_terminal(4);
 		fprintf(stderr, "%d launchd lookup of server port for name %s failed\n", getpid(), name);
 		exit(1);
 	}
+	notifyd_n2_launchd_terminal(0);
 }
 
 static void
@@ -1038,6 +1048,14 @@ service_mach_message(bool blocking)
 
 		status = mach_msg(&(request->head), rbits, 0, global.request_size, global.server_port, 0, MACH_PORT_NULL);
 		if (status != KERN_SUCCESS) return;
+		{
+			mach_msg_trailer_t *trailer;
+
+			trailer = (mach_msg_trailer_t *)((char *)&request->head +
+			    round_msg(request->head.msgh_size));
+			notifyd_n2_kernel_mach_msg_receive(&(request->head),
+			    trailer->msgh_trailer_size);
+		}
 
 // XXX		voucher_mach_msg_state_t voucher = voucher_mach_msg_adopt(&(request->head));
 
