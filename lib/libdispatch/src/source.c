@@ -20,6 +20,7 @@
 
 #include "internal.h"
 #if HAVE_MACH
+#include "mach-notify-decode.h"
 #include "protocol.h"
 #include "protocolServer.h"
 #endif
@@ -2971,6 +2972,12 @@ static void
 _dispatch_mach_notify_source_invoke(mach_msg_header_t *hdr)
 {
 	mig_reply_error_t reply;
+	mach_port_name_t dead_name;
+
+	if (_dispatch_mach_dead_name_decode(hdr, &dead_name)) {
+		(void)_dispatch_mach_notify_dead_name(hdr->msgh_local_port, dead_name);
+		return;
+	}
 	dispatch_assert(sizeof(mig_reply_error_t) == sizeof(union
 		__ReplyUnion___dispatch_libdispatch_internal_protocol_subsystem));
 	dispatch_assert(sizeof(mig_reply_error_t) < _dispatch_mach_recv_msg_size);
