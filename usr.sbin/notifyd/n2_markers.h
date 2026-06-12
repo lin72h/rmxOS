@@ -15,13 +15,10 @@ void notifyd_n2_launchd_terminal(int status);
 void notifyd_n2_kernel_mach_msg_receive(mach_msg_header_t *head,
     uint32_t trailer_size);
 void notifyd_n2_kernel_audit_trailer(audit_token_t audit);
-void notifyd_n2_kernel_dead_name_request(mach_port_t notify_port,
-    mach_port_t registered_name);
-void notifyd_n2_kernel_dead_name_receive(mach_port_t registered_name,
-    unsigned long data);
 void notifyd_n2_proc_source_create(pid_t pid);
 void notifyd_n2_proc_source_event(pid_t pid);
-void notifyd_n2_mach_send_source_create(mach_port_t registered_name);
+void notifyd_n2_mach_send_source_create(mach_port_t notify_port,
+    mach_port_t registered_name, int source_created);
 void notifyd_n2_mach_send_dead_event(mach_port_t registered_name,
     unsigned long data);
 

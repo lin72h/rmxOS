@@ -165,33 +165,6 @@ notifyd_n2_kernel_audit_trailer(audit_token_t audit)
 }
 
 void
-notifyd_n2_kernel_dead_name_request(mach_port_t notify_port,
-    mach_port_t registered_name)
-{
-	if (!notifyd_n2_enabled())
-		return;
-
-	printf("NOTIFYD_N2_KERNEL_DEAD_NAME_REQUEST kr=0 notify_port=%u registered_name=%u\n",
-	    (unsigned int)notify_port, (unsigned int)registered_name);
-	fflush(stdout);
-}
-
-void
-notifyd_n2_kernel_dead_name_receive(mach_port_t registered_name,
-    unsigned long data)
-{
-	if (!notifyd_n2_enabled())
-		return;
-
-	if ((data & DISPATCH_MACH_SEND_DEAD) == 0)
-		return;
-
-	printf("NOTIFYD_N2_KERNEL_DEAD_NAME_RECEIVE id=72 not_port=%u size=36\n",
-	    (unsigned int)registered_name);
-	fflush(stdout);
-}
-
-void
 notifyd_n2_proc_source_create(pid_t pid)
 {
 	if (!notifyd_n2_enabled())
@@ -212,13 +185,15 @@ notifyd_n2_proc_source_event(pid_t pid)
 }
 
 void
-notifyd_n2_mach_send_source_create(mach_port_t registered_name)
+notifyd_n2_mach_send_source_create(mach_port_t notify_port,
+    mach_port_t registered_name, int source_created)
 {
 	if (!notifyd_n2_enabled())
 		return;
 
-	printf("NOTIFYD_N2_MACH_SEND_SOURCE_CREATE registered_name=%u status=0\n",
-	    (unsigned int)registered_name);
+	printf("NOTIFYD_N2_MACH_SEND_SOURCE_CREATE notify_port=%u registered_name=%u source_created=%d\n",
+	    (unsigned int)notify_port, (unsigned int)registered_name,
+	    source_created != 0 ? 1 : 0);
 	fflush(stdout);
 }
 

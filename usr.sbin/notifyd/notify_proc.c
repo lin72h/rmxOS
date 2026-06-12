@@ -265,7 +265,6 @@ port_event(void *px)
 	}
 
 	data = dispatch_source_get_data(pp->src);
-	notifyd_n2_kernel_dead_name_receive(port, data);
 	notifyd_n2_mach_send_dead_event(port, data);
 
 	if (data & DISPATCH_MACH_SEND_DEAD)
@@ -355,8 +354,8 @@ register_port(client_t *c)
 	if (pp != NULL) return;
 
 	src = dispatch_source_create(DISPATCH_SOURCE_TYPE_MACH_SEND, c->port, DISPATCH_MACH_SEND_DEAD | DISPATCH_MACH_SEND_POSSIBLE, global.work_q);
-	notifyd_n2_kernel_dead_name_request(global.server_port, c->port);
-	notifyd_n2_mach_send_source_create(c->port);
+	notifyd_n2_mach_send_source_create(global.server_port, c->port,
+	    src != NULL);
 
 	dispatch_source_set_event_handler_f(src, (dispatch_function_t)port_event);
 
