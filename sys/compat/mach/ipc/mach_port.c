@@ -1252,22 +1252,14 @@ mach_port_request_notification(
 	}
 
 	case MACH_NOTIFY_DEAD_NAME: {
-		ipc_port_t port;
-		ipc_port_request_index_t indexp;
-
 		if (!MACH_PORT_NAME_VALID(name))
 			return KERN_INVALID_RIGHT;
 
-		kr = ipc_port_translate_receive(space, name, &port);
+		kr = ipc_right_dnrequest(space, name, sync != 0, notify,
+		    previousp);
 		if (kr != KERN_SUCCESS)
 			return kr;
-		/* port is locked and active */
 
-		ipc_port_dnrequest(port, name, notify, &indexp);
-		ip_unlock(port);
-
-		/* XXX: what to do here? return index? */
-		*previousp = MACH_PORT_NULL;
 		break;
 	}
 
