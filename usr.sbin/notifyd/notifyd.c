@@ -1248,7 +1248,7 @@ main(int argc, const char *argv[])
 
 	dispatch_source_set_event_handler(global.mach_src, ^{
 		/* XXX: https://bugs.freenas.org/issues/10185 */
-		service_mach_message(true);
+		service_mach_message(false);
 	});
 	dispatch_resume(global.mach_src);
 #endif
