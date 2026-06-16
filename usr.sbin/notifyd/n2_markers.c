@@ -124,7 +124,7 @@ notifyd_n2_launchd_terminal(int status)
 
 void
 notifyd_n2_kernel_mach_msg_receive(mach_msg_header_t *head,
-    uint32_t trailer_size)
+    uint32_t trailer_type, uint32_t trailer_size)
 {
 	if (head == NULL)
 		return;
@@ -137,9 +137,9 @@ notifyd_n2_kernel_mach_msg_receive(mach_msg_header_t *head,
 	if (!notifyd_n2_enabled())
 		return;
 
-	printf("NOTIFYD_N2_KERNEL_MACH_MSG_RECEIVE msgid=%d local_port=%u size=%u trailer=audit\n",
+	printf("NOTIFYD_N2_KERNEL_MACH_MSG_RECEIVE msgid=%d local_port=%u size=%u trailer_type=%u\n",
 	    head->msgh_id, (unsigned int)head->msgh_local_port,
-	    (unsigned int)head->msgh_size);
+	    (unsigned int)head->msgh_size, (unsigned int)trailer_type);
 	fflush(stdout);
 }
 
@@ -165,12 +165,13 @@ notifyd_n2_kernel_audit_trailer(audit_token_t audit)
 }
 
 void
-notifyd_n2_proc_source_create(pid_t pid)
+notifyd_n2_proc_source_create(pid_t pid, int source_created)
 {
 	if (!notifyd_n2_enabled())
 		return;
 
-	printf("NOTIFYD_N2_PROC_SOURCE_CREATE pid=%d status=0\n", (int)pid);
+	printf("NOTIFYD_N2_PROC_SOURCE_CREATE pid=%d source_created=%d\n",
+	    (int)pid, source_created != 0 ? 1 : 0);
 	fflush(stdout);
 }
 
@@ -180,7 +181,7 @@ notifyd_n2_proc_source_event(pid_t pid)
 	if (!notifyd_n2_enabled())
 		return;
 
-	printf("NOTIFYD_N2_PROC_SOURCE_EVENT pid=%d status=0\n", (int)pid);
+	printf("NOTIFYD_N2_PROC_SOURCE_EVENT pid=%d\n", (int)pid);
 	fflush(stdout);
 }
 

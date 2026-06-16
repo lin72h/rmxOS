@@ -323,7 +323,7 @@ register_pid(pid_t pid)
 	if (pp != NULL) return;
 
 	src = dispatch_source_create(DISPATCH_SOURCE_TYPE_PROC, pid, DISPATCH_PROC_EXIT, global.work_q);
-	notifyd_n2_proc_source_create(pid);
+	notifyd_n2_proc_source_create(pid, src != NULL);
 	dispatch_source_set_event_handler_f(src, (dispatch_function_t)cancel_proc);
 
 	lpid = pid;

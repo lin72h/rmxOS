@@ -1054,6 +1054,7 @@ service_mach_message(bool blocking)
 			trailer = (mach_msg_trailer_t *)((char *)&request->head +
 			    round_msg(request->head.msgh_size));
 			notifyd_n2_kernel_mach_msg_receive(&(request->head),
+			    trailer->msgh_trailer_type,
 			    trailer->msgh_trailer_size);
 		}
 
