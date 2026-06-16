@@ -396,7 +396,7 @@ server_preflight(caddr_t name, mach_msg_type_number_t nameCnt, audit_token_t aud
 	notifyd_n2_kernel_audit_trailer(audit);
 	if (pid != NULL) *pid = xpid;
 
-	if (token > 0)
+	if (token >= 0)
 	{
 		client_t *c;
 		uint64_t xcid = make_client_id(xpid, token);
