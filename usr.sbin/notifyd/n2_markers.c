@@ -212,3 +212,110 @@ notifyd_n2_mach_send_dead_event(mach_port_t registered_name,
 	    (unsigned int)registered_name, data);
 	fflush(stdout);
 }
+
+void
+notifyd_n2c2b_proc_source_create(pid_t pid, int source_created)
+{
+	if (!notifyd_n2_enabled())
+		return;
+
+	printf("NOTIFYD_N2C2B_PROC_SOURCE_CREATE pid=%d source_created=%d\n",
+	    (int)pid, source_created != 0 ? 1 : 0);
+	fflush(stdout);
+}
+
+void
+notifyd_n2c2b_proc_source_resume(pid_t pid, int resumed)
+{
+	if (!notifyd_n2_enabled())
+		return;
+
+	printf("NOTIFYD_N2C2B_PROC_SOURCE_RESUME pid=%d resumed=%d\n",
+	    (int)pid, resumed != 0 ? 1 : 0);
+	fflush(stdout);
+}
+
+void
+notifyd_n2c2b_proc_event_enter(pid_t pid)
+{
+	if (!notifyd_n2_enabled())
+		return;
+
+	printf("NOTIFYD_N2C2B_PROC_EVENT_ENTER pid=%d\n", (int)pid);
+	fflush(stdout);
+}
+
+void
+notifyd_n2c2b_mach_send_source_create(mach_port_t registered_name,
+    int source_created)
+{
+	if (!notifyd_n2_enabled())
+		return;
+
+	printf("NOTIFYD_N2C2B_MACH_SEND_SOURCE_CREATE registered_name=%u source_created=%d\n",
+	    (unsigned int)registered_name, source_created != 0 ? 1 : 0);
+	fflush(stdout);
+}
+
+void
+notifyd_n2c2b_mach_send_source_resume(mach_port_t registered_name,
+    int resumed)
+{
+	if (!notifyd_n2_enabled())
+		return;
+
+	printf("NOTIFYD_N2C2B_MACH_SEND_SOURCE_RESUME registered_name=%u resumed=%d\n",
+	    (unsigned int)registered_name, resumed != 0 ? 1 : 0);
+	fflush(stdout);
+}
+
+void
+notifyd_n2c2b_portproc_insert(mach_port_t registered_name, const char *state)
+{
+	if (!notifyd_n2_enabled())
+		return;
+
+	if (state == NULL)
+		state = "unknown";
+	printf("NOTIFYD_N2C2B_PORTPROC_INSERT registered_name=%u state=%s\n",
+	    (unsigned int)registered_name, state);
+	fflush(stdout);
+}
+
+void
+notifyd_n2c2b_send_right_retain(mach_port_t registered_name,
+    kern_return_t kr)
+{
+	if (!notifyd_n2_enabled())
+		return;
+
+	printf("NOTIFYD_N2C2B_SEND_RIGHT_RETAIN registered_name=%u kr=%d\n",
+	    (unsigned int)registered_name, (int)kr);
+	fflush(stdout);
+}
+
+void
+notifyd_n2c2b_portproc_lookup(mach_port_t registered_name, const char *site,
+    int found)
+{
+	if (!notifyd_n2_enabled())
+		return;
+
+	if (site == NULL)
+		site = "unknown";
+	printf("NOTIFYD_N2C2B_PORTPROC_LOOKUP registered_name=%u site=%s found=%d\n",
+	    (unsigned int)registered_name, site, found != 0 ? 1 : 0);
+	fflush(stdout);
+}
+
+void
+notifyd_n2c2b_port_event_enter(mach_port_t registered_name,
+    unsigned long data)
+{
+	if (!notifyd_n2_enabled())
+		return;
+
+	printf("NOTIFYD_N2C2B_PORT_EVENT_ENTER registered_name=%u data=%lu\n",
+	    (unsigned int)registered_name, data);
+	fflush(stdout);
+}

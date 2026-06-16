@@ -192,6 +192,7 @@ cancel_proc(void *px)
 	if (global.notify_state == NULL) return;
 
 	pid = lpid;
+	notifyd_n2c2b_proc_event_enter(pid);
 	notifyd_n2_proc_source_event(pid);
 	x = NULL;
 
@@ -258,6 +259,7 @@ port_event(void *px)
 	if (port == MACH_PORT_NULL) return;
 
 	pp = _notify_lib_port_proc_find(global.notify_state, port, 0);
+	notifyd_n2c2b_portproc_lookup(port, "event", pp != NULL);
 	if (pp == NULL)
 	{
 		log_message(ASL_LEVEL_DEBUG, "can't find port source for %u\n", port);
@@ -265,6 +267,7 @@ port_event(void *px)
 	}
 
 	data = dispatch_source_get_data(pp->src);
+	notifyd_n2c2b_port_event_enter(port, data);
 	notifyd_n2_mach_send_dead_event(port, data);
 
 	if (data & DISPATCH_MACH_SEND_DEAD)
@@ -324,6 +327,7 @@ register_pid(pid_t pid)
 
 	src = dispatch_source_create(DISPATCH_SOURCE_TYPE_PROC, pid, DISPATCH_PROC_EXIT, global.work_q);
 	notifyd_n2_proc_source_create(pid, src != NULL);
+	notifyd_n2c2b_proc_source_create(pid, src != NULL);
 	dispatch_source_set_event_handler_f(src, (dispatch_function_t)cancel_proc);
 
 	lpid = pid;
@@ -332,6 +336,7 @@ register_pid(pid_t pid)
 	_notify_lib_port_proc_new(global.notify_state, MACH_PORT_NULL, pid, 0, src);
 
 	dispatch_resume(src);
+	notifyd_n2c2b_proc_source_resume(pid, 1);
 }
 
 static void
@@ -340,6 +345,7 @@ register_port(client_t *c)
 	dispatch_source_t src;
 	long lport;
 	portproc_data_t *pp;
+	kern_return_t kr;
 
 	if (c == NULL) return;
 
@@ -351,16 +357,19 @@ register_port(client_t *c)
 	 * N.B. This call retains the portproc_data_t.  We want that.
 	 */
 	pp = _notify_lib_port_proc_find(global.notify_state, c->port, 0);
+	notifyd_n2c2b_portproc_lookup(c->port, "register", pp != NULL);
 	if (pp != NULL) return;
 
 	src = dispatch_source_create(DISPATCH_SOURCE_TYPE_MACH_SEND, c->port, DISPATCH_MACH_SEND_DEAD | DISPATCH_MACH_SEND_POSSIBLE, global.work_q);
 	notifyd_n2_mach_send_source_create(global.server_port, c->port,
 	    src != NULL);
+	notifyd_n2c2b_mach_send_source_create(c->port, src != NULL);
 
 	dispatch_source_set_event_handler_f(src, (dispatch_function_t)port_event);
 
 	/* retain send right for port - port_dealloc() will release when the source goes away */
-	mach_port_mod_refs(mach_task_self(), c->port, MACH_PORT_RIGHT_SEND, +1);
+	kr = mach_port_mod_refs(mach_task_self(), c->port, MACH_PORT_RIGHT_SEND, +1);
+	notifyd_n2c2b_send_right_retain(c->port, kr);
 	dispatch_source_set_cancel_handler_f(src, (dispatch_function_t)port_dealloc);
 
 	lport = c->port;
@@ -369,8 +378,10 @@ register_port(client_t *c)
 	dispatch_source_set_registration_handler_f(src, (dispatch_function_t)port_registration_complete);
 
 	_notify_lib_port_proc_new(global.notify_state, c->port, 0, NOTIFY_PORT_PROC_STATE_SUSPENDED, src);
+	notifyd_n2c2b_portproc_insert(c->port, "suspended");
 
 	dispatch_resume(src);
+	notifyd_n2c2b_mach_send_source_resume(c->port, 1);
 }
 
 static uint32_t

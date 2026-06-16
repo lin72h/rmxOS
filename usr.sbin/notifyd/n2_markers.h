@@ -22,4 +22,20 @@ void notifyd_n2_mach_send_source_create(mach_port_t notify_port,
 void notifyd_n2_mach_send_dead_event(mach_port_t registered_name,
     unsigned long data);
 
+void notifyd_n2c2b_proc_source_create(pid_t pid, int source_created);
+void notifyd_n2c2b_proc_source_resume(pid_t pid, int resumed);
+void notifyd_n2c2b_proc_event_enter(pid_t pid);
+void notifyd_n2c2b_mach_send_source_create(mach_port_t registered_name,
+    int source_created);
+void notifyd_n2c2b_mach_send_source_resume(mach_port_t registered_name,
+    int resumed);
+void notifyd_n2c2b_portproc_insert(mach_port_t registered_name,
+    const char *state);
+void notifyd_n2c2b_send_right_retain(mach_port_t registered_name,
+    kern_return_t kr);
+void notifyd_n2c2b_portproc_lookup(mach_port_t registered_name,
+    const char *site, int found);
+void notifyd_n2c2b_port_event_enter(mach_port_t registered_name,
+    unsigned long data);
+
 #endif
