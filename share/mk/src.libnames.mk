@@ -246,6 +246,7 @@ _LIBRARIES=	\
 		vmmapi \
 		wind \
 		wrap \
+		xpc \
 		xo \
 		y \
 		ypclnt \

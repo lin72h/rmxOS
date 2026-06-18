@@ -7,7 +7,8 @@ NO_WERROR= yes
 
 BASE_INCLUDE= -I${.CURDIR}/../../include/apple
 BASE_INCLUDE+= -I${.CURDIR}/../libnv
-BASE_INCLUDE+= -I${.CURDIR} -I${.CURDIR}/../../sbin/launchd -I.
+BASE_INCLUDE+= -I${.CURDIR} -I${.CURDIR}/../libdispatch -I${.CURDIR}/../liblaunch
+BASE_INCLUDE+= -I${.CURDIR}/../../sbin/launchd -I.
 BASE_INCLUDE+= -I${.CURDIR}/../../include -I${.CURDIR}/../../sys
 CFLAGS+= ${BASE_INCLUDE} -fblocks -g -O0
 

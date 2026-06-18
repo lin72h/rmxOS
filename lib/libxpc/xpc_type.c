@@ -301,7 +301,7 @@ xpc_data_get_bytes_ptr(xpc_object_t xdata)
 		return (NULL);
 
 	if (xo->xo_xpc_type == _XPC_TYPE_DATA)
-		return (xo->xo_ptr);
+		return ((const void *)xo->xo_ptr);
 
 	return (0);	
 }

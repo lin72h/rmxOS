@@ -110,6 +110,7 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	libuvmem \
 	${_libvgl} \
 	libwrap \
+	libxpc \
 	libxo \
 	liby \
 	libyaml \
@@ -136,6 +137,7 @@ SUBDIR_DEPEND_libcasper= libnv
 SUBDIR_DEPEND_libcrypt= libmd
 SUBDIR_DEPEND_libdevstat= libkvm
 SUBDIR_DEPEND_libdispatch= libblocksruntime libmach libthr
+SUBDIR_DEPEND_libxpc= libdispatch libmach libnv
 SUBDIR_DEPEND_libdpv= libfigpar ncurses libutil
 SUBDIR_DEPEND_libedit= ncurses
 SUBDIR_DEPEND_libgeom= libexpat libsbuf
