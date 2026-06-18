@@ -84,6 +84,7 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	libnv \
 	libnvmf \
 	libopenbsd \
+	libosxsupport \
 	libpam \
 	libpathconv \
 	libpcap \
@@ -138,9 +139,9 @@ SUBDIR_DEPEND_libcam= libsbuf
 SUBDIR_DEPEND_libcasper= libnv
 SUBDIR_DEPEND_libcrypt= libmd
 SUBDIR_DEPEND_libdevstat= libkvm
-SUBDIR_DEPEND_libdispatch= libblocksruntime libmach libthr
-SUBDIR_DEPEND_liblaunch= libdispatch libmach libxpc
-SUBDIR_DEPEND_libnotify= libdispatch liblaunch libmach
+SUBDIR_DEPEND_libdispatch= libblocksruntime libmach libosxsupport libthr
+SUBDIR_DEPEND_liblaunch= libdispatch libmach libosxsupport libxpc
+SUBDIR_DEPEND_libnotify= libdispatch liblaunch libmach libosxsupport
 SUBDIR_DEPEND_libxpc= libdispatch libmach libnv
 SUBDIR_DEPEND_libdpv= libfigpar ncurses libutil
 SUBDIR_DEPEND_libedit= ncurses

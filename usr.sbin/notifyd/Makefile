@@ -38,6 +38,7 @@ LDADD+= ${OBJLIB}/libnotify/libnotify.a
 LDADD+= ${OBJLIB}/liblaunch/liblaunch.a
 LDADD+= ${OBJLIB}/libxpc/libxpc.a
 LDADD+= ${OBJLIB}/libdispatch/libdispatch.a
+LDADD+= ${OBJLIB}/libosxsupport/libosxsupport.a
 LDADD+= ${OBJLIB}/libmach/libmach.a
 LDADD+= ${OBJLIB}/libthr/libthr.a
 LDADD+= ${OBJLIB}/libsys/libsys.a
