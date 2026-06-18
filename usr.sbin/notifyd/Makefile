@@ -42,6 +42,7 @@ LDADD+= ${OBJLIB}/libosxsupport/libosxsupport.a
 LDADD+= ${OBJLIB}/libmach/libmach.a
 LDADD+= ${OBJLIB}/libthr/libthr.a
 LDADD+= ${OBJLIB}/libsys/libsys.a
+LDADD+= ${OBJLIB}/libc/libc.a
 LDADD+= ${OBJLIB}/libbsm/libbsm.a
 LDADD+= ${OBJLIB}/libauditd/libprivateauditd.a
 LDADD+= ${OBJLIB}/libblocksruntime/libBlocksRuntime.a
