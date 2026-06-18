@@ -48,7 +48,8 @@ typedef mach_port_t vproc_mig_t;
 vproc_err_t _vprocmgr_init(const char *session_type);
 vproc_err_t _vproc_post_fork_ping(void);
 
-#if !TARGET_OS_EMBEDDED
+#if !TARGET_OS_EMBEDDED && defined(SYS_audit_session_self) && \
+	defined(SYS_audit_session_join)
 #define _audit_session_self(v) (mach_port_t)syscall(SYS_audit_session_self)
 #define _audit_session_join(s) (au_asid_t)syscall(SYS_audit_session_join, session)
 #else

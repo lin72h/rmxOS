@@ -70,6 +70,7 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	libkiconv \
 	libkldelf \
 	libkvm \
+	liblaunch \
 	liblua \
 	liblzma \
 	libmach \
@@ -137,6 +138,7 @@ SUBDIR_DEPEND_libcasper= libnv
 SUBDIR_DEPEND_libcrypt= libmd
 SUBDIR_DEPEND_libdevstat= libkvm
 SUBDIR_DEPEND_libdispatch= libblocksruntime libmach libthr
+SUBDIR_DEPEND_liblaunch= libdispatch libmach libxpc
 SUBDIR_DEPEND_libxpc= libdispatch libmach libnv
 SUBDIR_DEPEND_libdpv= libfigpar ncurses libutil
 SUBDIR_DEPEND_libedit= ncurses

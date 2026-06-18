@@ -185,6 +185,7 @@ _LIBRARIES=	\
 		krb5support \
 		kvm \
 		l \
+		launch \
 		lzma \
 		m \
 		mach \
