@@ -51,6 +51,7 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	libdevdctl \
 	libdevinfo \
 	libdevstat \
+	libdispatch \
 	libdl \
 	libdwarf \
 	libedit \
@@ -71,6 +72,7 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	libkvm \
 	liblua \
 	liblzma \
+	libmach \
 	libmemstat \
 	libmd \
 	libmt \
@@ -133,6 +135,7 @@ SUBDIR_DEPEND_libcam= libsbuf
 SUBDIR_DEPEND_libcasper= libnv
 SUBDIR_DEPEND_libcrypt= libmd
 SUBDIR_DEPEND_libdevstat= libkvm
+SUBDIR_DEPEND_libdispatch= libblocksruntime libmach libthr
 SUBDIR_DEPEND_libdpv= libfigpar ncurses libutil
 SUBDIR_DEPEND_libedit= ncurses
 SUBDIR_DEPEND_libgeom= libexpat libsbuf

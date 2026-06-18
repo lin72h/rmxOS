@@ -138,6 +138,7 @@ _LIBRARIES=	\
 		compiler_rt \
 		crypt \
 		crypto \
+		dispatch \
 		ctf \
 		cuse \
 		cxxrt \
@@ -186,6 +187,7 @@ _LIBRARIES=	\
 		l \
 		lzma \
 		m \
+		mach \
 		magic \
 		md \
 		memstat \

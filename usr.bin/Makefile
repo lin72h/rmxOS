@@ -85,6 +85,7 @@ SUBDIR=	alias \
 	mandoc \
 	mdo \
 	mesg \
+	migcom \
 	ministat \
 	mkdep \
 	mkfifo \

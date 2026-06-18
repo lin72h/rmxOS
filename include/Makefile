@@ -4,7 +4,7 @@
 
 PACKAGE=clibs
 CLEANFILES= osreldate.h version
-SUBDIR= arpa protocols pthread rpcsvc rpc ssp xlocale
+SUBDIR= apple arpa libkern mach os protocols pthread rpcsvc rpc ssp xlocale
 .if ${MACHINE_CPUARCH} == "amd64"
 SUBDIR+=		i386
 INCLUDE_SUBDIRS+=	i386
