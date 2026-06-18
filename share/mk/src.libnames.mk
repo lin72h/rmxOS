@@ -197,6 +197,7 @@ _LIBRARIES=	\
 		ncursesw \
 		netgraph \
 		netmap \
+		notify \
 		ngatm \
 		nv \
 		nvpair \
