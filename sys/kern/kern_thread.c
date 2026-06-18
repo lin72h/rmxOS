@@ -390,6 +390,7 @@ thread_ctor(void *mem, int size, void *arg, int flags)
 	td = (struct thread *)mem;
 	TD_SET_STATE(td, TDS_INACTIVE);
 	td->td_lastcpu = td->td_oncpu = NOCPU;
+	td->td_twq = NULL;
 
 	/*
 	 * Note that td_critnest begins life as 1 because the thread is not

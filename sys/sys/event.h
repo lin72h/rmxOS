@@ -47,7 +47,8 @@
 #define EVFILT_EMPTY		(-13)	/* empty send socket buf */
 #define EVFILT_JAIL		(-14)	/* attached to struct prison */
 #define EVFILT_JAILDESC		(-15)	/* attached to jail descriptors */
-#define EVFILT_SYSCOUNT		15
+#define	EVFILT_MACHPORT		(-16)	/* Mach portsets */
+#define EVFILT_SYSCOUNT		16
 
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
 #define	EV_SET(kevp_, a, b, c, d, e, f) do {	\

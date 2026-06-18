@@ -1,0 +1,7 @@
+include MACHDEBUG
+include "std.debug"
+
+ident	MACHDEBUGDEBUG
+
+options	DEBUG_LOCKS
+options	THRWORKQ

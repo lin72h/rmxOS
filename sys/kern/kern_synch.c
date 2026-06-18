@@ -58,6 +58,7 @@
 #include <sys/sx.h>
 #include <sys/sysctl.h>
 #include <sys/sysproto.h>
+#include <sys/thrworkq.h>
 #include <sys/vmmeter.h>
 #ifdef KTRACE
 #include <sys/uio.h>
@@ -523,7 +524,11 @@ mi_switch(int flags)
 	    (flags & SW_TYPE_MASK) == SWT_NEEDRESCHED)))
 		SDT_PROBE0(sched, , , preempt);
 #endif
+	if (td->td_twq != NULL)
+		twq_thread_switch(td, TWQ_SWCB_BLOCK, flags);
 	sched_switch(td, flags);
+	if (td->td_twq != NULL)
+		twq_thread_switch(td, TWQ_SWCB_UNBLOCK, flags);
 	CTR4(KTR_PROC, "mi_switch: new thread %ld (td_sched %p, pid %ld, %s)",
 	    td->td_tid, td_get_sched(td), td->td_proc->p_pid, td->td_name);
 

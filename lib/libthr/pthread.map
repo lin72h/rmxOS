@@ -56,6 +56,7 @@ FBSD_1.0 {
 	pthread_exit;
 	pthread_getconcurrency;
 	pthread_getprio;
+	pthread_qos_max_parallelism;
 	pthread_getschedparam;
 	pthread_getspecific;
 	pthread_join;
@@ -101,6 +102,7 @@ FBSD_1.0 {
 	pthread_rwlockattr_init;
 	pthread_rwlockattr_setpshared;
 	pthread_set_name_np;
+	pthread_set_qos_class_self_np;
 	pthread_self;
 	pthread_setcancelstate;
 	pthread_setcanceltype;
@@ -120,6 +122,7 @@ FBSD_1.0 {
 	pthread_switch_add_np;
 	pthread_switch_delete_np;
 	pthread_testcancel;
+	pthread_time_constraint_max_parallelism;
 	pthread_timedjoin_np;
 	pthread_yield;
 };
@@ -250,9 +253,17 @@ FBSDprivate_1.0 {
 	_pthread_setcancelstate;
 	_pthread_setcanceltype;
 	_pthread_setconcurrency;
+	_pthread_set_properties_self;
 	_pthread_setprio;
 	_pthread_setschedparam;
 	_pthread_setspecific;
+	_pthread_override_qos_class_end_direct;
+	_pthread_override_qos_class_start_direct;
+	_pthread_qos_class_decode;
+	_pthread_qos_class_encode;
+	_pthread_qos_class_encode_workqueue;
+	_pthread_qos_override_end_direct;
+	_pthread_qos_override_start_direct;
 	_pthread_sigmask;
 	_pthread_single_np;
 	_pthread_spin_destroy;
@@ -266,7 +277,24 @@ FBSDprivate_1.0 {
 	_pthread_switch_delete_np;
 	_pthread_testcancel;
 	_pthread_timedjoin_np;
+	_pthread_workqueue_addthreads;
+	_pthread_workqueue_override_reset;
+	_pthread_workqueue_override_start_direct;
+	_pthread_workqueue_override_start_direct_check_owner;
+	_pthread_workqueue_init;
+	_pthread_workqueue_init_with_kevent;
+	_pthread_workqueue_init_with_workloop;
+	_pthread_workqueue_set_event_manager_priority;
+	_pthread_workqueue_should_narrow;
+	_pthread_workqueue_supported;
 	_pthread_yield;
+	__pthread_workqueue_setkill;
+	pthread_workqueue_addthreads_np;
+	pthread_workqueue_setdispatch_np;
+	pthread_workqueue_setdispatchoffset_np;
+	pthread_workqueue_setup;
+	qos_class_main;
+	qos_class_self;
 
 	/* Debugger needs these. */
 	_libthr_debug;

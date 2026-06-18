@@ -413,9 +413,9 @@ void	 audit_thread_free(struct thread *td);
 /*
  * A Macro to wrap the audit_sysclose() function.
  */
-#define	AUDIT_SYSCLOSE(td, fd)	do {					\
+#define	AUDIT_SYSCLOSE(td, fd, fp)	do {				\
 	if (AUDITING_TD(td))						\
-		audit_sysclose(td, fd);					\
+		audit_sysclose(td, fd, fp);				\
 } while (0)
 
 #else /* !AUDIT */
@@ -474,7 +474,7 @@ void	 audit_thread_free(struct thread *td);
 #define	AUDIT_SYSCALL_ENTER(code, td)	0
 #define	AUDIT_SYSCALL_EXIT(error, td)
 
-#define	AUDIT_SYSCLOSE(p, fd)
+#define	AUDIT_SYSCLOSE(p, fd, fp)
 
 #endif /* AUDIT */
 

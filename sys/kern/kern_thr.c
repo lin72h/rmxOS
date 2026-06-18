@@ -54,6 +54,7 @@
 #include <sys/sysproto.h>
 #include <sys/signalvar.h>
 #include <sys/sysctl.h>
+#include <sys/thrworkq.h>
 #include <sys/thr.h>
 #include <sys/ucontext.h>
 #include <sys/umtxvar.h>
@@ -345,6 +346,7 @@ kern_thr_exit(struct thread *td)
 	struct proc *p;
 
 	p = td->td_proc;
+	twq_thread_exit(td);
 
 	/*
 	 * Clear kernel ASTs in advance of selecting the last exiting
