@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- *
+ * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- *
+ * 
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- *
+ * 
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
+ * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -257,8 +257,8 @@ _OSWriteInt64(
 /* Host endianess to little endian byte swapping macros for constants. */
 
 #define OSSwapHostToLittleConstInt16(x) OSSwapConstInt16(x)
-#define OSSwapHostToLittleConstInt32(x) OSSwapConstInt32(x)
-#define OSSwapHostToLittleConstInt64(x) OSSwapConstInt64(x)
+#define OSSwapHostToLittleConstInt32(x) OSSwapConstInt32(x) 
+#define OSSwapHostToLittleConstInt64(x) OSSwapConstInt64(x) 
 
 /* Generic host endianess to little endian byte swapping functions. */
 
@@ -267,7 +267,7 @@ _OSWriteInt64(
 #define OSSwapHostToLittleInt64(x) OSSwapInt64(x)
 
 /* Big endian to host endianess byte swapping macros for constants. */
-
+    
 #define OSSwapBigToHostConstInt16(x) ((uint16_t)(x))
 #define OSSwapBigToHostConstInt32(x) ((uint32_t)(x))
 #define OSSwapBigToHostConstInt64(x) ((uint64_t)(x))
@@ -279,7 +279,7 @@ _OSWriteInt64(
 #define OSSwapBigToHostInt64(x) ((uint64_t)(x))
 
 /* Little endian to host endianess byte swapping macros for constants. */
-
+   
 #define OSSwapLittleToHostConstInt16(x) OSSwapConstInt16(x)
 #define OSSwapLittleToHostConstInt32(x) OSSwapConstInt32(x)
 #define OSSwapLittleToHostConstInt64(x) OSSwapConstInt64(x)
@@ -332,7 +332,7 @@ _OSWriteInt64(
 
 #define OSSwapHostToLittleConstInt16(x) ((uint16_t)(x))
 #define OSSwapHostToLittleConstInt32(x) ((uint32_t)(x))
-#define OSSwapHostToLittleConstInt64(x) ((uint64_t)(x))
+#define OSSwapHostToLittleConstInt64(x) ((uint64_t)(x)) 
 
 /* Generic host endianess to little endian byte swapping functions. */
 
@@ -369,3 +369,5 @@ _OSWriteInt64(
 #endif
 
 #endif /* ! _OS_OSBYTEORDER_H */
+
+

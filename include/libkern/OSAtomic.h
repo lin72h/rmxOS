@@ -2,14 +2,14 @@
  * Copyright (c) 2004-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- *
+ * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
  * compliance with the License. Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this
  * file.
- *
+ * 
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -17,7 +17,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
+ * 
  * @APPLE_LICENSE_HEADER_END@
  */
 
@@ -75,7 +75,7 @@
  * {@link //apple_ref/doc/header/OSAtomic.h OSAtomic.h (Kernel Framework)}
  *
  * @apiuid //apple_ref/doc/header/user_space_OSAtomic.h
- */
+ */ 
 __BEGIN_DECLS
 
 
@@ -87,7 +87,7 @@ __BEGIN_DECLS
     @discussion
 	This function adds the value given by <code>__theAmount</code> to the
 	value in the memory location referenced by <code>__theValue</code>,
-	storing the result back to that memory location atomically.
+ 	storing the result back to that memory location atomically.
     @result Returns the new value.
  */
 __OSX_AVAILABLE_STARTING(__MAC_10_4, __IPHONE_2_0)
@@ -178,7 +178,7 @@ int64_t	OSAtomicAdd64( int64_t __theAmount, volatile int64_t *__theValue );
 	This function adds the value given by <code>__theAmount</code> to the
 	value in the memory location referenced by <code>__theValue</code>,
 	storing the result back to that memory location atomically.
-
+ 
 	This function is equivalent to {@link OSAtomicAdd64}
 	except that it also introduces a barrier.
     @result Returns the new value.
@@ -242,11 +242,11 @@ int64_t	OSAtomicDecrement64Barrier( volatile int64_t *__theValue )
 
 
 /*! @group Boolean functions (AND, OR, XOR)
- *
+ * 
  * @discussion Functions in this group come in four variants for each operation:
  * with and without barriers, and functions that return the original value or
  * the result value of the operation.
- *
+ * 
  * The "Orig" versions return the original value, (before the operation); the non-Orig
  * versions return the value after the operation.  All are layered on top of
  * {@link OSAtomicCompareAndSwap32} and similar.
@@ -268,7 +268,7 @@ int32_t	OSAtomicOr32( uint32_t __theMask, volatile uint32_t *__theValue );
 	This function performs the bitwise OR of the value given by <code>__theMask</code>
 	with the value in the memory location referenced by <code>__theValue</code>,
 	storing the result back to that memory location atomically.
-
+ 
 	This function is equivalent to {@link OSAtomicOr32}
 	except that it also introduces a barrier.
     @result Returns the new value.
@@ -293,7 +293,7 @@ int32_t	OSAtomicOr32Orig( uint32_t __theMask, volatile uint32_t *__theValue );
 	This function performs the bitwise OR of the value given by <code>__theMask</code>
 	with the value in the memory location referenced by <code>__theValue</code>,
 	storing the result back to that memory location atomically.
-
+ 
 	This function is equivalent to {@link OSAtomicOr32Orig}
 	except that it also introduces a barrier.
     @result Returns the original value referenced by <code>__theValue</code>.
@@ -326,7 +326,7 @@ int32_t	OSAtomicAnd32( uint32_t __theMask, volatile uint32_t *__theValue );
     @result Returns the new value.
  */
 __OSX_AVAILABLE_STARTING(__MAC_10_4, __IPHONE_2_0)
-int32_t	OSAtomicAnd32Barrier( uint32_t __theMask, volatile uint32_t *__theValue );
+int32_t	OSAtomicAnd32Barrier( uint32_t __theMask, volatile uint32_t *__theValue ); 
 
 
 /*! @abstract Atomic bitwise AND of two 32-bit values returning original.
@@ -404,7 +404,7 @@ int32_t	OSAtomicXor32Orig( uint32_t __theMask, volatile uint32_t *__theValue );
  */
 __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_3_2)
 int32_t	OSAtomicXor32OrigBarrier( uint32_t __theMask, volatile uint32_t *__theValue );
-
+ 
 
 /*! @group Compare and swap
  * Functions in this group return true if the swap occured.  There are several versions,
@@ -504,7 +504,7 @@ bool	OSAtomicCompareAndSwapIntBarrier( int __oldValue, int __newValue, volatile 
 	match, this function stores the value from <code>__newValue</code> into
 	that memory location atomically.
 
-	This function is equivalent to {@link OSAtomicCompareAndSwap32} on 32-bit architectures,
+	This function is equivalent to {@link OSAtomicCompareAndSwap32} on 32-bit architectures, 
 	or {@link OSAtomicCompareAndSwap64} on 64-bit architectures.
     @result Returns TRUE on a match, FALSE otherwise.
  */
@@ -522,7 +522,7 @@ bool	OSAtomicCompareAndSwapLong( long __oldValue, long __newValue, volatile long
 	This function is equivalent to {@link OSAtomicCompareAndSwapLong}
 	except that it also introduces a barrier.
 
-	This function is equivalent to {@link OSAtomicCompareAndSwap32} on 32-bit architectures,
+	This function is equivalent to {@link OSAtomicCompareAndSwap32} on 32-bit architectures, 
 	or {@link OSAtomicCompareAndSwap64} on 64-bit architectures.
     @result Returns TRUE on a match, FALSE otherwise.
  */
@@ -615,7 +615,7 @@ bool    OSAtomicTestAndSetBarrier( uint32_t __n, volatile void *__theAddress );
 	For example, if <code>__theAddress</code> points to a 64-bit value,
 	to compare the value of the most significant bit, you would specify
 	<code>56</code> for <code>__n</code>.
-
+ 
     @result
 	Returns the original value of the bit being tested.
  */
@@ -627,15 +627,15 @@ bool    OSAtomicTestAndClear( uint32_t __n, volatile void *__theAddress );
     @discussion
 	This function tests a bit in the value referenced by <code>__theAddress</code>
 	and if it is not cleared, clears it.
-
+ 
 	The bit is chosen by the value of <code>__n</code> such that the
 	operation will be performed on bit <code>(0x80 >> (__n & 7))</code>
 	of byte <code>((char *)__theAddress + (n >> 3))</code>.
-
+ 
 	For example, if <code>__theAddress</code> points to a 64-bit value,
 	to compare the value of the most significant bit, you would specify
 	<code>56</code> for <code>__n</code>.
-
+ 
 	This function is equivalent to {@link OSAtomicTestAndSet}
 	except that it also introduces a barrier.
     @result
@@ -643,7 +643,7 @@ bool    OSAtomicTestAndClear( uint32_t __n, volatile void *__theAddress );
  */
 __OSX_AVAILABLE_STARTING(__MAC_10_4, __IPHONE_2_0)
 bool    OSAtomicTestAndClearBarrier( uint32_t __n, volatile void *__theAddress );
-
+ 
 
 /*! @group Spinlocks
  * These spinlocks use memory barriers as required to synchronize access to shared
@@ -668,7 +668,7 @@ typedef int32_t OSSpinLock;
 /*! @abstract Locks a spinlock if it would not block
     @result
 	Returns <code>false</code> if the lock was already held by another thread,
-	<code>true</code> if it took the lock successfully.
+	<code>true</code> if it took the lock successfully. 
  */
 __OSX_AVAILABLE_STARTING(__MAC_10_4, __IPHONE_2_0)
 bool    OSSpinLockTry( volatile OSSpinLock *__lock );
@@ -756,7 +756,7 @@ void  OSAtomicEnqueue( OSQueueHead *__list, void *__new, size_t __offset);
 	value.
     @result
 	Returns the most recently enqueued element, or <code>NULL</code> if the
-	list is empty.
+	list is empty.  
  */
 __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_4_0)
 void* OSAtomicDequeue( OSQueueHead *__list, size_t __offset);
@@ -831,7 +831,7 @@ void  OSAtomicFifoEnqueue( OSFifoQueueHead *__list, void *__new, size_t __offset
 	value.
     @result
 	Returns the oldest enqueued element, or <code>NULL</code> if the
-	list is empty.
+	list is empty.  
  */
 __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_NA)
 void* OSAtomicFifoDequeue( OSFifoQueueHead *__list, size_t __offset);
