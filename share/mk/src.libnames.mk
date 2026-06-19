@@ -824,7 +824,7 @@ LIBRDMACMDIR=	${_LIB_OBJTOP}/lib/ofed/librdmacm
 LIBOSMCOMPDIR=	${_LIB_OBJTOP}/lib/ofed/complib
 LIBOPENSMDIR=	${_LIB_OBJTOP}/lib/ofed/libopensm
 LIBOSMVENDORDIR=${_LIB_OBJTOP}/lib/ofed/libvendor
-LIBOSXSUPPORTDIR=	${_LIB_OBJTOP}/lib/libosxsupport
+LIBOSXSUPPORTDIR=	${_LIB_OBJTOP}/lib/libosxsupport_rmx
 
 LIBDIALOGDIR=	${_LIB_OBJTOP}/gnu/lib/libdialog
 LIBSSPDIR=	${_LIB_OBJTOP}/lib/libssp
