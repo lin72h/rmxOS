@@ -173,6 +173,7 @@ _LIBRARIES=	\
 		ipsec \
 		ipt \
 		jail \
+		jansson \
 		k5crypto \
 		kadm5 \
 		kadmin_common \
@@ -827,6 +828,7 @@ LIBOPENSMDIR=	${_LIB_OBJTOP}/lib/ofed/libopensm
 LIBOSMVENDORDIR=${_LIB_OBJTOP}/lib/ofed/libvendor
 LIBOSXSUPPORTDIR=	${_LIB_OBJTOP}/lib/libosxsupport_rmx
 LIBASLDIR=	${_LIB_OBJTOP}/lib/libasl
+LIBJANSSONDIR=	${_LIB_OBJTOP}/lib/libjansson
 
 LIBDIALOGDIR=	${_LIB_OBJTOP}/gnu/lib/libdialog
 LIBSSPDIR=	${_LIB_OBJTOP}/lib/libssp

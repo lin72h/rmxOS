@@ -68,6 +68,7 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	libipsec \
 	libiscsiutil \
 	libjail \
+	libjansson \
 	libkiconv \
 	libkldelf \
 	libkvm \
