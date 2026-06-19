@@ -12,24 +12,30 @@ MK_PIE= no
 
 MK_MAN= no
 
-BASE_INCLUDE=  -I. -I${.CURDIR} -I${.CURDIR}/init -I${.CURDIR}/../../include/apple -I${MACHINE_INCLUDES}
+BASE_INCLUDE=  -I. -I${.CURDIR} -I${.CURDIR}/init -I${.CURDIR}/../../include/apple
 BASE_INCLUDE+= -I${.CURDIR}/../../include -I${.CURDIR}/../../sys
 BASE_INCLUDE+= -I${.CURDIR}/../../lib/libnotify -I${.CURDIR}/../../lib/liblaunch
 BASE_INCLUDE+= -I${.CURDIR}/../../lib/libdispatch -I${.CURDIR}/../../lib/libasl
 BASE_INCLUDE+= -I${.CURDIR}/../../lib/libxpc -I${.CURDIR}/../../lib/libosxsupport
 DEFINES= -D__APPLE__ -fblocks -DLIBC_NO_LIBCRASHREPORTERCLIENT -DPRIVATE
 MIG_FLAGS= ${BASE_INCLUDE} 	${DEFINES}
+MIG?= sh ${.CURDIR}/../../usr.bin/migcom/mig.sh -migcom ${OBJTOP}/usr.bin/migcom/migcom
 #override default CFLAGS
 CFLAGS= ${MIG_FLAGS}  -D__MigTypeCheck -fcommon
 CFLAGS+= -I${.CURDIR}/../../contrib/openbsm
 CFLAGS+= -DHAVE_INTTYPES_H
+CFLAGS+= -include rmx_build_compat.h
+CFLAGS+= -Wno-error=macro-redefined
+CFLAGS+= -Wno-error=unused-but-set-variable
+CFLAGS+= -Wno-error=strict-prototypes
+CFLAGS+= -Wno-error=cast-qual
 
 DEBUG_FLAGS+= -g -O0
 
 OBJLIB= ${OBJTOP}/lib
 
 notify_ipc.h notify_ipcServer.c: ${.CURDIR}/../../lib/libnotify/notify_ipc.defs
-	mig ${MIG_FLAGS} ${.CURDIR}/../../lib/libnotify/notify_ipc.defs
+	${MIG} ${MIG_FLAGS} ${.CURDIR}/../../lib/libnotify/notify_ipc.defs
 
 notify_proc: notify_ipcServer.c
 
