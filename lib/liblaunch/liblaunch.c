@@ -1258,6 +1258,7 @@ launch_msg_internal_socket(launch_data_t d)
 	uuid_t uuid;
 	launch_data_t uuid_d = NULL;
 	size_t jobs_that_need_sessions = 0;
+	uuid_clear(uuid);
 	if (d && launch_data_get_type(d) == LAUNCH_DATA_DICTIONARY) {
 		launch_data_t v = launch_data_dict_lookup(d, LAUNCH_KEY_SUBMITJOB);
 

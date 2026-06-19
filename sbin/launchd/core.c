@@ -4824,7 +4824,11 @@ job_start_child(job_t j)
 		file2exec = j->prog ? j->prog : argv[0];
 	}
 
+#if defined(__FreeBSD__)
+	(void)execvpe(file2exec, (char *const *)argv, environ);
+#else
 	errno = psf(NULL, file2exec, NULL, &spattr, (char *const *)argv, environ);
+#endif
 	syslog(LOG_ERR, "job_start failed %s\n", strerror(errno));
 	sleep(20);
 	
@@ -11875,7 +11879,8 @@ jobmgr_init(bool sflag)
 	SLIST_INIT(&s_curious_jobs);
 	LIST_INIT(&s_needing_sessions);
 	syslog(LOG_ERR, "starting root_jobmgr");
-	os_assert((root_jobmgr = jobmgr_new(NULL, MACH_PORT_NULL, MACH_PORT_NULL, sflag, root_session_type, false, MACH_PORT_NULL)) != NULL);
+	os_assert((root_jobmgr = jobmgr_new(NULL, MACH_PORT_NULL, MACH_PORT_NULL,
+	    sflag, root_session_type, uflag, MACH_PORT_NULL)) != NULL);
 #if 0	
 	os_assert((_s_xpc_system_domain = jobmgr_new_xpc_singleton_domain(root_jobmgr, strdup("com.apple.xpc.system"))) != NULL);
 	_s_xpc_system_domain->req_asid = launchd_audit_session;

@@ -36,6 +36,7 @@
 #include <asl.h>
 #include <assert.h>
 #include <inttypes.h>
+#include <pthread.h>
 #include <CrashReporterClient.h>
 #include <TargetConditionals.h>
 #include "pathwatch.h"
@@ -1091,6 +1092,15 @@ service_mach_message(bool blocking)
 	}
 }
 
+#if defined(__FreeBSD__)
+static void *
+service_mach_message_thread(void *arg __unused)
+{
+	forever service_mach_message(true);
+	return NULL;
+}
+#endif
+
 static int32_t
 open_shared_memory(const char *name)
 {
@@ -1242,6 +1252,11 @@ main(int argc, const char *argv[])
 	dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
 		forever service_mach_message(true);
 	});
+#elif defined(__FreeBSD__)
+	pthread_t service_thread;
+	status = pthread_create(&service_thread, NULL, service_mach_message_thread, NULL);
+	assert(status == 0);
+	pthread_detach(service_thread);
 #else
 	global.mach_src = dispatch_source_create(DISPATCH_SOURCE_TYPE_MACH_RECV, global.server_port, 0, global.work_q);
 	assert(global.mach_src != NULL);
