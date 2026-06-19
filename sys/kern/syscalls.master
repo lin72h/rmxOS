@@ -3595,8 +3595,7 @@
 		    uint32_t rcv_name,
 		    uint32_t timeout,
 		    uint32_t notify,
-		    _Out_ void *rcv_msg,
-		    uint32_t scatter_list_size
+		    _In_ void *overwrite_args
 		);
 	}
 633	AUE_NULL	NOSTD {

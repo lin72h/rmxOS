@@ -2051,8 +2051,7 @@ struct mach_msg_overwrite_trap_args {
 	char rcv_name_l_[PADL_(uint32_t)]; uint32_t rcv_name; char rcv_name_r_[PADR_(uint32_t)];
 	char timeout_l_[PADL_(uint32_t)]; uint32_t timeout; char timeout_r_[PADR_(uint32_t)];
 	char notify_l_[PADL_(uint32_t)]; uint32_t notify; char notify_r_[PADR_(uint32_t)];
-	char rcv_msg_l_[PADL_(void *)]; void * rcv_msg; char rcv_msg_r_[PADR_(void *)];
-	char scatter_list_size_l_[PADL_(uint32_t)]; uint32_t scatter_list_size; char scatter_list_size_r_[PADR_(uint32_t)];
+	char overwrite_args_l_[PADL_(void *)]; void * overwrite_args; char overwrite_args_r_[PADR_(void *)];
 };
 struct semaphore_signal_trap_args {
 	char signal_name_l_[PADL_(uint32_t)]; uint32_t signal_name; char signal_name_r_[PADR_(uint32_t)];

@@ -30,6 +30,8 @@
 .endif
 
 SRCS+= clock_gettime.c gettimeofday.c __vdso_gettimeofday.c
+SRCS+= mach_msg_overwrite_trap.c
+NOASM+= mach_msg_overwrite_trap.o
 
 # Sources common to both syscall interfaces:
 SRCS+=	\
@@ -54,6 +56,7 @@ PSEUDO= \
 	clock_gettime \
 	getlogin \
 	gettimeofday \
+	mach_msg_overwrite_trap \
 	sched_getcpu
 
 INTERPOSED = \

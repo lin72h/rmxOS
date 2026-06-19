@@ -3752,9 +3752,8 @@ systrace_args(int sysnum, void *params, uint64_t *uarg, int *n_args)
 		uarg[a++] = p->rcv_name; /* uint32_t */
 		uarg[a++] = p->timeout; /* uint32_t */
 		uarg[a++] = p->notify; /* uint32_t */
-		uarg[a++] = (intptr_t)p->rcv_msg; /* void * */
-		uarg[a++] = p->scatter_list_size; /* uint32_t */
-		*n_args = 9;
+		uarg[a++] = (intptr_t)p->overwrite_args; /* void * */
+		*n_args = 8;
 		break;
 	}
 	/* semaphore_signal_trap */
@@ -10292,9 +10291,6 @@ systrace_entry_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 			break;
 		case 7:
 			p = "userland void *";
-			break;
-		case 8:
-			p = "uint32_t";
 			break;
 		default:
 			break;

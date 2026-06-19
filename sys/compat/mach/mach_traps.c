@@ -85,6 +85,11 @@ __FBSDID("$FreeBSD$");
 
 #pragma clang diagnostic ignored "-Wunused-parameter"
 
+struct mach_msg_overwrite_tail {
+	void *rcv_msg;
+	uint32_t scatter_list_size;
+};
+
 int
 sys_clock_sleep_trap(struct thread *td __unused, struct clock_sleep_trap_args *uap)
 {
@@ -101,12 +106,25 @@ sys_mach_timebase_info(struct thread *td __unused, struct mach_timebase_info_arg
 }
 
 int
-sys_mach_msg_overwrite_trap(struct thread *td __unused, struct mach_msg_overwrite_trap_args *uap)
+sys_mach_msg_overwrite_trap(struct thread *td __unused,
+    struct mach_msg_overwrite_trap_args *uap)
 {
+	struct mach_msg_overwrite_tail tail;
+	int error;
+
+	if (uap->overwrite_args != NULL) {
+		error = copyin(uap->overwrite_args, &tail, sizeof(tail));
+		if (error != 0)
+			return (error);
+	} else {
+		tail.rcv_msg = NULL;
+		tail.scatter_list_size = 0;
+	}
+
 	td->td_retval[0] = mach_msg_overwrite_trap(
 		uap->msg, uap->option, uap->send_size, uap->rcv_size,
-		uap->rcv_name, uap->timeout, uap->notify, uap->rcv_msg,
-		uap->scatter_list_size);
+		uap->rcv_name, uap->timeout, uap->notify, tail.rcv_msg,
+		tail.scatter_list_size);
 	return (0);
 }
 
@@ -116,7 +134,7 @@ sys_mach_msg_trap(struct thread *td __unused, struct mach_msg_trap_args *uap)
 	struct mach_msg_overwrite_trap_args uap0;
 
 	bcopy(uap, &uap0, sizeof(*uap));
-	uap0.rcv_msg = NULL;
+	uap0.overwrite_args = NULL;
 	return (sys_mach_msg_overwrite_trap(td, &uap0));
 }
 	
