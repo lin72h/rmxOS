@@ -3,6 +3,7 @@
 SUBDIR=	alias \
 	apply \
 	asa \
+	aslutil \
 	awk \
 	backlight \
 	banner \

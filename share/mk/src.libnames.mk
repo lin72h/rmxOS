@@ -111,6 +111,7 @@ _LIBRARIES=	\
 		9p \
 		alias \
 		archive \
+		asl \
 		asn1 \
 		avl \
 		BlocksRuntime \
@@ -825,6 +826,7 @@ LIBOSMCOMPDIR=	${_LIB_OBJTOP}/lib/ofed/complib
 LIBOPENSMDIR=	${_LIB_OBJTOP}/lib/ofed/libopensm
 LIBOSMVENDORDIR=${_LIB_OBJTOP}/lib/ofed/libvendor
 LIBOSXSUPPORTDIR=	${_LIB_OBJTOP}/lib/libosxsupport_rmx
+LIBASLDIR=	${_LIB_OBJTOP}/lib/libasl
 
 LIBDIALOGDIR=	${_LIB_OBJTOP}/gnu/lib/libdialog
 LIBSSPDIR=	${_LIB_OBJTOP}/lib/libssp
