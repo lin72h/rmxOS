@@ -26,7 +26,10 @@ FBSDprivate_1.0 {
 	__iopolicysys;
 	__proc_info;
 	mach_reply_port;
+	pid_for_task;
 	task_self_trap;
+	task_for_pid;
+	task_name_for_pid;
 	thread_switch;
 	thread_self_trap;
 };
