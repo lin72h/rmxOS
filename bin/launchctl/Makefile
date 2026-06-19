@@ -25,23 +25,8 @@ CFLAGS+= -I${NXPLATFORM_MACH_PREFIX}/include
 CFLAGS+= -I${NXPLATFORM_MACH_PREFIX}/include/apple
 .endif
 
-OBJLIB= ${OBJTOP}/lib
-LDADD+= -Wl,--start-group
-LDADD+= ${OBJLIB}/liblaunch/liblaunch.a
-LDADD+= ${OBJLIB}/libjansson/libjansson.a
-LDADD+= ${OBJLIB}/libexpat/libbsdxml.a
-LDADD+= ${OBJLIB}/libxpc/libxpc.a
-LDADD+= ${OBJLIB}/libdispatch/libdispatch.a
-LDADD+= ${OBJLIB}/libosxsupport_rmx/libosxsupport.a
-LDADD+= ${OBJLIB}/libmach/libmach.a
-LDADD+= ${OBJLIB}/libthr/libthr.a
-LDADD+= ${OBJLIB}/libsys/libsys.a
-LDADD+= ${OBJLIB}/libc/libc.a
-LDADD+= ${OBJLIB}/libblocksruntime/libBlocksRuntime.a
-LDADD+= ${OBJLIB}/libnv/libnv.a
-LDADD+= ${OBJLIB}/libsbuf/libsbuf.a
-LDADD+= ${OBJLIB}/libutil/libutil.a
-LDADD+= -Wl,--end-group
+LIBADD=	launch jansson bsdxml xpc dispatch osxsupport mach thr sys bsm \
+	BlocksRuntime nv sbuf util
 SRCS= launchctl.c plist_to_launch_data.c
 
 .include <bsd.prog.mk>

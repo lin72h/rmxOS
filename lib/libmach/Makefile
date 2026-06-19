@@ -28,6 +28,7 @@ CFLAGS+= -Wno-error=unused-but-set-variable
 CFLAGS+= -Wno-error=missing-prototypes
 CFLAGS+= -Wno-error=strict-prototypes
 DEBUG_FLAGS= -g -O0
+LIBADD=	thr sys
 MIG?= sh ${.CURDIR}/../../usr.bin/migcom/mig.sh -migcom ${OBJTOP}/usr.bin/migcom/migcom
 mach_port.h mach_portUser.c: ${DEFS}/mach_port.defs
 	${MIG} ${CFLAGS} -server /dev/null ${DEFS}/mach_port.defs

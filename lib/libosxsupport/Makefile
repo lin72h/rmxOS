@@ -13,6 +13,7 @@ BASE_INCLUDE+= -I${.CURDIR}/../libnotify
 DEFINES= -D__APPLE__ -DLIBC_NO_LIBCRASHREPORTERCLIENT -DPRIVATE
 MIG_FLAGS= ${BASE_INCLUDE} 	${DEFINES}
 CFLAGS+= ${MIG_FLAGS}  -DHAVE_INTTYPES_H -fblocks
+LIBADD=	sys
 
 #support
 SRCS+= assumes.c libproc.c getiopolicy_np.c fileport.c

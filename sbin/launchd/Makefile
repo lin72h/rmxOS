@@ -1,5 +1,4 @@
 PROG= launchd
-MK_PIE= no
 
 .PATH: .
 .PATH: ${.CURDIR}
@@ -44,7 +43,6 @@ CFLAGS+= -D__DARWIN_UUID_COMPARE
 
 DEBUG_FLAGS+= -g -O0
 
-LDFLAGS+= -static
 NO_WERROR=
 
 helper.h launchd_helperServer.h: ${.CURDIR}/helper.defs
@@ -72,25 +70,8 @@ SRCS+= internalUser.c
 SRCS+= launchd.c core.c kill2.c ktrace.c ipc.c log.c runtime.c
 SRCS+= init.c
 
-OBJLIB= ${OBJTOP}/lib
-LDADD+= -Wl,--start-group
-LDADD+= ${OBJLIB}/liblaunch/liblaunch.a
-LDADD+= ${OBJLIB}/libasl/libasl.a
-LDADD+= ${OBJLIB}/libnotify/libnotify.a
-LDADD+= ${OBJLIB}/libxpc/libxpc.a
-LDADD+= ${OBJLIB}/libdispatch/libdispatch.a
-LDADD+= ${OBJLIB}/libosxsupport_rmx/libosxsupport.a
-LDADD+= ${OBJLIB}/libmach/libmach.a
-LDADD+= ${OBJLIB}/libthr/libthr.a
-LDADD+= ${OBJLIB}/libsys/libsys.a
-LDADD+= ${OBJLIB}/libc/libc.a
-LDADD+= ${OBJLIB}/libbsm/libbsm.a
-LDADD+= ${OBJLIB}/libauditd/libprivateauditd.a
-LDADD+= ${OBJLIB}/libblocksruntime/libBlocksRuntime.a
-LDADD+= ${OBJLIB}/libnv/libnv.a
-LDADD+= ${OBJLIB}/libsbuf/libsbuf.a
-LDADD+= ${OBJLIB}/libutil/libutil.a
-LDADD+= -Wl,--end-group
+LIBADD=	launch asl notify xpc dispatch osxsupport mach thr sys bsm auditd \
+	BlocksRuntime nv sbuf util
 
 
 MAN=	launchd.conf.5 launchd.plist.5 launchd.8

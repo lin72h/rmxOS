@@ -215,6 +215,7 @@ _LIBRARIES=	\
 		proc \
 		procstat \
 		pthread \
+		thr \
 		radius \
 		regex \
 		roken \
@@ -362,6 +363,11 @@ _DP_cam=	sbuf
 _DP_kldelf=	elf
 _DP_kvm=	elf
 _DP_asl=	BlocksRuntime dispatch launch mach notify util
+_DP_dispatch=	BlocksRuntime mach thr sys
+_DP_launch=	dispatch mach osxsupport thr sys
+_DP_mach=	thr sys
+_DP_notify=	BlocksRuntime dispatch launch mach osxsupport thr
+_DP_osxsupport=	sys
 _DP_casper=	nv
 _DP_cap_dns=	nv
 _DP_cap_fileargs=	nv
@@ -910,6 +916,10 @@ LIBBSDXMLDIR=	${_LIB_OBJTOP}/lib/libexpat
 LIBFIDO2DIR=	${_LIB_OBJTOP}/lib/libfido2
 LIBKVMDIR=	${_LIB_OBJTOP}/lib/libkvm
 LIBPTHREADDIR=	${_LIB_OBJTOP}/lib/libthr
+LIBTHRDIR=	${_LIB_OBJTOP}/lib/libthr
+LIBTHR?=	${LIBTHRDIR}/libthr${PIE_SUFFIX}.a
+LDADD_thr?=	-L${LIBTHRDIR} -lthr
+DPADD_thr?=	${LIBTHR}
 LIBMDIR=	${_LIB_OBJTOP}/lib/msun
 LIBFORMWDIR=	${_LIB_OBJTOP}/lib/ncurses/form
 LIBMENUWDIR=	${_LIB_OBJTOP}/lib/ncurses/menu

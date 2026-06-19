@@ -16,6 +16,7 @@ BASE_INCLUDE+=	-I${SRCTOP}/lib/libdispatch
 DEFINES=	-D__APPLE__ -DLIBC_NO_LIBCRASHREPORTERCLIENT -DPRIVATE
 CFLAGS+=	${BASE_INCLUDE} ${DEFINES} -DHAVE_INTTYPES_H -fblocks
 CFLAGS+=	-Wno-error=missing-prototypes
+LIBADD=	sys
 
 # Keep lib/libosxsupport byte-identical to the donor tree. Gate the
 # search/cache/plugin modules here until their dependencies are brought up:

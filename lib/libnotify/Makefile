@@ -20,6 +20,7 @@ CFLAGS+= -Wno-error=strict-prototypes
 CFLAGS+= -Wno-error=deprecated-non-prototype
 CFLAGS+= -Wno-error=cast-qual
 CFLAGS+= -Wno-error=unused-but-set-variable
+LIBADD=	BlocksRuntime dispatch launch mach osxsupport thr
 MIG?= sh ${.CURDIR}/../../usr.bin/migcom/mig.sh -migcom ${OBJTOP}/usr.bin/migcom/migcom
 
 notify_ipc.h notify_ipcUser.c: notify_ipc.defs

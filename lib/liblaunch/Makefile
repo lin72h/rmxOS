@@ -16,6 +16,7 @@ DEFINES= -D__APPLE__ -fblocks -DLIBC_NO_LIBCRASHREPORTERCLIENT -DPRIVATE
 MIG_FLAGS= ${BASE_INCLUDE} 	${DEFINES}
 CFLAGS+= ${MIG_FLAGS} -D__MigTypeCheck -g -O0
 CFLAGS+= -I${.CURDIR}/../../contrib/openbsm
+LIBADD=	dispatch mach osxsupport thr sys
 MIG?= sh ${.CURDIR}/../../usr.bin/migcom/mig.sh -migcom ${OBJTOP}/usr.bin/migcom/migcom
 
 helper.h launchd_helperUser.c launchd_helperServer.c helperServer.h: helper.defs

@@ -45,3 +45,9 @@ pid_for_task(uint32_t t, int *pid)
 {
 	return (__sys_pid_for_task(t, pid));
 }
+
+int
+mach_timebase_info(struct mach_timebase_info *info)
+{
+	return (__sys_mach_timebase_info(info));
+}

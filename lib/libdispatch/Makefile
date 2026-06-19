@@ -30,6 +30,8 @@ CFLAGS+=	-Wno-error=void-pointer-to-int-cast
 CFLAGS+=	-Wno-error=unused-function
 CFLAGS+=	-Wno-error=unused-but-set-variable
 
+LIBADD=	BlocksRuntime mach thr sys
+
 MIGFLAGS=	-I. -I${.CURDIR}/../../include/apple
 MIGFLAGS+=	-I${.CURDIR}/os -I${.CURDIR}/private -I${.CURDIR}
 MIGFLAGS+=	-I${.CURDIR}/../../include
