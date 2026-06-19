@@ -176,6 +176,31 @@ launchd boot integration, service lifecycle correctness, or guest behavior.
    with `MK_TESTS=no`; `libthr` is verified via the `libthr.a` archive target.
    This does not claim a full world build or shared-library closure.
 
+19. Runtime workqueue gate
+
+   The 2026-06-19 daemon smoke requires `LIBDISPATCH_DISABLE_KWQ=1` for the
+   launchd/notifyd path. With the kernel workqueue path enabled, notifyd can
+   abort in `libdispatch/src/queue.c` when the global queue pending count is
+   decremented from zero. Fidelity: runtime gate, not full-fidelity dispatch
+   workqueue behavior. Owner: libdispatch/libthr workqueue adapter.
+
+20. `notify_register_dispatch` callback delivery
+
+   The same smoke validates notifyd through the `notify_register_check` /
+   `notify_check` path. `notify_register_dispatch` registration succeeds and
+   notifyd receives the post, but the client dispatch callback did not fire
+   reliably under the current workqueue/dispatch-source runtime. Fidelity:
+   notifyd register/post/check is runtime-validated; dispatch callback delivery
+   remains open.
+
+21. `notifyd` FreeBSD server receive path
+
+   `notifyd` currently services server Mach messages on FreeBSD with a detached
+   pthread running the blocking receive loop. This is a functional runtime path
+   for Mach IPC, but it bypasses the donor `DISPATCH_SOURCE_TYPE_MACH_RECV`
+   source because that source did not fire in the smoke. Fidelity: functional
+   server receive; dispatch MACH_RECV source servicing remains open.
+
 ## Open Follow-Up
 
 - Replace advisory QoS and libinfo/cache stubs with full-fidelity
@@ -187,3 +212,9 @@ launchd boot integration, service lifecycle correctness, or guest behavior.
 - Runtime-validate the imported daemons and tools in a guest after build
   closure: boot wiring, daemon startup, launchd handoff, notifyd service use,
   ASL logging, and XPC behavior.
+- Fix or retire the `LIBDISPATCH_DISABLE_KWQ=1` runtime gate by resolving the
+  libdispatch/libthr workqueue pending-accounting boundary.
+- Restore `notify_register_dispatch` callback delivery and prove it separately
+  from the check-token notifyd smoke.
+- Move `notifyd` server receive back to the donor dispatch MACH_RECV source
+  once that dispatch source path is reliable on FreeBSD.
