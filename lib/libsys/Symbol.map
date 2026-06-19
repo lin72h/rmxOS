@@ -23,6 +23,8 @@ FBSDprivate_1.0 {
 	host_self_trap;
 	mach_msg_overwrite_trap;
 	mach_msg_trap;
+	__iopolicysys;
+	__proc_info;
 	mach_reply_port;
 	task_self_trap;
 	thread_self_trap;
