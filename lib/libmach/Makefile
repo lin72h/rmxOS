@@ -21,23 +21,28 @@ SYSDIR=	${_dir}
 .endif
 
 CFLAGS+= -I${.CURDIR}/../../include -I. -I${A} -I${.CURDIR} -I./include
-CFLAGS+= -I${SYSDIR} -I${.CURDIR}/../../apsl/include -I${MACHINE_INCLUDES}
+CFLAGS+= -I${SYSDIR} -I${.CURDIR}/../../apsl/include
 CFLAGS+= -fPIC -DPRIVATE -D__MigTypeCheck=1 -DLIBSYSCALL_INTERFACE=1
+CFLAGS+= -Wno-error=deprecated-non-prototype
+CFLAGS+= -Wno-error=unused-but-set-variable
+CFLAGS+= -Wno-error=missing-prototypes
+CFLAGS+= -Wno-error=strict-prototypes
 DEBUG_FLAGS= -g -O0
+MIG?= sh ${.CURDIR}/../../usr.bin/migcom/mig.sh -migcom ${OBJTOP}/usr.bin/migcom/migcom
 mach_port.h mach_portUser.c: ${DEFS}/mach_port.defs
-	mig ${CFLAGS} -server /dev/null ${DEFS}/mach_port.defs
+	${MIG} ${CFLAGS} -server /dev/null ${DEFS}/mach_port.defs
 task.h taskUser.c: ${DEFS}/task.defs
-	mig ${CFLAGS} -server /dev/null ${DEFS}/task.defs
+	${MIG} ${CFLAGS} -server /dev/null ${DEFS}/task.defs
 host_priv.h host_privUser.c: ${DEFS}/host_priv.defs
-	mig ${CFLAGS} -server /dev/null ${DEFS}/host_priv.defs
+	${MIG} ${CFLAGS} -server /dev/null ${DEFS}/host_priv.defs
 mach_host.h mach_hostUser.c: ${DEFS}/mach_host.defs
-	mig ${CFLAGS} -server /dev/null ${DEFS}/mach_host.defs
+	${MIG} ${CFLAGS} -server /dev/null ${DEFS}/mach_host.defs
 vm_map.h vm_mapUser.c: ${DEFS}/vm_map.defs
-	mig ${CFLAGS} -server /dev/null ${DEFS}/vm_map.defs
+	${MIG} ${CFLAGS} -server /dev/null ${DEFS}/vm_map.defs
 mach_vm.h mach_vmUser.c: ${DEFS}/mach_vm.defs
-	mig ${CFLAGS} -server /dev/null ${DEFS}/mach_vm.defs
+	${MIG} ${CFLAGS} -server /dev/null ${DEFS}/mach_vm.defs
 clock.h clockUser.c: ${DEFS}/clock.defs
-	mig ${CFLAGS} -server /dev/null ${DEFS}/clock.defs
+	${MIG} ${CFLAGS} -server /dev/null ${DEFS}/clock.defs
 SRCS=					\
 	clockUser.c			\
 	mach_portUser.c		\

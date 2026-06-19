@@ -5,7 +5,7 @@ LIB=	launch
 .PATH: .
 .PATH: ../../sbin/launchd
 
-BASE_INCLUDE= -I${.CURDIR}/../../include/apple -I${MACHINE_INCLUDES}
+BASE_INCLUDE= -I${.CURDIR}/../../include/apple
 BASE_INCLUDE+= -I${.CURDIR} -I${.CURDIR}/../libxpc -I${.CURDIR}/../libdispatch
 BASE_INCLUDE+= -I${.CURDIR}/../libasl
 BASE_INCLUDE+= -I${.CURDIR}/../../sbin/launchd -I${.CURDIR}
@@ -16,12 +16,13 @@ DEFINES= -D__APPLE__ -fblocks -DLIBC_NO_LIBCRASHREPORTERCLIENT -DPRIVATE
 MIG_FLAGS= ${BASE_INCLUDE} 	${DEFINES}
 CFLAGS+= ${MIG_FLAGS} -D__MigTypeCheck -g -O0
 CFLAGS+= -I${.CURDIR}/../../contrib/openbsm
+MIG?= sh ${.CURDIR}/../../usr.bin/migcom/mig.sh -migcom ${OBJTOP}/usr.bin/migcom/migcom
 
 helper.h launchd_helperUser.c launchd_helperServer.c helperServer.h: helper.defs
-	mig ${MIG_FLAGS} -header helper.h -sheader helperServer.h ${.CURDIR}/helper.defs
+	${MIG} ${MIG_FLAGS} -header helper.h -sheader helperServer.h ${.CURDIR}/helper.defs
 
 job.h jobUser.c jobServer.h: job.defs
-	mig ${MIG_FLAGS} -sheader jobServer.h ${.CURDIR}/job.defs
+	${MIG} ${MIG_FLAGS} -sheader jobServer.h ${.CURDIR}/job.defs
 
 SRCS= 	jobUser.c \
 	launchd_helperUser.c \

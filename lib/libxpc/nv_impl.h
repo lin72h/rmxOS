@@ -86,6 +86,7 @@ typedef struct nvpair nvpair_t;
 
 int	*nvlist_descriptors(const nvlist_t *nvl, size_t *nitemsp);
 size_t	 nvlist_ndescriptors(const nvlist_t *nvl);
+int	 nvlist_type(const nvlist_t *nvl);
 
 nvpair_t *nvlist_first_nvpair(const nvlist_t *nvl);
 nvpair_t *nvlist_next_nvpair(const nvlist_t *nvl, const nvpair_t *nvp);

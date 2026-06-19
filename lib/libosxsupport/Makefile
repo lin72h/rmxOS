@@ -7,6 +7,9 @@ LIB=	osxsupport
 
 BASE_INCLUDE= -I${.CURDIR}/../../include/apple
 BASE_INCLUDE+= -I${.CURDIR}/../../include -I${.CURDIR}/../../sys -I${.CURDIR}
+BASE_INCLUDE+= -I${.CURDIR}/../libasl
+BASE_INCLUDE+= -I${.CURDIR}/../libdispatch
+BASE_INCLUDE+= -I${.CURDIR}/../libnotify
 DEFINES= -D__APPLE__ -DLIBC_NO_LIBCRASHREPORTERCLIENT -DPRIVATE
 MIG_FLAGS= ${BASE_INCLUDE} 	${DEFINES}
 CFLAGS+= ${MIG_FLAGS}  -DHAVE_INTTYPES_H -fblocks
