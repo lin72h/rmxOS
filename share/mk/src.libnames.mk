@@ -361,6 +361,7 @@ _DP_geom=	bsdxml sbuf
 _DP_cam=	sbuf
 _DP_kldelf=	elf
 _DP_kvm=	elf
+_DP_asl=	BlocksRuntime dispatch launch mach notify util
 _DP_casper=	nv
 _DP_cap_dns=	nv
 _DP_cap_fileargs=	nv
