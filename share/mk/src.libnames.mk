@@ -111,6 +111,7 @@ _LIBRARIES=	\
 		9p \
 		alias \
 		archive \
+		asl \
 		asn1 \
 		avl \
 		BlocksRuntime \
@@ -138,6 +139,7 @@ _LIBRARIES=	\
 		compiler_rt \
 		crypt \
 		crypto \
+		dispatch \
 		ctf \
 		cuse \
 		cxxrt \
@@ -171,6 +173,7 @@ _LIBRARIES=	\
 		ipsec \
 		ipt \
 		jail \
+		jansson \
 		k5crypto \
 		kadm5 \
 		kadmin_common \
@@ -184,8 +187,10 @@ _LIBRARIES=	\
 		krb5support \
 		kvm \
 		l \
+		launch \
 		lzma \
 		m \
+		mach \
 		magic \
 		md \
 		memstat \
@@ -194,10 +199,12 @@ _LIBRARIES=	\
 		ncursesw \
 		netgraph \
 		netmap \
+		notify \
 		ngatm \
 		nv \
 		nvpair \
 		opencsd \
+		osxsupport \
 		pam \
 		panel \
 		panelw \
@@ -244,6 +251,7 @@ _LIBRARIES=	\
 		vmmapi \
 		wind \
 		wrap \
+		xpc \
 		xo \
 		y \
 		ypclnt \
@@ -818,6 +826,9 @@ LIBRDMACMDIR=	${_LIB_OBJTOP}/lib/ofed/librdmacm
 LIBOSMCOMPDIR=	${_LIB_OBJTOP}/lib/ofed/complib
 LIBOPENSMDIR=	${_LIB_OBJTOP}/lib/ofed/libopensm
 LIBOSMVENDORDIR=${_LIB_OBJTOP}/lib/ofed/libvendor
+LIBOSXSUPPORTDIR=	${_LIB_OBJTOP}/lib/libosxsupport_rmx
+LIBASLDIR=	${_LIB_OBJTOP}/lib/libasl
+LIBJANSSONDIR=	${_LIB_OBJTOP}/lib/libjansson
 
 LIBDIALOGDIR=	${_LIB_OBJTOP}/gnu/lib/libdialog
 LIBSSPDIR=	${_LIB_OBJTOP}/lib/libssp

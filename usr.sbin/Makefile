@@ -2,6 +2,8 @@
 
 SUBDIR=	adduser \
 	arp \
+	asl \
+	aslmanager \
 	binmiscctl \
 	boottrace \
 	bsdconfig \
@@ -55,6 +57,7 @@ SUBDIR=	adduser \
 	nfsuserd \
 	nmtree \
 	nologin \
+	notifyd \
 	pciconf \
 	periodic \
 	pnfsdscopymr \

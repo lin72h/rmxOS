@@ -1061,7 +1061,7 @@ nvlist_recv(int sock)
 	size_t nfds, size, i;
 	int serrno, *fds;
 
-	if (buf_recv(sock, &nvlhdr, sizeof(nvlhdr)) == -1)
+	if (buf_recv(sock, &nvlhdr, sizeof(nvlhdr), 0) == -1)
 		return (NULL);
 
 	if (!nvlist_check_header(&nvlhdr))
@@ -1079,7 +1079,7 @@ nvlist_recv(int sock)
 	ret = NULL;
 	fds = NULL;
 
-	if (buf_recv(sock, buf + sizeof(nvlhdr), size - sizeof(nvlhdr)) == -1)
+	if (buf_recv(sock, buf + sizeof(nvlhdr), size - sizeof(nvlhdr), 0) == -1)
 		goto out;
 
 	if (nfds > 0) {

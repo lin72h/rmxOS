@@ -34,6 +34,7 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	lib9p \
 	libalias \
 	libarchive \
+	libasl \
 	libauditd \
 	libbegemot \
 	libblocksruntime \
@@ -51,6 +52,7 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	libdevdctl \
 	libdevinfo \
 	libdevstat \
+	libdispatch \
 	libdl \
 	libdwarf \
 	libedit \
@@ -66,20 +68,25 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	libipsec \
 	libiscsiutil \
 	libjail \
+	libjansson \
 	libkiconv \
 	libkldelf \
 	libkvm \
+	liblaunch \
 	liblua \
 	liblzma \
+	libmach \
 	libmemstat \
 	libmd \
 	libmt \
 	lib80211 \
 	libnetbsd \
 	libnetmap \
+	libnotify \
 	libnv \
 	libnvmf \
 	libopenbsd \
+	libosxsupport_rmx \
 	libpam \
 	libpathconv \
 	libpcap \
@@ -108,6 +115,7 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	libuvmem \
 	${_libvgl} \
 	libwrap \
+	libxpc \
 	libxo \
 	liby \
 	libyaml \
@@ -122,6 +130,7 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 SUBDIR_DEPEND_geom=	libufs
 SUBDIR_DEPEND_googletest= libregex
 SUBDIR_DEPEND_libarchive= libz libbz2 libexpat liblzma libmd libzstd
+SUBDIR_DEPEND_libasl= libdispatch liblaunch libmach libnotify libosxsupport_rmx libxpc
 SUBDIR_DEPEND_libauditdm= libbsm
 SUBDIR_DEPEND_libbsddialog= ncurses
 SUBDIR_DEPEND_libbsnmp= ${_libnetgraph}
@@ -133,6 +142,10 @@ SUBDIR_DEPEND_libcam= libsbuf
 SUBDIR_DEPEND_libcasper= libnv
 SUBDIR_DEPEND_libcrypt= libmd
 SUBDIR_DEPEND_libdevstat= libkvm
+SUBDIR_DEPEND_libdispatch= libblocksruntime libmach libosxsupport_rmx libthr
+SUBDIR_DEPEND_liblaunch= libdispatch libmach libosxsupport_rmx libxpc
+SUBDIR_DEPEND_libnotify= libdispatch liblaunch libmach libosxsupport_rmx
+SUBDIR_DEPEND_libxpc= libdispatch libmach libnv
 SUBDIR_DEPEND_libdpv= libfigpar ncurses libutil
 SUBDIR_DEPEND_libedit= ncurses
 SUBDIR_DEPEND_libgeom= libexpat libsbuf

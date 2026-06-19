@@ -1,4 +1,5 @@
 PROG= launchd
+MK_PIE= no
 
 .PATH: .
 .PATH: ${.CURDIR}
@@ -11,10 +12,35 @@ BASE_INCLUDE=  -I. -I${.CURDIR} -I${.CURDIR}/init -I${.CURDIR}/../../include/app
 BASE_INCLUDE+= -I${.CURDIR}/../../include -I${.CURDIR}/../../sys -I${MACHINE_INCLUDES}
 DEFINES= -D__APPLE__ -fblocks -DLIBC_NO_LIBCRASHREPORTERCLIENT -DPRIVATE
 MIG_FLAGS= ${BASE_INCLUDE} 	${DEFINES}
+MIG?= sh ${.CURDIR}/../../usr.bin/migcom/mig.sh -migcom ${OBJTOP}/usr.bin/migcom/migcom
 #override default CFLAGS
 CFLAGS= ${MIG_FLAGS}  -D__MigTypeCheck
 CFLAGS+= -I${.CURDIR}/../../contrib/openbsm -I${.CURDIR}/../../lib/liblaunch
+CFLAGS+= -I${.CURDIR}/../../lib/libxpc
+CFLAGS+= -I${.CURDIR}/../../lib/libdispatch
+CFLAGS+= -I${.CURDIR}/../../lib/libdispatch/private
+CFLAGS+= -I${.CURDIR}/../../lib/libosxsupport
+CFLAGS+= -I${.CURDIR}/../../lib/libasl
 CFLAGS+= -DHAVE_INTTYPES_H
+CFLAGS+= -include Availability.h
+CFLAGS+= -include mach/boolean.h
+CFLAGS+= -include rmx_build_compat.h
+CFLAGS+= -Wno-error=unused-but-set-variable
+CFLAGS+= -Wno-error=shift-negative-value
+CFLAGS+= -Wno-error=pointer-integer-compare
+CFLAGS+= -Wno-error=missing-prototypes
+CFLAGS+= -Wno-error=frame-address
+CFLAGS+= -Wno-error=incompatible-pointer-types
+CFLAGS+= -Wno-error=deprecated-non-prototype
+# Darwin kernel-event sockets are compile-time compatible here; socket failure
+# remains handled by launchd when the domain is not implemented.
+CFLAGS+= -DAF_SYSTEM=43 -DPF_SYSTEM=AF_SYSTEM
+# These NOTE_* values match the NextBSD donor event.h surface. They let this
+# build-only bringup compile without changing the canonical kernel header.
+CFLAGS+= -DNOTE_EXITSTATUS=0x04000000 -DNOTE_EXIT_DETAIL=0x02000000
+CFLAGS+= -DNOTE_EXIT_DECRYPTFAIL=0x00010000 -DNOTE_EXIT_MEMORY=0x00020000
+CFLAGS+= -DNOTE_ABSOLUTE=0x00000010 -DNOTE_SIGNAL=0x08000000
+CFLAGS+= -D__DARWIN_UUID_COMPARE
 
 DEBUG_FLAGS+= -g -O0
 
@@ -22,21 +48,21 @@ LDFLAGS+= -static
 NO_WERROR=
 
 helper.h launchd_helperServer.h: ${.CURDIR}/helper.defs
-	mig ${MIG_FLAGS} -user /dev/null -server /dev/null -header helper.h \
+	${MIG} ${MIG_FLAGS} -user /dev/null -server /dev/null -header helper.h \
 	-sheader launchd_helperServer.h ${.CURDIR}/helper.defs
 
 jobServer.h jobServer.c job.h: ${.CURDIR}/job.defs helper.h
-	mig ${MIG_FLAGS} -sheader jobServer.h ${.CURDIR}/job.defs
+	${MIG} ${MIG_FLAGS} -sheader jobServer.h ${.CURDIR}/job.defs
 job_reply.h job_replyUser.c job_replyServer.c job_replyServer.h: ${.CURDIR}/job_reply.defs
-	mig ${MIG_FLAGS} -header job_reply.h -sheader job_replyServer.h ${.CURDIR}/job_reply.defs
+	${MIG} ${MIG_FLAGS} -header job_reply.h -sheader job_replyServer.h ${.CURDIR}/job_reply.defs
 ${.CURDIR}/job_forward.h job_forwardUser.c job_forwardServer.h: ${.CURDIR}/job_forward.defs
-	mig ${MIG_FLAGS} -header job_forward.h -sheader job_forwardServer.h ${.CURDIR}/job_forward.defs
+	${MIG} ${MIG_FLAGS} -header job_forward.h -sheader job_forwardServer.h ${.CURDIR}/job_forward.defs
 notify.h notifyServer.c notifyServer.h: ${.CURDIR}/notify.defs
-	mig ${MIG_FLAGS} -header notify.h -sheader notifyServer.h ${.CURDIR}/notify.defs
+	${MIG} ${MIG_FLAGS} -header notify.h -sheader notifyServer.h ${.CURDIR}/notify.defs
 mach_excServer.h mach_excServer.c: ${.CURDIR}/mach_exc.defs
-	mig ${MIG_FLAGS} -sheader mach_excServer.h ${.CURDIR}/mach_exc.defs
+	${MIG} ${MIG_FLAGS} -sheader mach_excServer.h ${.CURDIR}/mach_exc.defs
 internal.h internalServer.h internalServer.c internalUser.c: ${.CURDIR}/internal.defs
-	mig ${MIG_FLAGS} -header internal.h -sheader internalServer.h ${.CURDIR}/internal.defs
+	${MIG} ${MIG_FLAGS} -header internal.h -sheader internalServer.h ${.CURDIR}/internal.defs
 
 
 
@@ -45,8 +71,26 @@ SRCS+= job_forwardUser.c  job_replyUser.c job_replyServer.c notifyServer.c
 SRCS+= internalUser.c
 SRCS+= launchd.c core.c kill2.c ktrace.c ipc.c log.c runtime.c
 SRCS+= init.c
-LIBADD+= auditd bsm util dispatch mach
-LIBADD+=BlocksRuntime launch osxsupport xpc nv sbuf pthread
+
+OBJLIB= ${OBJTOP}/lib
+LDADD+= -Wl,--start-group
+LDADD+= ${OBJLIB}/liblaunch/liblaunch.a
+LDADD+= ${OBJLIB}/libasl/libasl.a
+LDADD+= ${OBJLIB}/libnotify/libnotify.a
+LDADD+= ${OBJLIB}/libxpc/libxpc.a
+LDADD+= ${OBJLIB}/libdispatch/libdispatch.a
+LDADD+= ${OBJLIB}/libosxsupport_rmx/libosxsupport.a
+LDADD+= ${OBJLIB}/libmach/libmach.a
+LDADD+= ${OBJLIB}/libthr/libthr.a
+LDADD+= ${OBJLIB}/libsys/libsys.a
+LDADD+= ${OBJLIB}/libc/libc.a
+LDADD+= ${OBJLIB}/libbsm/libbsm.a
+LDADD+= ${OBJLIB}/libauditd/libprivateauditd.a
+LDADD+= ${OBJLIB}/libblocksruntime/libBlocksRuntime.a
+LDADD+= ${OBJLIB}/libnv/libnv.a
+LDADD+= ${OBJLIB}/libsbuf/libsbuf.a
+LDADD+= ${OBJLIB}/libutil/libutil.a
+LDADD+= -Wl,--end-group
 
 
 MAN=	launchd.conf.5 launchd.plist.5 launchd.8

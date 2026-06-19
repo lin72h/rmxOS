@@ -41,6 +41,7 @@ WARNS?=	2
 CFLAGS+=-I${LIBC_SRCTOP}/include -I${SRCTOP}/include
 CFLAGS+=-I${LIBC_SRCTOP}/${LIBC_ARCH}
 CFLAGS+=-I${LIBSYS_SRCTOP}/${LIBC_ARCH}
+CFLAGS+=-I${SRCTOP}/sys -I${LIBSYS_SRCTOP}
 .if ${MK_NLS} != "no"
 CFLAGS+=-DNLS
 .endif
@@ -187,6 +188,15 @@ libkern.${LIBC_ARCH}:: ${KMSRCS}
 
 HAS_TESTS=
 SUBDIR.${MK_TESTS}+= tests
+
+beforebuild: libc-arch-includes
+beforedepend: libc-arch-includes
+libc-arch-includes:
+	@mkdir -p ${.OBJDIR}
+	@${LN:Uln} -sfn ${SRCTOP}/sys/${MACHINE}/include ${.OBJDIR}/machine
+.if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "i386"
+	@${LN:Uln} -sfn ${SRCTOP}/sys/x86/include ${.OBJDIR}/x86
+.endif
 
 .include <bsd.lib.mk>
 
