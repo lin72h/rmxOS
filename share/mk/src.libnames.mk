@@ -512,6 +512,7 @@ _DP_be=		zfs spl nvpair zfsbootenv
 _DP_netmap=
 _DP_ifconfig=	m
 _DP_pfctl=	nv
+_DP_xpc=	BlocksRuntime dispatch launch mach bsm nv sbuf
 _DP_krb5ss=		edit
 _DP_iscsiutil=	md
 

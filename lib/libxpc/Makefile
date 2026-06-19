@@ -36,6 +36,8 @@ SRCS=	xpc_dictionary.c \
 	subr_nvlist.c \
 	subr_nvpair.c
 
+LIBADD=	BlocksRuntime dispatch launch mach bsm nv sbuf
+
 INCSDIR= ${INCLUDEDIR}/xpc
 INCS=	activity.h \
 	base.h \
