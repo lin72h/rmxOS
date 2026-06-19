@@ -177,15 +177,12 @@ struct _launch {
 	int	fd;
 };
 
-#if 0
 static launch_data_t launch_data_array_pop_first(launch_data_t where);
-#endif
 static int _fd(int fd);
 static void launch_client_init(void);
-#if 0
 static void launch_msg_getmsgs(launch_data_t m, void *context);
-#endif
 static launch_data_t launch_msg_internal(launch_data_t d);
+static launch_data_t launch_msg_internal_socket(launch_data_t d);
 static void launch_mach_checkin_service(launch_data_t obj, const char *key, void *context);
 
 void
@@ -466,8 +463,7 @@ launch_data_array_get_index(launch_data_t where, size_t ind)
 	}
 }
 
-#if 0
-launch_data_t
+static launch_data_t
 launch_data_array_pop_first(launch_data_t where)
 {
 	launch_data_t r = NULL;
@@ -479,7 +475,6 @@ launch_data_array_pop_first(launch_data_t where)
 	}
 	return r;
 }
-#endif
 
 size_t
 launch_data_array_get_count(launch_data_t where)
@@ -884,6 +879,9 @@ launch_msg_internal(launch_data_t d)
 	size_t nfds = 0;
 	kern_return_t kr;
 
+	if (bootstrap_port == MACH_PORT_NULL && getenv(LAUNCHD_SOCKET_ENV) != NULL)
+		return (launch_msg_internal_socket(d));
+
 	requestCnt = 1024 * 1024;
 	mig_allocate(&request, requestCnt);
 
@@ -1155,8 +1153,7 @@ launch_get_fd(void)
 	return globals->l->fd;
 }
 
-#if 0
-void
+static void
 launch_msg_getmsgs(launch_data_t m, void *context)
 {
 	launch_data_t async_resp, *sync_resp = context;
@@ -1169,7 +1166,6 @@ launch_msg_getmsgs(launch_data_t m, void *context)
 		*sync_resp = launch_data_copy(m);
 	}
 }
-#endif
 
 void
 launch_mach_checkin_service(launch_data_t obj, const char *key, void *context __attribute__((unused)))
@@ -1209,7 +1205,6 @@ launch_msg(launch_data_t d)
 
 extern kern_return_t vproc_mig_set_security_session(mach_port_t, uuid_t, mach_port_t);
 
-#if 0
 static inline bool
 uuid_data_is_null(launch_data_t d)
 {
@@ -1224,11 +1219,9 @@ uuid_data_is_null(launch_data_t d)
 
 	return result;
 }
-#endif
 
-#if 0
-launch_data_t
-launch_msg_internal(launch_data_t d)
+static launch_data_t
+launch_msg_internal_socket(launch_data_t d)
 {
 	launch_data_t resp = NULL;
 
@@ -1374,7 +1367,6 @@ out:
 
 	return resp;
 }
-#endif
 
 int
 launchd_msg_recv(launch_t lh, void (*cb)(launch_data_t, void *), void *context)
