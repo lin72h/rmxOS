@@ -21,3 +21,9 @@ __iopolicysys(int cmd, struct _iopol_param_t *param)
 {
 	return (__sys___iopolicysys(cmd, param));
 }
+
+int
+thread_switch(uint32_t thread_name, int option, uint32_t option_time)
+{
+	return (__sys_thread_switch(thread_name, option, option_time));
+}

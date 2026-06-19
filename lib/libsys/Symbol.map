@@ -27,5 +27,6 @@ FBSDprivate_1.0 {
 	__proc_info;
 	mach_reply_port;
 	task_self_trap;
+	thread_switch;
 	thread_self_trap;
 };
