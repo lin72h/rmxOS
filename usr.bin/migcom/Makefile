@@ -22,6 +22,7 @@
 # cmk1.1
 
 .include <src.opts.mk>
+TARGET?= ${MACHINE_CPUARCH}
 PROG= migcom
 SCRIPTS=mig.sh
 SRCS= ident.c error.c global.c header.c \
@@ -32,6 +33,9 @@ SRCS= ident.c error.c global.c header.c \
 CFLAGS+= -I${.CURDIR} -I${.CURDIR}/shims -I${.CURDIR}/../../include -Iinclude
 CFLAGS+= -I${.CURDIR}/../../sys 
 CFLAGS+= -DYY_NO_UNPUT
+CFLAGS+= -Wno-error=strict-prototypes
+CFLAGS+= -Wno-error=misleading-indentation
+CFLAGS+= -Wno-error=unused-but-set-variable
 
 .if ${TARGET} == "amd64" || ${TARGET} == "i386"
 include/machine: ${.CURDIR}/Makefile
