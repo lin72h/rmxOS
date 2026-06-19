@@ -244,12 +244,12 @@ FBSD_1.7 {
 		FreeBSD_nvpair_unpack_nvlist_array;
 		FreeBSD_nvpair_unpack_string;
 		FreeBSD_nvpair_unpack_string_array;
-
-	local:
 		buf_recv;
 		buf_send;
-		cred_recv;
-		cred_send;
 		fd_recv;
 		fd_send;
+
+	local:
+		cred_recv;
+		cred_send;
 };
