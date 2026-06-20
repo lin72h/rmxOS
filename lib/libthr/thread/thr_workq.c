@@ -278,17 +278,19 @@ static void
 twq_plan_ready_locked(struct twq_runtime *rt, int lane, uint16_t admitted,
     uint16_t *wake_needed_out, uint16_t *spawn_needed_out)
 {
-	uint32_t same_lane_idle, transfer_idle, transfer_wake;
+	uint32_t grant, pending, same_lane_idle, transfer_idle, transfer_wake;
 	uint32_t wake_needed, spawn_needed;
 
 	same_lane_idle = 0;
 	if (twq_lane_is_valid(lane))
 		same_lane_idle = rt->tr_bucket[lane].tbr_idle;
+	pending = rt->tr_bucket[lane].tbr_pending;
+	grant = MIN((uint32_t)admitted, pending);
 
 	wake_needed = 0;
-	if (rt->tr_bucket[lane].tbr_pending > admitted) {
+	if (pending > grant) {
 		wake_needed = MIN(same_lane_idle,
-		    rt->tr_bucket[lane].tbr_pending - admitted);
+		    pending - grant);
 	}
 
 	transfer_idle = rt->tr_idle_workers;
@@ -297,9 +299,9 @@ twq_plan_ready_locked(struct twq_runtime *rt, int lane, uint16_t admitted,
 	else
 		transfer_idle = 0;
 
-	transfer_wake = MIN(transfer_idle, (uint32_t)admitted);
+	transfer_wake = MIN(transfer_idle, grant);
 	wake_needed = MIN((uint32_t)UINT16_MAX, wake_needed + transfer_wake);
-	spawn_needed = (uint32_t)admitted - transfer_wake;
+	spawn_needed = grant - transfer_wake;
 
 	*wake_needed_out = (uint16_t)wake_needed;
 	*spawn_needed_out = (uint16_t)spawn_needed;
@@ -367,6 +369,28 @@ twq_qos_class_from_priority_token(uint32_t qos)
 	}
 }
 
+static uint32_t
+twq_priority_token_from_qos_class(uint32_t qos_class)
+{
+
+	switch (qos_class) {
+	case TWQ_QOS_CLASS_MAINTENANCE:
+		return (1U << TWQ_BUCKET_MAINTENANCE);
+	case TWQ_QOS_CLASS_BACKGROUND:
+		return (1U << TWQ_BUCKET_BACKGROUND);
+	case TWQ_QOS_CLASS_UTILITY:
+		return (1U << TWQ_BUCKET_UTILITY);
+	case TWQ_QOS_CLASS_USER_INITIATED:
+		return (1U << TWQ_BUCKET_USER_INITIATED);
+	case TWQ_QOS_CLASS_USER_INTERACTIVE:
+		return (1U << TWQ_BUCKET_USER_INTERACTIVE);
+	case TWQ_QOS_CLASS_DEFAULT:
+	case TWQ_QOS_CLASS_UNSPECIFIED:
+	default:
+		return (1U << TWQ_BUCKET_DEFAULT);
+	}
+}
+
 static int
 twq_bucket_from_priority(pthread_priority_t priority)
 {
@@ -414,7 +438,8 @@ static pthread_priority_t
 twq_make_priority(uint32_t qos_class, uint32_t relpri, uint32_t flags)
 {
 
-	return ((((pthread_priority_t)qos_class) << TWQ_PRIORITY_QOS_CLASS_SHIFT) |
+	return ((((pthread_priority_t)twq_priority_token_from_qos_class(qos_class))
+	    << TWQ_PRIORITY_QOS_CLASS_SHIFT) |
 	    ((pthread_priority_t)relpri & TWQ_PRIORITY_PRIORITY_MASK) |
 	    (pthread_priority_t)(flags & TWQ_PRIORITY_FLAGS_MASK));
 }
@@ -778,13 +803,6 @@ twq_pick_bucket_locked(struct twq_runtime *rt)
 	return (twq_pick_lane_locked(rt, true));
 }
 
-static int
-twq_pick_pending_bucket_locked(struct twq_runtime *rt)
-{
-
-	return (twq_pick_lane_locked(rt, false));
-}
-
 static void
 twq_invoke_callback(struct twq_runtime *rt, pthread_priority_t priority)
 {
@@ -897,7 +915,12 @@ twq_worker_main(void *arg)
 		    return_desired, 0, 0, 0);
 		handoff = false;
 		same_lane_handoff = false;
-		handoff_lane = twq_pick_pending_bucket_locked(rt);
+		/*
+		 * libdispatch accounts one callback per admitted worker.  A
+		 * pending request without a ready slot still belongs to the
+		 * reaper/spawn path, not direct handoff by this returning worker.
+		 */
+		handoff_lane = twq_pick_bucket_locked(rt);
 		if (handoff_lane >= 0) {
 			rt->tr_bucket[handoff_lane].tbr_pending--;
 			if (rt->tr_bucket[handoff_lane].tbr_ready != 0)
