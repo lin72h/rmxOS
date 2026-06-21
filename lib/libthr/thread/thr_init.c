@@ -87,6 +87,7 @@ struct pthread_attr _pthread_attr_default = {
 	.stackaddr_attr = NULL,
 	.stacksize_attr = THR_STACK_DEFAULT,
 	.guardsize_attr = 0,
+	.qos_attr_priority = 0,
 	.cpusetsize = 0,
 	.cpuset = NULL
 };

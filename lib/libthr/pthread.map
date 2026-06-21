@@ -20,6 +20,7 @@ FBSD_1.0 {
 	pthread_attr_getinheritsched;
 	pthread_attr_getschedparam;
 	pthread_attr_getschedpolicy;
+	pthread_attr_get_qos_class_np;
 	pthread_attr_getscope;
 	pthread_attr_getstack;
 	pthread_attr_getstackaddr;
@@ -31,6 +32,7 @@ FBSD_1.0 {
 	pthread_attr_setinheritsched;
 	pthread_attr_setschedparam;
 	pthread_attr_setschedpolicy;
+	pthread_attr_set_qos_class_np;
 	pthread_attr_setscope;
 	pthread_attr_setstack;
 	pthread_attr_setstackaddr;

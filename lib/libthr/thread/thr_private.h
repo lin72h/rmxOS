@@ -270,6 +270,7 @@ struct pthread_attr {
 	void	*stackaddr_attr;
 	size_t	stacksize_attr;
 	size_t	guardsize_attr;
+	uint64_t	qos_attr_priority;
 	cpuset_t	*cpuset;
 	size_t	cpusetsize;
 };

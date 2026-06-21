@@ -99,12 +99,34 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread_np.h>
+#include <pthread/qos_private.h>
 #include <sys/sysctl.h>
 #include "un-namespace.h"
 
 #include "thr_private.h"
 
 static size_t	_get_kern_cpuset_size(void);
+static bool	_qos_class_valid(qos_class_t, int);
+
+static bool
+_qos_class_valid(qos_class_t qos_class, int relative_priority)
+{
+
+	switch ((unsigned int)qos_class) {
+	case QOS_CLASS_USER_INTERACTIVE:
+	case QOS_CLASS_USER_INITIATED:
+	case QOS_CLASS_DEFAULT:
+	case QOS_CLASS_UTILITY:
+	case QOS_CLASS_BACKGROUND:
+	case QOS_CLASS_MAINTENANCE:
+	case QOS_CLASS_UNSPECIFIED:
+		break;
+	default:
+		return (false);
+	}
+	return (relative_priority >= QOS_MIN_RELATIVE_PRIORITY &&
+	    relative_priority <= 0);
+}
 
 __weak_reference(_thr_attr_destroy, _pthread_attr_destroy);
 __weak_reference(_thr_attr_destroy, pthread_attr_destroy);
@@ -315,6 +337,19 @@ _thr_attr_getstacksize(const pthread_attr_t * __restrict attr,
 	return (0);
 }
 
+int
+pthread_attr_get_qos_class_np(const pthread_attr_t *attr,
+    qos_class_t *qos_class, int *relative_priority)
+{
+
+	if (attr == NULL || *attr == NULL || qos_class == NULL)
+		return (EINVAL);
+
+	*qos_class = _pthread_qos_class_decode(
+	    (*attr)->qos_attr_priority, relative_priority, NULL);
+	return (0);
+}
+
 __weak_reference(_thr_attr_init, pthread_attr_init);
 __weak_reference(_thr_attr_init, _pthread_attr_init);
 
@@ -503,6 +538,20 @@ _thr_attr_setstacksize(pthread_attr_t *attr, size_t stacksize)
 		return (EINVAL);
 
 	(*attr)->stacksize_attr = stacksize;
+	return (0);
+}
+
+int
+pthread_attr_set_qos_class_np(pthread_attr_t *attr, qos_class_t qos_class,
+    int relative_priority)
+{
+
+	if (attr == NULL || *attr == NULL ||
+	    !_qos_class_valid(qos_class, relative_priority))
+		return (EINVAL);
+
+	(*attr)->qos_attr_priority = _pthread_qos_class_encode(qos_class,
+	    relative_priority, 0);
 	return (0);
 }
 

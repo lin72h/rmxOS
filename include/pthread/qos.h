@@ -27,6 +27,10 @@ __BEGIN_DECLS
 
 qos_class_t	qos_class_self(void);
 qos_class_t	qos_class_main(void);
+int		pthread_attr_get_qos_class_np(const pthread_attr_t *attr,
+		    qos_class_t *qos_class, int *relative_priority);
+int		pthread_attr_set_qos_class_np(pthread_attr_t *attr,
+		    qos_class_t qos_class, int relative_priority);
 int		pthread_set_qos_class_self_np(qos_class_t qos_class,
 		    int relative_priority);
 
