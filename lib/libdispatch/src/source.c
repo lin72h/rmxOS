@@ -2238,56 +2238,6 @@ _dispatch_mgr_wakeup(dispatch_queue_t dq DISPATCH_UNUSED)
 	return false;
 }
 
-static bool
-_dispatch_mgr_timer_timeout(struct timespec *timeout)
-{
-	static const uint64_t poll_cap = 10ull * NSEC_PER_MSEC;
-	uint64_t now, nsec, target = UINT64_MAX;
-	unsigned int qos;
-
-	for (qos = 0; qos < DISPATCH_TIMER_QOS_COUNT; qos++) {
-		uint64_t data = (uint64_t)_dispatch_kevent_timeout[qos].data;
-		if (data != 0 && data < target) {
-			target = data;
-		}
-	}
-	if (target == UINT64_MAX) {
-		return false;
-	}
-
-	/*
-	 * FreeBSD may not report the EVFILT_TIMER event that backs the manager
-	 * timeout source. Keep the manager waking from libdispatch's programmed
-	 * timer deadline so timer sources still run.
-	 */
-	now = _dispatch_get_nanoseconds();
-	nsec = target > now ? target - now : 0;
-	if (nsec > poll_cap) {
-		nsec = poll_cap;
-	}
-	timeout->tv_sec = (time_t)(nsec / NSEC_PER_SEC);
-	timeout->tv_nsec = (long)(nsec % NSEC_PER_SEC);
-	return true;
-}
-
-static void
-_dispatch_mgr_timer_timeout_fire(void)
-{
-	uint64_t now = _dispatch_get_nanoseconds();
-	unsigned int qos, mask = 0;
-
-	for (qos = 0; qos < DISPATCH_TIMER_QOS_COUNT; qos++) {
-		uint64_t data = (uint64_t)_dispatch_kevent_timeout[qos].data;
-		if (data != 0 && data <= now) {
-			mask |= 1u << qos;
-		}
-	}
-	if (mask) {
-		_dispatch_timer_expired = true;
-		_dispatch_timers_qos_mask |= mask;
-	}
-}
-
 DISPATCH_NOINLINE
 static void
 _dispatch_mgr_init(void)
@@ -2307,10 +2257,7 @@ static void
 _dispatch_mgr_invoke(void)
 {
 	static const struct timespec timeout_immediately = { 0, 0 };
-	struct timespec timer_timeout;
-	const struct timespec *timeout;
 	struct kevent64_s kev;
-	bool timer_wait;
 	bool poll;
 	int r;
 
@@ -2322,19 +2269,9 @@ _dispatch_mgr_invoke(void)
 			if (!poll) continue;
 		}
 		poll = poll || _dispatch_queue_class_probe(&_dispatch_mgr_q);
-		timer_wait = false;
-		timeout = poll ? &timeout_immediately : NULL;
-		if (!timeout && _dispatch_mgr_timer_timeout(&timer_timeout)) {
-			timer_wait = true;
-			timeout = &timeout_immediately;
-			if (timer_timeout.tv_sec == 0 && timer_timeout.tv_nsec == 0) {
-				_dispatch_mgr_timer_timeout_fire();
-				continue;
-			}
-		}
 		r = kevent64(_dispatch_kq, _dispatch_kevent_enable,
 				_dispatch_kevent_enable ? 1 : 0, &kev, 1, 0,
-				timeout);
+				poll ? &timeout_immediately : NULL);
 		_dispatch_kevent_enable = NULL;
 		if (slowpath(r == -1)) {
 			int err = errno;
@@ -2350,9 +2287,6 @@ _dispatch_mgr_invoke(void)
 			}
 		} else if (r) {
 			_dispatch_kevent_drain(&kev);
-		} else if (timer_wait) {
-			(void)nanosleep(&timer_timeout, NULL);
-			_dispatch_mgr_timer_timeout_fire();
 		}
 	}
 }
