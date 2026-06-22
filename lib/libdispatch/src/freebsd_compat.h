@@ -71,9 +71,11 @@ struct kevent64_s {
 	__kevp->ext[1] = (h);				\
 } while (0)
 
-int kevent64(int kq, const struct kevent64_s *changelist, int nchanges,
-    struct kevent64_s *eventlist, int nevents, unsigned int flags,
-    const struct timespec *timeout);
+int _dispatch_kevent64(int kq, const struct kevent64_s *changelist,
+    int nchanges, struct kevent64_s *eventlist, int nevents,
+    unsigned int flags, const struct timespec *timeout)
+    __attribute__((visibility("hidden")));
+#define kevent64 _dispatch_kevent64
 #endif
 
 mach_port_t pthread_mach_thread_np(uintptr_t);

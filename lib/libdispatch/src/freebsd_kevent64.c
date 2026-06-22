@@ -4,6 +4,9 @@
 
 #include "freebsd_compat.h"
 
+#undef kevent64
+#define DISPATCH_KEVENT64_STACK_MAX 8
+
 static void
 phase07_kevent64_to_kevent(const struct kevent64_s *src, struct kevent *dst)
 {
@@ -33,12 +36,14 @@ phase07_kevent_to_kevent64(const struct kevent *src, struct kevent64_s *dst)
 }
 
 int
-kevent64(int kq, const struct kevent64_s *changelist, int nchanges,
+_dispatch_kevent64(int kq, const struct kevent64_s *changelist, int nchanges,
 	struct kevent64_s *eventlist, int nevents, unsigned int flags,
 	const struct timespec *timeout)
 {
-	struct kevent *changes = NULL;
-	struct kevent *events = NULL;
+	struct kevent stack_changes[DISPATCH_KEVENT64_STACK_MAX];
+	struct kevent stack_events[DISPATCH_KEVENT64_STACK_MAX];
+	struct kevent *changes = NULL, *heap_changes = NULL;
+	struct kevent *events = NULL, *heap_events = NULL;
 	int ret;
 	int i;
 
@@ -60,7 +65,12 @@ kevent64(int kq, const struct kevent64_s *changelist, int nchanges,
 	}
 
 	if (nchanges > 0) {
-		changes = calloc((size_t)nchanges, sizeof(*changes));
+		if (nchanges <= DISPATCH_KEVENT64_STACK_MAX) {
+			changes = stack_changes;
+		} else {
+			heap_changes = calloc((size_t)nchanges, sizeof(*changes));
+			changes = heap_changes;
+		}
 		if (changes == NULL) {
 			return -1;
 		}
@@ -70,9 +80,14 @@ kevent64(int kq, const struct kevent64_s *changelist, int nchanges,
 	}
 
 	if (nevents > 0) {
-		events = calloc((size_t)nevents, sizeof(*events));
+		if (nevents <= DISPATCH_KEVENT64_STACK_MAX) {
+			events = stack_events;
+		} else {
+			heap_events = calloc((size_t)nevents, sizeof(*events));
+			events = heap_events;
+		}
 		if (events == NULL) {
-			free(changes);
+			free(heap_changes);
 			return -1;
 		}
 	}
@@ -84,7 +99,7 @@ kevent64(int kq, const struct kevent64_s *changelist, int nchanges,
 		}
 	}
 
-	free(events);
-	free(changes);
+	free(heap_events);
+	free(heap_changes);
 	return ret;
 }

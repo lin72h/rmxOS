@@ -42,6 +42,44 @@
 			DISPATCH_CRASH("POSIX semaphore API failure"); \
 		} \
 	} while (0)
+
+static int
+_dispatch_posix_sem_timedwait(sem_t *sem, dispatch_time_t timeout)
+{
+	struct timespec sleep_time;
+	int ret;
+
+	/*
+	 * dispatch_time_t deadlines are based on libdispatch's absolute clock,
+	 * while sem_timedwait() consumes a POSIX clock deadline. Poll with short
+	 * sleeps so the existing libdispatch timeout calculation remains the
+	 * single source of truth.
+	 */
+	for (;;) {
+		uint64_t nsec = _dispatch_timeout(timeout);
+		if (nsec == 0) {
+			errno = ETIMEDOUT;
+			return -1;
+		}
+
+		ret = sem_trywait(sem);
+		if (ret == 0) {
+			return 0;
+		}
+		if (errno != EAGAIN && errno != EINTR) {
+			return ret;
+		}
+
+		if (nsec > NSEC_PER_MSEC) {
+			nsec = NSEC_PER_MSEC;
+		}
+		sleep_time.tv_sec = (typeof(sleep_time.tv_sec))(nsec / NSEC_PER_SEC);
+		sleep_time.tv_nsec = (typeof(sleep_time.tv_nsec))(nsec % NSEC_PER_SEC);
+		while (nanosleep(&sleep_time, &sleep_time) == -1 && errno == EINTR) {
+			/* retry with the remaining interval */
+		}
+	}
+}
 #endif
 
 #if USE_WIN32_SEM
@@ -289,7 +327,6 @@ _dispatch_semaphore_wait_slow(dispatch_semaphore_t dsema,
 	mach_timespec_t _timeout;
 	kern_return_t kr;
 #elif USE_POSIX_SEM
-	struct timespec _timeout;
 	int ret;
 #elif USE_WIN32_SEM
 	uint64_t nsec;
@@ -341,12 +378,11 @@ again:
 			break;
 		}
 #elif USE_POSIX_SEM
-		do {
-			uint64_t nsec = _dispatch_timeout(timeout);
-			_timeout.tv_sec = (typeof(_timeout.tv_sec))(nsec / NSEC_PER_SEC);
-			_timeout.tv_nsec = (typeof(_timeout.tv_nsec))(nsec % NSEC_PER_SEC);
-			ret = slowpath(sem_timedwait(&dsema->dsema_sem, &_timeout));
-		} while (ret == -1 && errno == EINTR);
+		ret = slowpath(_dispatch_posix_sem_timedwait(&dsema->dsema_sem,
+				timeout));
+		if (ret == 0) {
+			break;
+		}
 
 		if (ret == -1 && errno != ETIMEDOUT) {
 			DISPATCH_SEMAPHORE_VERIFY_RET(ret);
@@ -513,7 +549,6 @@ _dispatch_group_wait_slow(dispatch_semaphore_t dsema, dispatch_time_t timeout)
 	mach_timespec_t _timeout;
 	kern_return_t kr;
 #elif USE_POSIX_SEM // KVV
-	struct timespec _timeout;
 	int ret;
 #elif USE_WIN32_SEM // KVV
 	uint64_t nsec;
@@ -566,12 +601,11 @@ again:
 			break;
 		}
 #elif USE_POSIX_SEM
-		do {
-			uint64_t nsec = _dispatch_timeout(timeout);
-			_timeout.tv_sec = (typeof(_timeout.tv_sec))(nsec / NSEC_PER_SEC);
-			_timeout.tv_nsec = (typeof(_timeout.tv_nsec))(nsec % NSEC_PER_SEC);
-			ret = slowpath(sem_timedwait(&dsema->dsema_sem, &_timeout));
-		} while (ret == -1 && errno == EINTR);
+		ret = slowpath(_dispatch_posix_sem_timedwait(&dsema->dsema_sem,
+				timeout));
+		if (ret == 0) {
+			break;
+		}
 
 		if (!(ret == -1 && errno == ETIMEDOUT)) {
 			DISPATCH_SEMAPHORE_VERIFY_RET(ret);
