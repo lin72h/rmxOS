@@ -12,7 +12,8 @@ NO_WERROR= yes
 CFLAGS+=	-I${.CURDIR}/../../include/apple -I${.CURDIR}/os -I${.CURDIR}/private
 CFLAGS+=	-I${.CURDIR} -I${.CURDIR}/../../include -I${.CURDIR}/../../sys
 CFLAGS+=	-I. -I${.CURDIR}/include -fblocks -fcommon
-CFLAGS+=	-D__APPLE__ -DDISPATCH_USE_DTRACE=0
+CFLAGS+=	-D__APPLE__ -DDISPATCH_USE_DTRACE=1
+CFLAGS+=	-DDISPATCH_USE_DTRACE_INTROSPECTION=0
 CFLAGS+=	-DDISPATCH_USE_SIMPLE_ASL=0 -DUSE_OBJC=0 -D__BLOCKS__=1
 CFLAGS+=	-DDISPATCH_DEBUG=1
 CFLAGS+=	-DOS_OBJECT_USE_OBJC=0
@@ -62,7 +63,8 @@ SRCS =  protocolUser.c \
 	transform.c \
 	voucher.c \
 	freebsd_kevent64.c \
-	resolver.c
+	resolver.c \
+	provider.d
 
 INCSDIR= ${INCLUDEDIR}/dispatch
 INCS=	base.h \
