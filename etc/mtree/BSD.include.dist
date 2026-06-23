@@ -4,6 +4,16 @@
 
 /set type=dir uname=root gname=wheel mode=0755 tags=package=clibs-dev
 .
+    apple
+        sys
+            _pthread
+            ..
+            _types
+            ..
+        ..
+        uuid
+        ..
+    ..
     arpa
     ..
     atf-c               tags=package=atf-dev
