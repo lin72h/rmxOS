@@ -306,6 +306,8 @@
         unionfs
         ..
     ..
+    gen
+    ..
     geom
         cache
         ..
@@ -344,6 +346,8 @@
     ..
     gssrpc              tags=package=kerberos-dev
     ..
+    i386
+    ..
     infiniband          tags=package=utilities-dev
         complib         tags=package=utilities-dev
         ..
@@ -368,11 +372,19 @@
     ..
     libipt              tags=package=libipt-dev
     ..
+    libkern
+    ..
     libmilter           tags=package=libmilter-dev
     ..
     libxo               tags=package=runtime-dev
     ..
     lzma                tags=package=xz-dev
+    ..
+    mach
+        device
+        ..
+        i386
+        ..
     ..
     machine
         pc
@@ -438,9 +450,13 @@
     ..
     openssl             tags=package=openssl-dev
     ..
+    os
+    ..
     pcap                tags=package=utilities-dev
     ..
     protocols
+    ..
+    pthread
     ..
     rdma                tags=package=utilities-dev
     ..
@@ -465,6 +481,8 @@
         ..
         mac_veriexec
         ..
+    ..
+    servers
     ..
     ssp
     ..
