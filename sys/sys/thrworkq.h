@@ -7,6 +7,7 @@
 #ifndef _SYS_THRWORKQ_H_
 #define _SYS_THRWORKQ_H_
 
+#include <sys/_types.h>
 #include <sys/_stdint.h>
 
 #define	TWQ_OP_INIT			0x001
