@@ -280,6 +280,8 @@
     ..
     devdctl             tags=package=utilities-dev
     ..
+    dispatch
+    ..
     edit                tags=package=runtime-dev
         readline        tags=package=runtime-dev
         ..
@@ -454,6 +456,8 @@
     ..
     pcap                tags=package=utilities-dev
     ..
+    private
+    ..
     protocols
     ..
     pthread
@@ -501,5 +505,7 @@
     vm
     ..
     xlocale
+    ..
+    xpc
     ..
 ..

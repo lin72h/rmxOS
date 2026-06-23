@@ -88,11 +88,22 @@ INCS+=	benchmark.h \
 	io_private.h \
 	layout_private.h \
 	mach_private.h \
-	private.h \
 	queue_private.h \
 	source_private.h \
 	voucher_activity_private.h \
 	voucher_private.h
+
+INCSGROUPS=	INCS DISPATCHPRIVATEINCS
+DISPATCHPRIVATEINCSDIR=	${INCLUDEDIR}/private
+DISPATCHPRIVATEINCS= \
+	${.CURDIR}/private/benchmark.h \
+	${.CURDIR}/private/data_private.h \
+	${.CURDIR}/private/io_private.h \
+	${.CURDIR}/private/layout_private.h \
+	${.CURDIR}/private/mach_private.h \
+	${.CURDIR}/private/private.h \
+	${.CURDIR}/private/queue_private.h \
+	${.CURDIR}/private/source_private.h
 
 CLEANFILES+= protocol.h protocolServer.c protocolServer.h protocolUser.c
 
