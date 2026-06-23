@@ -651,18 +651,33 @@ ipc_mqueue_pset_receive(
 {
 	ipc_port_t port;
 	ipc_pset_t pset;
+	boolean_t port_ref;
 
 	pset = (ipc_pset_t)thread->ith_object;
 	assert(io_otype(thread->ith_object) == IOT_PORT_SET);
 restart:
+	port_ref = FALSE;
 	TAILQ_FOREACH(port, &pset->ips_ports, ip_next) {
 		mtx_assert(&port->port_comm.rcd_io_lock_data, MA_NOTOWNED);
 		assert (port->ip_msgcount >= 0);
 		if (port->ip_msgcount != 0) {
 			if (ip_lock_try(port) == 0) {
+				/*
+				 * The pset lock proves list membership, but dropping
+				 * it lets a concurrent receive-right destruction remove
+				 * and free the port before the blocking lock succeeds.
+				 */
+				ip_reference(port);
+				port_ref = TRUE;
 				ips_unlock(pset);
 				ip_lock(port);
 				ips_lock(pset);
+				if (!ip_active(port) || port->ip_pset != pset ||
+				    port->ip_msgcount == 0) {
+					ip_unlock(port);
+					ip_release(port);
+					goto restart;
+				}
 			}
 			/* one way or another we have the lock */
 			break;
@@ -671,12 +686,16 @@ restart:
 	if (port != NULL && port->ip_msgcount == 0) {
 		mtx_assert(&port->port_comm.rcd_io_lock_data, MA_OWNED);
 		ip_unlock(port);
+		if (port_ref)
+			ip_release(port);
 		goto restart;
 	}
 	if (port != NULL) {
 		mtx_assert(&port->port_comm.rcd_io_lock_data, MA_OWNED);
 		ipc_mqueue_post_on_thread(port, option, max_size, thread);
 		ip_unlock(port);
+		if (port_ref)
+			ip_release(port);
 		thread->ith_object = (ipc_object_t)port;
 		return (THREAD_NOT_WAITING);
 	}
