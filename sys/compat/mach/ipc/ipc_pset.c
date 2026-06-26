@@ -164,6 +164,10 @@ void ipc_pset_add(
 	ipc_pset_t	pset,
 	ipc_port_t	port);
 
+static void ipc_pset_port_changed(
+	ipc_port_t	port,
+	mach_msg_return_t mr);
+
 /*
  *	Routine:	ipc_pset_alloc
  *	Purpose:
@@ -338,6 +342,7 @@ ipc_pset_move(
 		is_read_unlock(space);
 
 		ipc_pset_add(nset, port);
+		ipc_pset_port_changed(port, MACH_RCV_PORT_CHANGED);
 		if (port->ip_msgcount != 0)
 			knotify = TRUE;
 		ips_unlock(nset);
@@ -404,6 +409,19 @@ ipc_pset_changed(
 	ipc_thread_t th;
 
 	while ((th = thread_pool_get_act((ipc_object_t)pset, 0)) != ITH_NULL) {
+		th->ith_state = mr;
+		thread_go(th);
+	}
+}
+
+static void
+ipc_pset_port_changed(
+	ipc_port_t		port,
+	mach_msg_return_t	mr)
+{
+	ipc_thread_t th;
+
+	while ((th = thread_pool_get_act((ipc_object_t)port, 0)) != ITH_NULL) {
 		th->ith_state = mr;
 		thread_go(th);
 	}
