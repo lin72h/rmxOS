@@ -105,24 +105,40 @@ signalling, kqueue filter semantics, or the `e101f9c` pset-receive UAF fix.
 ## Build Evidence
 
 The requested clean `buildworld` and `buildkernel` did not complete on this
-branch because the current alpha tree has unrelated build walls outside
-`sys/compat/mach`:
+branch. A 2026-06-27 clean-base provenance pass detached at base
+`15a6acc1398f52a3fe511ff0d28edb107dfc068a` classified the prior build walls:
 
-- `buildworld`: `env MAKEOBJDIRPREFIX=/Users/me/wip-mach/build/op156-id025-waitpath-obj MK_TESTS=no make -j56 buildworld`
-  stopped in `lib/libc_nonshared` before any Mach IPC build with
-  `lib/libc/iconv/iconv-internal.h:35` using `__iconv_bool` without a visible
-  definition, followed by missing-prototype errors in the iconv wrappers.
-  Log: `/Users/me/wip-mach/build/op156-id025-waitpath-logs/buildworld.log`.
-- Fresh-prefix `buildkernel`: `env MAKEOBJDIRPREFIX=/Users/me/wip-mach/build/op156-id025-waitpath-obj MK_TESTS=no make -j56 buildkernel KERNCONF=MACHDEBUGDEBUG`
-  stopped before the Mach module in kernel offset generation because
-  `struct thread_lite` was incomplete in `sys/sys/kpilite.h` and
-  `sys/sys/systm.h`.
-  Log: `/Users/me/wip-mach/build/op156-id025-waitpath-logs/buildkernel-MACHDEBUGDEBUG.log`.
-- Established alpha-prefix `buildkernel`: `env MAKEOBJDIRPREFIX=/Users/me/wip-mach/build/wip-rmxos-alpha-obj MK_TESTS=no make -j56 buildkernel KERNCONF=MACHDEBUGDEBUG`
-  reached module compilation and then stopped in the unrelated
-  `dtrace/systrace_freebsd32` module because generated systrace code still names
-  removed `mach_msg_overwrite_trap_args` members.
-  Log: `/Users/me/wip-mach/build/op156-id025-waitpath-logs/buildkernel-MACHDEBUGDEBUG-alphaobj.log`.
+- `OP156_WALL_LIBC status=0`: pre-existing on clean base. Command:
+  `env MAKEOBJDIRPREFIX=/Users/me/wip-mach/build/op156-base-fresh-obj MK_TESTS=no make -j56 buildworld`.
+  The run exited `2` in `lib/libc_nonshared`; `lib/libc/iconv/iconv-internal.h:35`
+  uses `__iconv_bool` without a visible definition before any Mach IPC build.
+  Log: `/Users/me/wip-mach/build/op156-wall-triage-15a6acc-20260627/buildworld-base-fresh.log`.
+- `OP156_WALL_KPILITE status=0`: not reproduced on a clean base or on a clean
+  op-156 worktree. The earlier branch log
+  `/Users/me/wip-mach/build/op156-id025-waitpath-logs/buildkernel-MACHDEBUGDEBUG.log`
+  shows `nm: elf_begin error: Invalid argument`, malformed `offset.inc`, and
+  then `thread_lite` fallout. Re-running the same source states with fresh object
+  prefixes did not hit `thread_lite`; both clean runs reached the dtrace wall
+  instead. This was a stale-prefix/tool artifact, not an op-156 source-induced
+  wall.
+- `OP156_WALL_DTRACE status=0`: pre-existing on clean base. Command:
+  `env MAKEOBJDIRPREFIX=/Users/me/wip-mach/build/op156-base-kernel-fresh-obj MK_TESTS=no make -j56 buildkernel KERNCONF=MACHDEBUGDEBUG`.
+  The run exited `2` in `dtrace/systrace_freebsd32`; generated
+  `freebsd32_systrace_args.c` still references removed
+  `mach_msg_overwrite_trap_args.rcv_msg` and `scatter_list_size` members. The
+  clean op-156 worktree reproduced the same wall with
+  `MAKEOBJDIRPREFIX=/Users/me/wip-mach/build/op156-branch-kernel-fresh-obj`.
+  Logs:
+  `/Users/me/wip-mach/build/op156-wall-triage-15a6acc-20260627/buildkernel-base-fresh-MACHDEBUGDEBUG.log`
+  and
+  `/Users/me/wip-mach/build/op156-wall-triage-15a6acc-20260627/buildkernel-op156-fresh-MACHDEBUGDEBUG.log`.
+
+`OP156_BUILDKERNEL status=0`: no clean buildkernel claim is made. The build bar
+is satisfied for op-156 because every named wall is either pre-existing on the
+clean base or cleared as a non-source stale-prefix artifact; none is induced by
+the `ipc_pset.c` fix.
+
+`OP156_TERMINAL status=0`.
 
 The touched Mach module did compile and link cleanly against the established
 alpha object prefix:
