@@ -748,7 +748,9 @@ mach_port_t _dispatch_get_mach_host_port(void);
 #include <mach/mach_port.h>
 /* XXX need to work out header situation */
 #define VM_MAKE_TAG(x) 0
+#ifndef O_SYMLINK
 #define O_SYMLINK       0x200000        /* allow open of a symlink */
+#endif
 struct radvisory {
        off_t   ra_offset;
        int     ra_count;
