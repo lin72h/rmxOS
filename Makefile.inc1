@@ -3646,14 +3646,14 @@ lib/libproc__L: \
 # to WORLDTMP before the generic lib pass.  SUBDIR_DEPEND alone orders the
 # generic rebuild, but it does not install dependency libraries early enough
 # for a cold object prefix.
-_prebuild_libs+= lib/libblocksruntime lib/libmach lib/libosxsupport_rmx \
+_prebuild_libs+= lib/libbsm lib/libblocksruntime lib/libmach lib/libosxsupport_rmx \
 	lib/libdispatch lib/liblaunch lib/libnotify lib/libxpc lib/libasl
 lib/libmach__L:		lib/libthr__L lib/libsys__L
 lib/libosxsupport_rmx__L: lib/libsys__L
 lib/libdispatch__L:	lib/libblocksruntime__L lib/libmach__L lib/libthr__L lib/libsys__L
 lib/liblaunch__L:	lib/libdispatch__L lib/libmach__L lib/libosxsupport_rmx__L lib/libthr__L lib/libsys__L
 lib/libnotify__L:	lib/libblocksruntime__L lib/libdispatch__L lib/liblaunch__L lib/libmach__L lib/libosxsupport_rmx__L lib/libthr__L
-lib/libxpc__L:		lib/libblocksruntime__L lib/libdispatch__L lib/liblaunch__L lib/libmach__L lib/libnv__L lib/libsbuf__L
+lib/libxpc__L:		lib/libblocksruntime__L lib/libdispatch__L lib/liblaunch__L lib/libmach__L lib/libbsm__L lib/libnv__L lib/libsbuf__L
 lib/libasl__L:		lib/libblocksruntime__L lib/libdispatch__L lib/liblaunch__L lib/libmach__L lib/libnotify__L lib/libutil__L
 
 .for _lib in ${_prereq_libs}
