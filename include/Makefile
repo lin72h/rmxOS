@@ -72,10 +72,13 @@ LSUBDIRS=	dev/acpica dev/agp dev/ciss dev/filemon dev/firewire \
 	security/mac_lomac \
 	security/mac_mls security/mac_partition \
 	security/mac_veriexec \
+	sys/mach \
+	sys/mach_debug \
 	sys/disk \
 	ufs/ffs ufs/ufs
 
-LSUBSUBDIRS=	dev/mpt/mpilib
+LSUBSUBDIRS=	dev/mpt/mpilib \
+	sys/mach/device sys/mach/ipc
 
 .PATH: ${SRCTOP}/sys/dev/acpica
 ACPICA=		acpi_hpet.h \

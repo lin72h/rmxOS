@@ -493,6 +493,14 @@
     sys
         disk
         ..
+        mach
+            device
+            ..
+            ipc
+            ..
+        ..
+        mach_debug
+        ..
     ..
     teken
     ..
