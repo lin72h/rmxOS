@@ -242,6 +242,22 @@ TEKENDIR=	${INCLUDEDIR}/teken
 NVPAIR=		nvpair.h
 NVPAIRDIR=	${INCLUDEDIR}/sys
 
+.PATH: ${SRCTOP}/include/apple/sys
+APPLE_SYS_COMPAT=	_posix_availability.h \
+			_symbol_aliasing.h \
+			appleapiopts.h \
+			fileport.h \
+			kdebug.h \
+			kern_control.h \
+			kern_event.h \
+			kern_memorystatus.h \
+			proc_info.h \
+			process_policy.h \
+			spawn.h \
+			spawn_internal.h \
+			sys_domain.h
+APPLE_SYS_COMPATDIR=	${INCLUDEDIR}/sys
+
 .PATH: ${SRCTOP}/sys/dev/mlx5
 MLX5=		mlx5io.h
 MLX5DIR=	${INCLUDEDIR}/dev/mlx5
@@ -251,6 +267,7 @@ WG=		if_wg.h
 WGDIR=		${INCLUDEDIR}/dev/wg
 
 INCSGROUPS=	INCS \
+		APPLE_SYS_COMPAT \
 		ACPICA \
 		AGP \
 		BSM \
