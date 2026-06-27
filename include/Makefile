@@ -408,6 +408,11 @@ copies: .PHONY .META
 	${INSTALL} -C ${TAG_ARGS:D${TAG_ARGS},dev} -o ${BINOWN} -g ${BINGRP} -m 444 $i/*.h \
 	    ${SDESTDIR}${INCLUDEDIR}/$i
 .endfor
+.if exists(${SRCTOP}/sys/sys/mach/device)
+	cd ${SRCTOP}/sys/sys/mach/device; \
+	${INSTALL} -C ${TAG_ARGS:D${TAG_ARGS},dev} -o ${BINOWN} -g ${BINGRP} -m 444 *.h *.defs \
+	    ${SDESTDIR}${INCLUDEDIR}/device
+.endif
 	cd ${SRCTOP}/sys/${MACHINE}/include; \
 	${INSTALL} -C ${TAG_ARGS:D${TAG_ARGS},dev} -o ${BINOWN} -g ${BINGRP} -m 444 *.h \
 	    ${SDESTDIR}${INCLUDEDIR}/machine
@@ -466,6 +471,11 @@ symlinks: .PHONY .META
 	cd ${SRCTOP}; ${INSTALL_SYMLINK} ${TAG_ARGS:D${TAG_ARGS},dev} \
 	    $$(printf '../../../../../%s ' sys/$i/*.h) ${SDESTDIR}${INCLUDEDIR}/$i
 .endfor
+.if exists(${SRCTOP}/sys/sys/mach/device)
+	cd ${SRCTOP}; ${INSTALL_SYMLINK} ${TAG_ARGS:D${TAG_ARGS},dev} \
+	    $$(printf '../../../%s ' sys/sys/mach/device/*.h sys/sys/mach/device/*.defs) \
+	    ${SDESTDIR}${INCLUDEDIR}/device
+.endif
 .if ${MK_IPFILTER} != "no"
 	cd ${SRCTOP}; ${INSTALL_SYMLINK} ${TAG_ARGS:D${TAG_ARGS},dev} \
 	    $$(printf '../../../%s ' sys/netpfil/ipfilter/netinet/*.h) \
