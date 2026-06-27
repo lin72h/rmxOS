@@ -29,6 +29,8 @@
 /*
  * Internal prototypes for our back-end functions.
  */
+#include <iconv.h>
+
 size_t	__bsd___iconv(iconv_t, char **, size_t *, char **,
 		size_t *, __uint32_t, size_t *);
 void	__bsd___iconv_free_list(char **, size_t);
