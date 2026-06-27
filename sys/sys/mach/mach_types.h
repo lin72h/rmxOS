@@ -294,6 +294,8 @@ typedef thread_act_t            *thread_act_array_t;
 typedef void * kmod_args_t;
 typedef mach_port_t             exception_handler_t;
 typedef exception_handler_t     *exception_handler_array_t;
+typedef mach_port_t             exception_port_t;
+typedef exception_port_t        *exception_port_array_t;
 typedef int kmod_t;
 typedef int kmod_control_flavor_t;
 
