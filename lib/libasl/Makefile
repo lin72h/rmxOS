@@ -36,7 +36,12 @@ CFLAGS+= -Wno-error=unused-but-set-variable
 CFLAGS+= -Wno-error=pointer-compare
 CFLAGS+= -Wno-error=constant-conversion
 CFLAGS+= -Wno-error=incompatible-pointer-types-discards-qualifiers
-MIG?= sh ${.CURDIR}/../../usr.bin/migcom/mig.sh -migcom ${OBJTOP}/usr.bin/migcom/migcom
+.if defined(SYSROOT) && !empty(SYSROOT)
+MIGCOM?= ${SYSROOT}/usr/bin/migcom
+.else
+MIGCOM?= ${OBJTOP}/usr.bin/migcom/migcom
+.endif
+MIG?= sh ${.CURDIR}/../../usr.bin/migcom/mig.sh -migcom ${MIGCOM}
 
 SRCS=	asl.c asl_ipcUser.c asl_core.c asl_file.c asl_msg.c asl_object.c \
 	asl_string.c syslog.c asl_client.c asl_fd.c asl_legacy1.c \

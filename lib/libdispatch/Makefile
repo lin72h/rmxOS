@@ -38,7 +38,12 @@ MIGFLAGS+=	-I${.CURDIR}/os -I${.CURDIR}/private -I${.CURDIR}
 MIGFLAGS+=	-I${.CURDIR}/../../include
 MIGFLAGS+=	-I${.CURDIR}/../../sys -I${.CURDIR}/include
 MIGFLAGS+=	-D__APPLE__ -DPRIVATE -fblocks
-MIG?= sh ${.CURDIR}/../../usr.bin/migcom/mig.sh -migcom ${OBJTOP}/usr.bin/migcom/migcom
+.if defined(SYSROOT) && !empty(SYSROOT)
+MIGCOM?= ${SYSROOT}/usr/bin/migcom
+.else
+MIGCOM?= ${OBJTOP}/usr.bin/migcom/migcom
+.endif
+MIG?= sh ${.CURDIR}/../../usr.bin/migcom/mig.sh -migcom ${MIGCOM}
 
 protocolServer.c protocolUser.c protocol.h protocolServer.h: ${.CURDIR}/src/protocol.defs 
 	${MIG} ${MIGFLAGS}  -user protocolUser.c \

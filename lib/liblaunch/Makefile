@@ -17,7 +17,12 @@ MIG_FLAGS= ${BASE_INCLUDE} 	${DEFINES}
 CFLAGS+= ${MIG_FLAGS} -D__MigTypeCheck -g -O0
 CFLAGS+= -I${.CURDIR}/../../contrib/openbsm
 LIBADD=	dispatch mach osxsupport thr sys
-MIG?= sh ${.CURDIR}/../../usr.bin/migcom/mig.sh -migcom ${OBJTOP}/usr.bin/migcom/migcom
+.if defined(SYSROOT) && !empty(SYSROOT)
+MIGCOM?= ${SYSROOT}/usr/bin/migcom
+.else
+MIGCOM?= ${OBJTOP}/usr.bin/migcom/migcom
+.endif
+MIG?= sh ${.CURDIR}/../../usr.bin/migcom/mig.sh -migcom ${MIGCOM}
 
 helper.h launchd_helperUser.c launchd_helperServer.c helperServer.h: helper.defs
 	${MIG} ${MIG_FLAGS} -header helper.h -sheader helperServer.h ${.CURDIR}/helper.defs

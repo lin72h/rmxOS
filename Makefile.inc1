@@ -3094,6 +3094,7 @@ cross-tools: .MAKE .PHONY
     ${_llvm_objcopy} \
     ${_elftctools} \
     ${_dtrace_tools} \
+    usr.bin/migcom \
     ${_btxld} \
     ${_usb_tools}
 	${_+_}@${ECHODIR} "===> ${_tool} (obj,all,install)"; \

@@ -37,7 +37,12 @@ CFLAGS+= -Wno-error=tautological-pointer-compare
 CFLAGS+= -Wno-error=incompatible-pointer-types-discards-qualifiers
 CFLAGS+= -Wno-error=incompatible-pointer-types
 CFLAGS+= -Wno-error=uninitialized
-MIG?= sh ${.CURDIR}/../../usr.bin/migcom/mig.sh -migcom ${OBJTOP}/usr.bin/migcom/migcom
+.if defined(SYSROOT) && !empty(SYSROOT)
+MIGCOM?= ${SYSROOT}/usr/bin/migcom
+.else
+MIGCOM?= ${OBJTOP}/usr.bin/migcom/migcom
+.endif
+MIG?= sh ${.CURDIR}/../../usr.bin/migcom/mig.sh -migcom ${MIGCOM}
 
 asl_ipc.h asl_ipcServer.c: ${.CURDIR}/../../lib/libasl/asl_ipc.defs 
 	${MIG} ${MIG_FLAGS} -sheader asl_ipc.h ${.CURDIR}/../../lib/libasl/asl_ipc.defs

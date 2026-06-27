@@ -19,7 +19,12 @@ BASE_INCLUDE+= -I${.CURDIR}/../../lib/libdispatch -I${.CURDIR}/../../lib/libasl
 BASE_INCLUDE+= -I${.CURDIR}/../../lib/libxpc -I${.CURDIR}/../../lib/libosxsupport
 DEFINES= -D__APPLE__ -fblocks -DLIBC_NO_LIBCRASHREPORTERCLIENT -DPRIVATE
 MIG_FLAGS= ${BASE_INCLUDE} 	${DEFINES}
-MIG?= sh ${.CURDIR}/../../usr.bin/migcom/mig.sh -migcom ${OBJTOP}/usr.bin/migcom/migcom
+.if defined(SYSROOT) && !empty(SYSROOT)
+MIGCOM?= ${SYSROOT}/usr/bin/migcom
+.else
+MIGCOM?= ${OBJTOP}/usr.bin/migcom/migcom
+.endif
+MIG?= sh ${.CURDIR}/../../usr.bin/migcom/mig.sh -migcom ${MIGCOM}
 #override default CFLAGS
 CFLAGS= ${MIG_FLAGS}  -D__MigTypeCheck -fcommon
 CFLAGS+= -I${.CURDIR}/../../contrib/openbsm
