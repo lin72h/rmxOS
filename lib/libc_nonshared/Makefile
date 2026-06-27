@@ -18,7 +18,7 @@ SRCS=	__stub.c
 .if ${MK_ICONV} == "yes"
 .PATH: ${SRCTOP}/lib/libc/iconv
 .include "Makefile.iconv"
-CFLAGS+=-I${SRCTOP}/lib/libc/iconv
+CFLAGS+=-I${SRCTOP}/include -I${SRCTOP}/lib/libc/iconv
 .endif
 
 SRCS+=	${LIBC_NONSHARED_SRCS}
