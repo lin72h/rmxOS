@@ -808,8 +808,8 @@ TMAKE=		\
 XMAKE=		${BMAKE} \
 		TARGET=${TARGET} TARGET_ARCH=${TARGET_ARCH} \
 		MK_CLANG=${MK_CLANG_BOOTSTRAP} \
+		MK_LLVM_LINK_STATIC_LIBRARIES=yes \
 		MK_LLDB=no \
-		MK_LLVM_BINUTILS=no \
 		MK_TESTS=no
 
 # kernel-tools stage
@@ -1214,6 +1214,12 @@ _libraries:
 	@echo "--------------------------------------------------------------"
 	@echo ">>> stage 4.2: building libraries"
 	@echo "--------------------------------------------------------------"
+	@objcopy_version="$$(env PATH=${TMPPATH:Q} ${WORLDTMP}/usr/bin/objcopy --version 2>&1 | sed -n '1p')" && \
+	    strip_version="$$(env PATH=${TMPPATH:Q} ${WORLDTMP}/usr/bin/strip --version 2>&1 | sed -n '1p')" && \
+	    case "$${objcopy_version}" in *llvm-objcopy*|*LLVM*) ;; \
+	    *) echo "ERROR: ${WORLDTMP}/usr/bin/objcopy is not LLVM: $${objcopy_version}" >&2; exit 1 ;; esac && \
+	    case "$${strip_version}" in *llvm-strip*|*llvm-objcopy*|*LLVM*) ;; \
+	    *) echo "ERROR: ${WORLDTMP}/usr/bin/strip is not LLVM: $${strip_version}" >&2; exit 1 ;; esac
 	${_+_}cd ${.CURDIR}; \
 	    ${WMAKE} -DNO_FSCHG MK_HTML=no MK_MAN=no \
 	    MK_TESTS=no MK_TESTS_SUPPORT=${MK_TESTS_SUPPORT} \
@@ -3057,6 +3063,7 @@ _elftctools+=	usr.bin/addr2line
 
 .if ${MK_CLANG_BOOTSTRAP} != "no"
 _clang=		usr.bin/clang/clang
+_llvm_objcopy=	usr.bin/clang/llvm-objcopy
 .endif
 .if ${MK_LLD_BOOTSTRAP} != "no"
 _lld=		usr.bin/clang/lld
@@ -3079,6 +3086,7 @@ cross-tools: .MAKE .PHONY
     ${_clang_libs} \
     ${_clang} \
     ${_lld} \
+    ${_llvm_objcopy} \
     ${_elftctools} \
     ${_dtrace_tools} \
     ${_btxld} \
