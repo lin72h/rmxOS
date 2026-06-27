@@ -22,10 +22,11 @@ ioctl_includes=$(
 		set -o pipefail
 	fi
 
-	filter='tee'
+	exclude='^\./device/|^\./sys/mach/device/'
 	if [ "${MK_PF}" = "no" ]; then
-		filter='egrep -v (net/pfvar|net/if_pfsync)\.h'
+		exclude="${exclude}|net/pfvar\.h|net/if_pfsync\.h"
 	fi
+	filter="egrep -v ${exclude}"
 	# find -s would avoid the need to invoke sort but it is non-portable
 	find -L ./* -type f -name '*.h' | \
 		LC_ALL=C sort | \
