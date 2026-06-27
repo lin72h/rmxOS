@@ -730,6 +730,11 @@ CROSSENV+=	\
 		MACHINE_ARCH=${TARGET_ARCH} \
 		MACHINE=${TARGET} \
 		CPUTYPE=${TARGET_CPUTYPE}
+# Host include-path environment variables must not leak into target sysroot
+# compiles; they can otherwise make staged clang prefer /usr/local/include.
+CROSSENV+=	C_INCLUDE_PATH= CPATH= CPLUS_INCLUDE_PATH= \
+		OBJC_INCLUDE_PATH= OBJCPLUS_INCLUDE_PATH= \
+		XCC_C_INCLUDE_PATH= NCC_C_INCLUDE_PATH=
 .if ${MK_META_MODE} != "no"
 # Don't rebuild build-tools targets during normal build.
 CROSSENV+=	BUILD_TOOLS_META=.NOMETA
