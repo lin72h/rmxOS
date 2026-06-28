@@ -243,14 +243,21 @@ xpc_object_t
 xpc_dictionary_create_reply(xpc_object_t original)
 {
 	struct xpc_object *xo, *xo_orig;
-	nvlist_t *nv;
-	xpc_u val;
+	uint64_t id;
 
 	xo_orig = original;
-	if ((xo_orig->xo_flags & _XPC_FROM_WIRE) == 0)
+	if (xo_orig->xo_xpc_type != _XPC_TYPE_DICTIONARY ||
+	    (xo_orig->xo_flags & _XPC_FROM_WIRE) == 0)
 		return (NULL);
 
-	return xpc_dictionary_create(NULL, NULL, 0);
+	id = xpc_dictionary_get_uint64(original, XPC_SEQID);
+	if (id == 0)
+		return (NULL);
+
+	xo_orig->xo_flags &= ~_XPC_FROM_WIRE;
+	xo = xpc_dictionary_create(NULL, NULL, 0);
+	xpc_dictionary_set_uint64(xo, XPC_SEQID, id);
+	return (xo);
 }
 
 void

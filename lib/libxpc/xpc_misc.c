@@ -119,7 +119,9 @@ xpc_pack(struct xpc_object *xo, void *buf, size_t *size)
 		return (-1);
 	}
 
-	memcpy(buf, packed, *size);
+	if (buf != NULL)
+		memcpy(buf, packed, *size);
+	free(packed);
 	return (0);
 }
 
@@ -397,13 +399,18 @@ xpc_pipe_send(xpc_object_t xobj, mach_port_t dst, mach_port_t local,
 	xo = xobj;
 	assert(xo->xo_xpc_type == _XPC_TYPE_DICTIONARY);
 
-	if ((message = malloc(msg_size)) == NULL)
-		return (ENOMEM);
-
-	if (xpc_pack(xo, &message->data, &size) != 0)
+	if (xpc_pack(xo, NULL, &size) != 0)
 		return (EINVAL);
 
 	msg_size = _ALIGN(size + sizeof(mach_msg_header_t) + sizeof(size_t) + sizeof(uint64_t));
+	if ((message = malloc(msg_size)) == NULL)
+		return (ENOMEM);
+
+	if (xpc_pack(xo, &message->data, &size) != 0) {
+		free(message);
+		return (EINVAL);
+	}
+
 	message->header.msgh_size = msg_size;
 	message->header.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND,
 	    MACH_MSG_TYPE_MAKE_SEND);
@@ -457,6 +464,7 @@ xpc_pipe_receive(mach_port_t local, mach_port_t *remote, xpc_object_t *result,
 	data_size = message.size;
 	LOG("unpacking data_size=%d", data_size);
 	xo = xpc_unpack(&message.data, data_size);
+	xo->xo_flags |= _XPC_FROM_WIRE;
 
 	tr = (mach_msg_trailer_t *)(((char *)&message) + request->msgh_size);
 	auditp = &((mach_msg_audit_trailer_t *)tr)->msgh_audit;
@@ -511,6 +519,7 @@ xpc_pipe_try_receive(mach_port_t portset, xpc_object_t *requestobj, mach_port_t 
 	data_size = request->msgh_size;
 	LOG("unpacking data_size=%d", data_size);
 	xo = xpc_unpack(&message.data, data_size);
+	xo->xo_flags |= _XPC_FROM_WIRE;
 	/* is padding for alignment enforced in the kernel?*/
 	tr = (mach_msg_trailer_t *)(((char *)&message) + request->msgh_size);
 	auditp = &((mach_msg_audit_trailer_t *)tr)->msgh_audit;

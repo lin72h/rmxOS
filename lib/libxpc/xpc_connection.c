@@ -208,8 +208,10 @@ xpc_connection_send_message(xpc_connection_t xconn,
 	if (id == 0)
 		id = XPC_CONNECTION_NEXT_ID(conn);
 
+	xpc_retain(message);
 	dispatch_async(conn->xc_send_queue, ^{
 		xpc_send(conn, message, id);
+		xpc_release(message);
 	});
 }
 
@@ -227,8 +229,10 @@ xpc_connection_send_message_with_reply(xpc_connection_t xconn,
 	call->xp_queue = targetq;
 	TAILQ_INSERT_TAIL(&conn->xc_pending, call, xp_link);
 
+	xpc_retain(message);
 	dispatch_async(conn->xc_send_queue, ^{
 		xpc_send(conn, message, call->xp_id);
+		xpc_release(message);
 	});
 
 }
@@ -237,10 +241,12 @@ xpc_object_t
 xpc_connection_send_message_with_reply_sync(xpc_connection_t conn,
     xpc_object_t message)
 {
-	__block xpc_object_t result;
+	struct xpc_connection *xconn;
+	__block xpc_object_t result = NULL;
 	dispatch_semaphore_t sem = dispatch_semaphore_create(0);
 
-	xpc_connection_send_message_with_reply(conn, message, NULL,
+	xconn = conn;
+	xpc_connection_send_message_with_reply(conn, message, xconn->xc_recv_queue,
 	    ^(xpc_object_t o) {
 		result = o;
 		dispatch_semaphore_signal(sem);
@@ -448,7 +454,8 @@ xpc_connection_recv_message(void *context)
 
 		TAILQ_FOREACH(call, &conn->xc_pending, xp_link) {
 			if (call->xp_id == id) {
-				dispatch_async(conn->xc_target_queue, ^{
+				dispatch_async(call->xp_queue ? call->xp_queue :
+				    conn->xc_target_queue, ^{
 					call->xp_handler(result);
 					TAILQ_REMOVE(&conn->xc_pending, call,
 					    xp_link);
