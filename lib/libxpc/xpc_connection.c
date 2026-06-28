@@ -26,6 +26,8 @@
  */
 
 #include <errno.h>
+#include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <mach/mach.h>
 #include <servers/bootstrap.h>
@@ -61,6 +63,14 @@ xpc_connection_create(const char *name, dispatch_queue_t targetq)
 	conn->xc_last_id = 1;
 	TAILQ_INIT(&conn->xc_peers);
 	TAILQ_INIT(&conn->xc_pending);
+	if (name != NULL) {
+		conn->xc_name = strdup(name);
+		if (conn->xc_name == NULL) {
+			free(conn);
+			errno = ENOMEM;
+			return (NULL);
+		}
+	}
 
 	/* Create send queue */
 	asprintf(&qname, "com.ixsystems.xpc.connection.sendq.%p", conn);
@@ -141,7 +151,7 @@ xpc_connection_create_from_endpoint(xpc_endpoint_t endpoint)
 	kern_return_t kr;
 	struct xpc_connection *conn;
 
-	conn = xpc_connection_create("anonymous", NULL);
+	conn = xpc_connection_create(NULL, NULL);
 	if (conn == NULL)
 		return (NULL);
 
@@ -298,8 +308,10 @@ xpc_connection_cancel(xpc_connection_t connection)
 const char *
 xpc_connection_get_name(xpc_connection_t connection)
 {
+	struct xpc_connection *conn;
 
-	return ("unknown"); /* ??? */
+	conn = connection;
+	return (conn->xc_name);
 }
 
 uid_t

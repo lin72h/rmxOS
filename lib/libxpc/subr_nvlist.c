@@ -773,6 +773,8 @@ nvlist_xpack(const nvlist_t *nvl, void *ubuf, int64_t *fdidxp, size_t *sizep)
 		case NV_TYPE_UINT64:
 		case NV_TYPE_INT64:
 		case NV_TYPE_ENDPOINT:
+		case NV_TYPE_DATE:
+		case NV_TYPE_DOUBLE:
 			ptr = nvpair_pack_number(nvp, ptr, &left);
 			break;
 		case NV_TYPE_STRING:
@@ -956,6 +958,8 @@ nvlist_xunpack(const void *buf, size_t size, const int *fds, size_t nfds)
 		case NV_TYPE_UINT64:
 		case NV_TYPE_INT64:
 		case NV_TYPE_ENDPOINT:
+		case NV_TYPE_DATE:
+		case NV_TYPE_DOUBLE:
 			ptr = nvpair_unpack_number(isbe, nvp, ptr, &left);
 			break;
 		case NV_TYPE_STRING:

@@ -30,10 +30,13 @@
 #include <xpc/launchd.h>
 #include "xpc_internal.h"
 #include <assert.h>
+#include <math.h>
 
 #define NVLIST_XPC_TYPE		"__XPC_TYPE"
 
 static void xpc2nv_primitive(nvlist_t *nv, const char *key, xpc_object_t value);
+static void nvlist_add_xpc_double(nvlist_t *nv, const char *key, double value);
+static double nvlist_get_xpc_double(const nvlist_t *nv, const char *key);
 
 __private_extern__ void
 nv_release_entry(nvlist_t *nv, const char *key)
@@ -54,6 +57,7 @@ nv2xpc(const nvlist_t *nv)
 	const char *key;
 	int type;
 	xpc_u val;
+	size_t size;
 	const nvlist_t *nvtmp;
 
 	assert(nvlist_type(nv) == NV_TYPE_NVLIST_DICTIONARY ||
@@ -90,6 +94,10 @@ nv2xpc(const nvlist_t *nv)
 			xotmp = xpc_uint64_create(val.ui);
 			break;
 
+		case NV_TYPE_DOUBLE:
+			xotmp = xpc_double_create(nvlist_get_xpc_double(nv, key));
+			break;
+
 		case NV_TYPE_DESCRIPTOR:
 			val.fd = nvlist_get_descriptor(nv, key);
 			xotmp = _xpc_prim_create(_XPC_TYPE_FD, val, 0);
@@ -99,12 +107,16 @@ nv2xpc(const nvlist_t *nv)
 			break;
 
 		case NV_TYPE_BINARY:
+			val.ptr = (uintptr_t)nvlist_get_binary(nv, key,
+			    &size);
+			xotmp = _xpc_prim_create(_XPC_TYPE_DATA, val, size);
 			break;
 
 		case NV_TYPE_UUID:
 			memcpy(&val.uuid, nvlist_get_uuid(nv, key),
 			    sizeof(uuid_t));
 			xotmp = _xpc_prim_create(_XPC_TYPE_UUID, val, 0);
+			break;
 
 		case NV_TYPE_NVLIST_ARRAY:
 			nvtmp = nvlist_get_nvlist_array(nv, key);
@@ -190,8 +202,37 @@ xpc2nv_primitive(nvlist_t *nv, const char *key, xpc_object_t value)
 		break;
 
 	case _XPC_TYPE_DOUBLE:
+		nvlist_add_xpc_double(nv, key, xpc_double_get_value(xotmp));
 		break;
 	}	
+}
+
+static void
+nvlist_add_xpc_double(nvlist_t *nv, const char *key, double value)
+{
+	nvpair_t *nvp;
+	uint64_t bits;
+
+	memcpy(&bits, &value, sizeof(bits));
+	nvp = nvpair_create_number_type(key, bits, NV_TYPE_DOUBLE);
+	if (nvp != NULL)
+		nvlist_move_nvpair(nv, nvp);
+}
+
+static double
+nvlist_get_xpc_double(const nvlist_t *nv, const char *key)
+{
+	const nvpair_t *nvp;
+	uint64_t bits;
+	double value;
+
+	nvp = nvlist_get_nvpair(nv, key);
+	if (nvp == NULL || nvpair_type(nvp) != NV_TYPE_DOUBLE)
+		return (NAN);
+
+	bits = nvpair_get_number(nvp);
+	memcpy(&value, &bits, sizeof(value));
+	return (value);
 }
 
 nvlist_t *
@@ -395,6 +436,27 @@ xpc_dictionary_set_uint64(xpc_object_t xdict, const char *key, uint64_t value)
 }
 
 void
+xpc_dictionary_set_double(xpc_object_t xdict, const char *key, double value)
+{
+	struct xpc_object *xo, *xotmp;
+
+	xo = xdict;
+	xotmp = xpc_double_create(value);
+	xpc_dictionary_set_value(xdict, key, xotmp);
+}
+
+void
+xpc_dictionary_set_data(xpc_object_t xdict, const char *key,
+    const void *bytes, size_t length)
+{
+	struct xpc_object *xo, *xotmp;
+
+	xo = xdict;
+	xotmp = xpc_data_create(bytes, length);
+	xpc_dictionary_set_value(xdict, key, xotmp);
+}
+
+void
 xpc_dictionary_set_string(xpc_object_t xdict, const char *key, const char *value)
 {
 	struct xpc_object *xo, *xotmp;
@@ -429,6 +491,34 @@ xpc_dictionary_get_uint64(xpc_object_t xdict, const char *key)
 
 	xo = xpc_dictionary_get_value(xdict, key);
 	return (xpc_uint64_get_value(xo));
+}
+
+double
+xpc_dictionary_get_double(xpc_object_t xdict, const char *key)
+{
+	struct xpc_object *xo;
+
+	xo = xpc_dictionary_get_value(xdict, key);
+	if (xo == NULL || xo->xo_xpc_type != _XPC_TYPE_DOUBLE)
+		return (NAN);
+	return (xpc_double_get_value(xo));
+}
+
+const void *
+xpc_dictionary_get_data(xpc_object_t xdict, const char *key, size_t *length)
+{
+	struct xpc_object *xo;
+
+	xo = xpc_dictionary_get_value(xdict, key);
+	if (xo == NULL || xo->xo_xpc_type != _XPC_TYPE_DATA) {
+		if (length != NULL)
+			*length = 0;
+		return (NULL);
+	}
+
+	if (length != NULL)
+		*length = xpc_data_get_length(xo);
+	return (xpc_data_get_bytes_ptr(xo));
 }
 
 const char *

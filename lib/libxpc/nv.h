@@ -74,6 +74,7 @@ typedef struct nvlist nvlist_t;
 #define	NV_TYPE_NVLIST			13
 #define	NV_TYPE_NVLIST_ARRAY		14
 #define	NV_TYPE_NVLIST_DICTIONARY	15
+#define	NV_TYPE_DOUBLE			16
 
 
 /*

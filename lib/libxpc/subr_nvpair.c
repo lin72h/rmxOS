@@ -200,6 +200,8 @@ nvpair_clone(const nvpair_t *nvp)
 	case NV_TYPE_UINT64:
 	case NV_TYPE_INT64:
 	case NV_TYPE_ENDPOINT:
+	case NV_TYPE_DATE:
+	case NV_TYPE_DOUBLE:
 		newnvp = nvpair_create_number_type(name, nvpair_get_number(nvp), nvpair_type(nvp));
 		break;
 	case NV_TYPE_STRING:
@@ -314,7 +316,8 @@ nvpair_pack_number(const nvpair_t *nvp, unsigned char *ptr, size_t *leftp)
 	    nvp->nvp_type == NV_TYPE_UINT64 ||
 	    nvp->nvp_type == NV_TYPE_INT64 ||
 	    nvp->nvp_type == NV_TYPE_ENDPOINT ||
-	    nvp->nvp_type == NV_TYPE_DATE
+	    nvp->nvp_type == NV_TYPE_DATE ||
+	    nvp->nvp_type == NV_TYPE_DOUBLE
 	);
 
 	value = (uint64_t)nvp->nvp_data;
@@ -550,7 +553,8 @@ nvpair_unpack_number(bool isbe, nvpair_t *nvp, const unsigned char *ptr,
 	    nvp->nvp_type == NV_TYPE_UINT64 ||
 	    nvp->nvp_type == NV_TYPE_INT64 ||
 	    nvp->nvp_type == NV_TYPE_ENDPOINT ||
-	    nvp->nvp_type == NV_TYPE_DATE
+	    nvp->nvp_type == NV_TYPE_DATE ||
+	    nvp->nvp_type == NV_TYPE_DOUBLE
 	);
 
 	if (nvp->nvp_datasize != sizeof(uint64_t)) {
@@ -1001,7 +1005,8 @@ nvpair_createv_bool(bool value, const char *namefmt, va_list nameap)
 nvpair_t *
 nvpair_createv_number_type(uint64_t value, int type, const char *namefmt, va_list nameap)
 {
-	if (type > NV_TYPE_NUMBER_MAX || type < NV_TYPE_NUMBER_MIN)
+	if ((type > NV_TYPE_NUMBER_MAX || type < NV_TYPE_NUMBER_MIN) &&
+	    type != NV_TYPE_DATE && type != NV_TYPE_DOUBLE)
 		return (NULL);
 
 	return (nvpair_allocv(type, value, sizeof(value), namefmt,
@@ -1497,8 +1502,12 @@ nvpair_type_string(int type)
 		return ("INT64");
 	case NV_TYPE_ENDPOINT:
 		return ("ENDPOINT");
+	case NV_TYPE_DATE:
+		return ("DATE");
 	case NV_TYPE_UUID:
 		return ("UUID");
+	case NV_TYPE_DOUBLE:
+		return ("DOUBLE");
 	default:
 		return ("<UNKNOWN>");
 	}
