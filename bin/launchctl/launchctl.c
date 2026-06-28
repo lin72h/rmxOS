@@ -67,13 +67,17 @@ static void to_json_dict(const launch_data_t lval, const char *key, void *ctx);
 static json_t *to_json(launch_data_t ld);
 static json_t *launch_msg_json(json_t *msg);
 static int submit_job(launch_data_t job);
+static launch_data_t read_job_file(const char *filename, bool materialize_sockets);
 static int load_job(const char *filename);
+static int launchd_job_command(const char *command, const char *label);
+static int unload_job(const char *filename);
 static bool bootstrap_scan_has_plist_peer(struct dirent **files, int nfiles,
     const char *name);
 
 static int cmd_start_stop(int argc, char * const argv[]);
 static int cmd_bootstrap(int argc, char * const argv[]);
 static int cmd_load(int argc, char * const argv[]);
+static int cmd_unload(int argc, char * const argv[]);
 static int cmd_remove(int argc, char * const argv[]);
 static int cmd_list(int argc, char * const argv[]);
 static int cmd_dump(int argc, char * const argv[]);
@@ -90,6 +94,7 @@ static const struct {
 	{ "start",	cmd_start_stop,	"Start specified job" },
 	{ "stop",	cmd_start_stop,	"Stop specified job" },
 	{ "load",	cmd_load,	"Load a plist" },
+	{ "unload",	cmd_unload,	"Unload a plist" },
 	{ "remove",	cmd_remove, 	"Remove specified job" },
 	{ "bootstrap",	cmd_bootstrap,	"Bootstrap launchd" },
 	{ "list",	cmd_list,	"List jobs and information about jobs" },
@@ -531,13 +536,10 @@ launch_msg_json(json_t *input)
 }
 
 static int
-submit_job(launch_data_t job)
+launch_msg_errno_command(launch_data_t msg)
 {
-	launch_data_t msg, result;
+	launch_data_t result;
 	int ret;
-
-	msg = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
-	launch_data_dict_insert(msg, job, "SubmitJob");
 
 	result = launch_msg(msg);
 	launch_data_free(msg);
@@ -553,8 +555,43 @@ submit_job(launch_data_t job)
 	/*
 	 * launch_msg_internal() returns the MIG reply unpacked in-place from
 	 * out-of-line message memory. That storage is not malloc-owned, so
-	 * launch_data_free() can fault on the one-shot SubmitJob reply.
+	 * do not launch_data_free(result).
 	 */
+	return (ret);
+}
+
+static int
+submit_job(launch_data_t job)
+{
+	launch_data_t msg;
+	int ret;
+
+	msg = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
+	launch_data_dict_insert(msg, job, LAUNCH_KEY_SUBMITJOB);
+
+	ret = launch_msg_errno_command(msg);
+	return (ret);
+}
+
+static int
+launchd_job_command(const char *command, const char *label)
+{
+	launch_data_t msg, value;
+	int ret;
+
+	msg = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
+	value = launch_data_new_string(label);
+	if (msg == NULL || value == NULL) {
+		if (msg != NULL)
+			launch_data_free(msg);
+		if (value != NULL)
+			launch_data_free(value);
+		errno = ENOMEM;
+		return (-1);
+	}
+
+	launch_data_dict_insert(msg, value, command);
+	ret = launch_msg_errno_command(msg);
 	return (ret);
 }
 
@@ -727,8 +764,8 @@ system_specific_bootstrap(bool sflag)
 	system(PATH_BOOTSTRAP);
 }
 
-static int
-load_job(const char *filename)
+static launch_data_t
+read_job_file(const char *filename, bool materialize_sockets)
 {
 	FILE *input;
 	json_error_t error;
@@ -747,15 +784,16 @@ load_job(const char *filename)
 		if (job == NULL) {
 			warnx("%s", plist_error);
 			errno = EINVAL;
-			return (-1);
+			return (NULL);
 		}
-		materialize_job_sockets(job);
-		return (submit_job(job));
+		if (materialize_sockets)
+			materialize_job_sockets(job);
+		return (job);
 	}
 
 	input = strcmp(filename, "-") ? fopen(filename, "r") : stdin;
 	if (input == NULL)
-		return (-1);
+		return (NULL);
 
 	plist = json_loadf(input, JSON_DECODE_ANY, &error);
 	if (strcmp(filename, "-") != 0)
@@ -764,12 +802,54 @@ load_job(const char *filename)
 		warnx("%s:%d:%d: %s", filename, error.line, error.column,
 		    error.text);
 		errno = EINVAL;
-		return (-1);
+		return (NULL);
 	}
 
 	job = to_launchd(plist);
 	json_decref(plist);
+	return (job);
+}
+
+static int
+load_job(const char *filename)
+{
+	launch_data_t job;
+
+	job = read_job_file(filename, true);
+	if (job == NULL)
+		return (-1);
 	return (submit_job(job));
+}
+
+static int
+unload_job(const char *filename)
+{
+	launch_data_t job, label_value;
+	const char *label;
+	int ret;
+
+	job = read_job_file(filename, false);
+	if (job == NULL)
+		return (-1);
+
+	if (launch_data_get_type(job) != LAUNCH_DATA_DICTIONARY) {
+		warnx("%s: job is not a dictionary", filename);
+		errno = EINVAL;
+		return (-1);
+	}
+
+	label_value = launch_data_dict_lookup(job, LAUNCH_JOBKEY_LABEL);
+	if (label_value == NULL ||
+	    launch_data_get_type(label_value) != LAUNCH_DATA_STRING) {
+		warnx("%s: missing string Label", filename);
+		errno = EINVAL;
+		return (-1);
+	}
+
+	label = launch_data_get_string(label_value);
+	(void)launchd_job_command(LAUNCH_KEY_STOPJOB, label);
+	ret = launchd_job_command(LAUNCH_KEY_REMOVEJOB, label);
+	return (ret);
 }
 
 /*
@@ -869,6 +949,22 @@ cmd_load(int argc, char * const argv[])
 	for (i = 1; i < argc; i++) {
 		if (load_job(argv[i]) != 0)
 			err(EX_OSERR, "Cannot load job from %s", argv[i]);
+	}
+
+	return (0);
+}
+
+static int
+cmd_unload(int argc, char * const argv[])
+{
+	int i;
+
+	if (argc < 2)
+		errx(EX_USAGE, "Usage: launchctl unload <plist> [<plist> ...]");
+
+	for (i = 1; i < argc; i++) {
+		if (unload_job(argv[i]) != 0)
+			err(EX_OSERR, "Cannot unload job from %s", argv[i]);
 	}
 
 	return (0);
