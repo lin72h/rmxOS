@@ -123,8 +123,12 @@
 #define HAVE_PTHREAD_SET_NAME_NP 1
 #endif
 
-/* Define to 1 if you have the <mach/mach.h> header file. */
-#if __has_include(<mach/mach.h>)
+/*
+ * rmxOS installs Mach headers for the Darwin userland overlay.  Keep the base
+ * LLVM toolchain on FreeBSD's Mach-blind path so bootstrap tools do not acquire
+ * a libmach dependency before libmach is staged.
+ */
+#if __has_include(<mach/mach.h>) && !defined(__FreeBSD__)
 #define HAVE_MACH_MACH_H 1
 #endif
 
