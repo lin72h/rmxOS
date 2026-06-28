@@ -22,7 +22,7 @@ LIBADD=	sys
 # search/cache/plugin modules here until their dependencies are brought up:
 # si_module.c search_module.c si_data.c cache_module.c file_module.c.
 # The donor also carries mdns_module.c and si_getaddrinfo.c as unbuilt source.
-SRCS+=	assumes.c libproc.c getiopolicy_np.c fileport.c pthread_qos_shim.c
+SRCS+=	assumes.c libproc.c getiopolicy_np.c fileport.c
 SRCS+=	libinfo_cache_shim.c uuid_compare_shim.c
 SRCS+=	clear.c copy.c gen_uuid.c isnull.c unparse.c pack.c unpack.c
 
