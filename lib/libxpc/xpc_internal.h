@@ -80,7 +80,8 @@ typedef union {
 } xpc_u;	
 
 
-#define _XPC_FROM_WIRE 0x1
+#define _XPC_FROM_WIRE		0x1
+#define _XPC_GLOBAL_OBJECT_FLAG	0x2
 struct xpc_object {
 	uint8_t			xo_xpc_type;
 	uint16_t		xo_flags;
@@ -114,15 +115,20 @@ struct xpc_connection {
 	dispatch_queue_t	xc_send_queue;
 	dispatch_queue_t	xc_recv_queue;
 	dispatch_queue_t	xc_target_queue;
+	dispatch_source_t	xc_send_source;
+	dispatch_source_t	xc_proc_source;
 	int			xc_suspend_count;
 	int			xc_transaction_count;
 	int 			xc_flags;
+	volatile u_int		xc_cancelled;
+	volatile u_int		xc_interrupted;
 	volatile uint64_t	xc_last_id;
 	void *			xc_context;
 	struct xpc_connection * xc_parent;
 	uid_t			xc_remote_euid;
 	gid_t			xc_remote_guid;
 	pid_t			xc_remote_pid;
+	pid_t			xc_proc_pid;
 	au_asid_t		xc_remote_asid;
 	TAILQ_HEAD(, xpc_pending_call) xc_pending;
 	TAILQ_HEAD(, xpc_connection) xc_peers;

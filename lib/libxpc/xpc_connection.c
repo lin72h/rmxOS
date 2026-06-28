@@ -26,6 +26,7 @@
  */
 
 #include <errno.h>
+#include <unistd.h>
 #include <mach/mach.h>
 #include <servers/bootstrap.h>
 #include <xpc/xpc.h>
@@ -36,6 +37,12 @@
 #define XPC_CONNECTION_NEXT_ID(conn) (atomic_fetchadd_int(&conn->xc_last_id, 1))
 
 static void xpc_connection_recv_message();
+static void xpc_connection_remote_dead(void *context);
+static void xpc_connection_remote_proc_dead(void *context);
+static void xpc_connection_arm_proc_source(struct xpc_connection *conn);
+static void xpc_connection_interrupt(struct xpc_connection *conn);
+static void xpc_connection_invalidate(struct xpc_connection *conn,
+    xpc_object_t error);
 static void xpc_send(xpc_connection_t xconn, xpc_object_t message, uint64_t id);
 
 xpc_connection_t
@@ -192,6 +199,17 @@ xpc_connection_resume(xpc_connection_t xconn)
 		dispatch_resume(conn->xc_recv_source);
 	}
 
+	if (conn->xc_send_source == NULL && conn->xc_remote_port !=
+	    MACH_PORT_NULL) {
+		conn->xc_send_source = dispatch_source_create(
+		    DISPATCH_SOURCE_TYPE_MACH_SEND, conn->xc_remote_port,
+		    DISPATCH_MACH_SEND_DEAD, conn->xc_recv_queue);
+		dispatch_set_context(conn->xc_send_source, conn);
+		dispatch_source_set_event_handler_f(conn->xc_send_source,
+		    xpc_connection_remote_dead);
+		dispatch_resume(conn->xc_send_source);
+	}
+
 	dispatch_resume(conn->xc_recv_queue);
 }
 
@@ -225,7 +243,7 @@ xpc_connection_send_message_with_reply(xpc_connection_t xconn,
 	conn = xconn;
 	call = malloc(sizeof(struct xpc_pending_call));
 	call->xp_id = XPC_CONNECTION_NEXT_ID(conn);
-	call->xp_handler = handler;
+	call->xp_handler = (xpc_handler_t)Block_copy(handler);
 	call->xp_queue = targetq;
 	TAILQ_INSERT_TAIL(&conn->xc_pending, call, xp_link);
 
@@ -268,7 +286,13 @@ xpc_connection_send_barrier(xpc_connection_t xconn, dispatch_block_t barrier)
 void
 xpc_connection_cancel(xpc_connection_t connection)
 {
+	struct xpc_connection *conn;
 
+	conn = connection;
+	if (!atomic_cmpset_int(&conn->xc_cancelled, 0, 1))
+		return;
+
+	xpc_connection_invalidate(conn, XPC_ERROR_CONNECTION_INVALID);
 }
 
 const char *
@@ -376,8 +400,96 @@ xpc_send(xpc_connection_t xconn, xpc_object_t message, uint64_t id)
 	kr = xpc_pipe_send(message, conn->xc_remote_port,
 	    conn->xc_local_port, id);
 
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
 		debugf("send failed, kr=%d", kr);
+		xpc_connection_interrupt(conn);
+	}
+}
+
+static void
+xpc_connection_complete_pending(struct xpc_connection *conn, xpc_object_t error)
+{
+	struct xpc_pending_call *call;
+
+	while ((call = TAILQ_FIRST(&conn->xc_pending)) != NULL) {
+		TAILQ_REMOVE(&conn->xc_pending, call, xp_link);
+		xpc_retain(error);
+		dispatch_async(call->xp_queue ? call->xp_queue :
+		    conn->xc_target_queue, ^{
+			call->xp_handler(error);
+			xpc_release(error);
+			Block_release(call->xp_handler);
+			free(call);
+		});
+	}
+}
+
+static void
+xpc_connection_deliver_event(struct xpc_connection *conn, xpc_object_t error)
+{
+
+	if (conn->xc_handler == NULL)
+		return;
+
+	xpc_retain(error);
+	dispatch_async(conn->xc_target_queue, ^{
+		conn->xc_handler(error);
+		xpc_release(error);
+	});
+}
+
+static void
+xpc_connection_invalidate(struct xpc_connection *conn, xpc_object_t error)
+{
+
+	xpc_connection_complete_pending(conn, error);
+	xpc_connection_deliver_event(conn, error);
+}
+
+static void
+xpc_connection_interrupt(struct xpc_connection *conn)
+{
+
+	if (conn->xc_cancelled)
+		return;
+	if (!atomic_cmpset_int(&conn->xc_interrupted, 0, 1))
+		return;
+
+	xpc_connection_invalidate(conn, XPC_ERROR_CONNECTION_INTERRUPTED);
+}
+
+static void
+xpc_connection_remote_dead(void *context)
+{
+
+	xpc_connection_interrupt(context);
+}
+
+static void
+xpc_connection_remote_proc_dead(void *context)
+{
+
+	xpc_connection_interrupt(context);
+}
+
+static void
+xpc_connection_arm_proc_source(struct xpc_connection *conn)
+{
+
+	if (conn->xc_proc_source != NULL || conn->xc_remote_pid <= 0 ||
+	    conn->xc_remote_pid == getpid())
+		return;
+
+	conn->xc_proc_pid = conn->xc_remote_pid;
+	conn->xc_proc_source = dispatch_source_create(DISPATCH_SOURCE_TYPE_PROC,
+	    conn->xc_proc_pid, DISPATCH_PROC_EXIT, conn->xc_recv_queue);
+	if (conn->xc_proc_source == NULL)
+		return;
+
+	dispatch_set_context(conn->xc_proc_source, conn);
+	dispatch_source_set_event_handler_f(conn->xc_proc_source,
+	    xpc_connection_remote_proc_dead);
+	dispatch_resume(conn->xc_proc_source);
 }
 
 static void
@@ -398,6 +510,7 @@ xpc_connection_set_credentials(struct xpc_connection *conn, audit_token_t *tok)
 	conn->xc_remote_guid = gid;
 	conn->xc_remote_pid = pid;
 	conn->xc_remote_asid = asid;
+	xpc_connection_arm_proc_source(conn);
 }
 
 static void
@@ -454,11 +567,11 @@ xpc_connection_recv_message(void *context)
 
 		TAILQ_FOREACH(call, &conn->xc_pending, xp_link) {
 			if (call->xp_id == id) {
+				TAILQ_REMOVE(&conn->xc_pending, call, xp_link);
 				dispatch_async(call->xp_queue ? call->xp_queue :
 				    conn->xc_target_queue, ^{
 					call->xp_handler(result);
-					TAILQ_REMOVE(&conn->xc_pending, call,
-					    xp_link);
+					Block_release(call->xp_handler);
 					free(call);
 				});
 				return;

@@ -33,6 +33,16 @@
 struct _xpc_type_s {
 };
 
+struct _xpc_dictionary_s {
+	uint8_t			xo_xpc_type;
+	uint16_t		xo_flags;
+	volatile uint32_t	xo_refcnt;
+	size_t			xo_size;
+	xpc_u			xo_u;
+	audit_token_t *		xo_audit_token;
+	TAILQ_ENTRY(xpc_object) xo_link;
+};
+
 typedef const struct _xpc_type_s xt;
 xt _xpc_type_array;
 xt _xpc_type_bool;
@@ -50,6 +60,64 @@ xt _xpc_type_shmem;
 xt _xpc_type_string;
 xt _xpc_type_uuid;
 xt _xpc_type_double;
+
+const char *const _xpc_error_key_description = "XPCErrorDescription";
+
+static const struct xpc_object xpc_error_connection_interrupted_desc = {
+	.xo_xpc_type = _XPC_TYPE_STRING,
+	.xo_flags = _XPC_GLOBAL_OBJECT_FLAG,
+	.xo_refcnt = (uint32_t)-1,
+	.xo_size = sizeof("Connection interrupted") - 1,
+	.xo_u.str = "Connection interrupted",
+	.xo_audit_token = NULL,
+};
+
+static const struct xpc_object xpc_error_connection_invalid_desc = {
+	.xo_xpc_type = _XPC_TYPE_STRING,
+	.xo_flags = _XPC_GLOBAL_OBJECT_FLAG,
+	.xo_refcnt = (uint32_t)-1,
+	.xo_size = sizeof("Connection invalid") - 1,
+	.xo_u.str = "Connection invalid",
+	.xo_audit_token = NULL,
+};
+
+static struct xpc_dict_pair xpc_error_connection_interrupted_pair = {
+	.key = "XPCErrorDescription",
+	.value = __DECONST(struct xpc_object *,
+	    &xpc_error_connection_interrupted_desc),
+	.xo_link.tqe_next = NULL,
+	.xo_link.tqe_prev = NULL,
+};
+
+static struct xpc_dict_pair xpc_error_connection_invalid_pair = {
+	.key = "XPCErrorDescription",
+	.value = __DECONST(struct xpc_object *,
+	    &xpc_error_connection_invalid_desc),
+	.xo_link.tqe_next = NULL,
+	.xo_link.tqe_prev = NULL,
+};
+
+const struct _xpc_dictionary_s _xpc_error_connection_interrupted = {
+	.xo_xpc_type = _XPC_TYPE_ERROR,
+	.xo_flags = _XPC_GLOBAL_OBJECT_FLAG,
+	.xo_refcnt = (uint32_t)-1,
+	.xo_size = 1,
+	.xo_u.dict.tqh_first = &xpc_error_connection_interrupted_pair,
+	.xo_u.dict.tqh_last =
+	    &xpc_error_connection_interrupted_pair.xo_link.tqe_next,
+	.xo_audit_token = NULL,
+};
+
+const struct _xpc_dictionary_s _xpc_error_connection_invalid = {
+	.xo_xpc_type = _XPC_TYPE_ERROR,
+	.xo_flags = _XPC_GLOBAL_OBJECT_FLAG,
+	.xo_refcnt = (uint32_t)-1,
+	.xo_size = 1,
+	.xo_u.dict.tqh_first = &xpc_error_connection_invalid_pair,
+	.xo_u.dict.tqh_last =
+	    &xpc_error_connection_invalid_pair.xo_link.tqe_next,
+	.xo_audit_token = NULL,
+};
 
 
 struct _xpc_bool_s {
@@ -408,10 +476,8 @@ xpc_get_type(xpc_object_t obj)
 bool
 xpc_equal(xpc_object_t x1, xpc_object_t x2)
 {
-	struct xpc_object *xo1, *xo2;
 
-	xo1 = x1;
-	xo2 = x2;
+	return (x1 == x2);
 }
 
 static size_t

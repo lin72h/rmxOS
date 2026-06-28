@@ -154,6 +154,9 @@ xpc_retain(xpc_object_t obj)
 	struct xpc_object *xo;
 
 	xo = obj;
+	if (xo->xo_flags & _XPC_GLOBAL_OBJECT_FLAG)
+		return (obj);
+
 	atomic_add_int(&xo->xo_refcnt, 1);
 	return (obj);
 }
@@ -164,6 +167,9 @@ xpc_release(xpc_object_t obj)
 	struct xpc_object *xo;
 
 	xo = obj;
+	if (xo->xo_flags & _XPC_GLOBAL_OBJECT_FLAG)
+		return;
+
 	if (atomic_fetchadd_int(&xo->xo_refcnt, -1) > 1)
 		return;
 
