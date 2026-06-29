@@ -27,7 +27,7 @@ SRCS+= ipc_object.c ipc_port.c ipc_pset.c ipc_right.c ipc_space.c ipc_table.c ip
 SRCS+= mach_debug.c mach_msg.c mach_port.c
 # compat/mach/kern
 SRCS+= ipc_tt.c ipc_host.c task.c thread_pool.c
-CFLAGS+= -I${SYSDIR}/sys -I${SYSDIR}/../include -I${SYSDIR}/../include/apple -DCOMPAT_MACH -DCONFIG_REQUIRES_U32_MUNGING=1
+CFLAGS+= -I${SYSDIR}/sys -I${SYSDIR}/../include -I${SYSDIR}/../include/apple -DCOMPAT_MACH
 CFLAGS+= -Wno-error=undef
 
 .include <bsd.kmod.mk>
