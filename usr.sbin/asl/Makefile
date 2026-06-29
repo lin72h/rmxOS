@@ -1,7 +1,6 @@
 .include <src.opts.mk>
 PROG= asld
 NO_WERROR=yes
-MK_PIE= no
 
 .PATH: .
 .PATH: ${.CURDIR}
@@ -50,23 +49,7 @@ asl_ipc.h asl_ipcServer.c: ${.CURDIR}/../../lib/libasl/asl_ipc.defs
 OBJLIB= ${OBJTOP}/lib
 
 SRCS= asl_ipcServer.c asl_action.c bsd_in.c bsd_out.c daemon.c dbserver.c klog_in.c remote.c syslogd.c udp_in.c
-LDADD+= -Wl,--start-group
-LDADD+= ${OBJLIB}/libasl/libasl.a
-LDADD+= ${OBJLIB}/libnotify/libnotify.a
-LDADD+= ${OBJLIB}/liblaunch/liblaunch.a
-LDADD+= ${OBJLIB}/libxpc/libxpc.a
-LDADD+= ${OBJLIB}/libdispatch/libdispatch.a
-LDADD+= ${OBJLIB}/libosxsupport_rmx/libosxsupport.a
-LDADD+= ${OBJLIB}/libmach/libmach.a
-LDADD+= ${OBJLIB}/libthr/libthr.a
-LDADD+= ${OBJLIB}/libsys/libsys.a
-LDADD+= ${OBJLIB}/libc/libc.a
-LDADD+= ${OBJLIB}/libbsm/libbsm.a
-LDADD+= ${OBJLIB}/libauditd/libprivateauditd.a
-LDADD+= ${OBJLIB}/libblocksruntime/libBlocksRuntime.a
-LDADD+= ${OBJLIB}/libnv/libnv.a
-LDADD+= ${OBJLIB}/libsbuf/libsbuf.a
-LDADD+= ${OBJLIB}/libutil/libutil.a
-LDADD+= -Wl,--end-group
+LIBADD=	asl notify launch xpc dispatch osxsupport mach thr sys bsm auditd \
+	BlocksRuntime nv sbuf util
 
 .include <bsd.prog.mk>
