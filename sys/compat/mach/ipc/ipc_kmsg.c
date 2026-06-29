@@ -257,6 +257,7 @@
 #include <sys/param.h>
 #include <sys/limits.h>
 #include <sys/syslog.h>
+#include <sys/sysctl.h>
 #include <sys/proc.h>
 
 #include <vm/vm.h>
@@ -283,6 +284,13 @@
 #include <sys/mach/thread.h>
 
 #pragma pack(4)
+
+static int mach_ipc_entry_lookup_failed_log;
+SYSCTL_NODE(_debug, OID_AUTO, mach, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "Mach subsystem debugging");
+SYSCTL_INT(_debug_mach, OID_AUTO, ipc_entry_lookup_failed_log,
+    CTLFLAG_RWTUN, &mach_ipc_entry_lookup_failed_log, 0,
+    "log ipc_entry_lookup null-destination failures");
 
 typedef	struct
 {
@@ -1315,7 +1323,8 @@ ipc_kmsg_copyin_header(
 		 */
 		dest_entry = ipc_entry_lookup(space, dest_name);
 		if (dest_entry == IE_NULL) {
-			printf("ipc_entry_lookup failed on %d %s:%d\n", dest_name, __FILE__, __LINE__);
+			if (mach_ipc_entry_lookup_failed_log)
+				printf("ipc_entry_lookup failed on %d %s:%d\n", dest_name, __FILE__, __LINE__);
 			goto invalid_dest;
 		}
 		reply_entry = ipc_entry_lookup(space, reply_name);
