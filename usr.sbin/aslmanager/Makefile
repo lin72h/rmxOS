@@ -1,7 +1,6 @@
 .include <src.opts.mk>
 PROG= aslmanager
 NO_WERROR=yes
-MK_PIE= no
 
 MAN= aslmanager.8
 
@@ -38,27 +37,8 @@ CFLAGS+= -Wno-error=incompatible-pointer-types-discards-qualifiers
 CFLAGS+= -Wno-error=incompatible-pointer-types
 CFLAGS+= -Wno-error=uninitialized
 
-OBJLIB= ${OBJTOP}/lib
-
 SRCS= aslmanager.c
-LDADD+= -Wl,--start-group
-LDADD+= ${OBJLIB}/libasl/libasl.a
-LDADD+= ${OBJLIB}/libnotify/libnotify.a
-LDADD+= ${OBJLIB}/liblaunch/liblaunch.a
-LDADD+= ${OBJLIB}/libxpc/libxpc.a
-LDADD+= ${OBJLIB}/libdispatch/libdispatch.a
-LDADD+= ${OBJLIB}/libosxsupport_rmx/libosxsupport.a
-LDADD+= ${OBJLIB}/libmach/libmach.a
-LDADD+= ${OBJLIB}/libthr/libthr.a
-LDADD+= ${OBJLIB}/libsys/libsys.a
-LDADD+= ${OBJLIB}/libc/libc.a
-LDADD+= ${OBJLIB}/libbsm/libbsm.a
-LDADD+= ${OBJLIB}/libauditd/libprivateauditd.a
-LDADD+= ${OBJLIB}/libblocksruntime/libBlocksRuntime.a
-LDADD+= ${OBJLIB}/libnv/libnv.a
-LDADD+= ${OBJLIB}/libsbuf/libsbuf.a
-LDADD+= ${OBJLIB}/libutil/libutil.a
-LDADD+= ${OBJLIB}/libz/libz.a
-LDADD+= -Wl,--end-group
+LIBADD=	asl notify launch xpc dispatch osxsupport mach thr sys bsm auditd \
+	BlocksRuntime nv sbuf util z
 
 .include <bsd.prog.mk>
