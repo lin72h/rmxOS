@@ -148,14 +148,18 @@ xpc_connection_create_mach_service(const char *name, dispatch_queue_t targetq,
 xpc_connection_t
 xpc_connection_create_from_endpoint(xpc_endpoint_t endpoint)
 {
-	kern_return_t kr;
 	struct xpc_connection *conn;
+	struct xpc_object *xo;
+
+	xo = endpoint;
+	if (xo == NULL || xo->xo_xpc_type != _XPC_TYPE_ENDPOINT)
+		return (NULL);
 
 	conn = xpc_connection_create(NULL, NULL);
 	if (conn == NULL)
 		return (NULL);
 
-	conn->xc_remote_port = (mach_port_t)endpoint;
+	conn->xc_remote_port = xo->xo_port;
 	return (conn);
 }
 
@@ -378,7 +382,15 @@ xpc_connection_set_finalizer_f(xpc_connection_t connection,
 xpc_endpoint_t
 xpc_endpoint_create(xpc_connection_t connection)
 {
+	struct xpc_connection *conn;
+	xpc_u val;
 
+	conn = connection;
+	if (conn == NULL)
+		return (NULL);
+
+	val.port = conn->xc_local_port;
+	return (_xpc_prim_create(_XPC_TYPE_ENDPOINT, val, 0));
 }
 
 void

@@ -98,6 +98,10 @@ nv2xpc(const nvlist_t *nv)
 			xotmp = xpc_double_create(nvlist_get_xpc_double(nv, key));
 			break;
 
+		case NV_TYPE_DATE:
+			xotmp = xpc_date_create(nvlist_get_date(nv, key));
+			break;
+
 		case NV_TYPE_DESCRIPTOR:
 			val.fd = nvlist_get_descriptor(nv, key);
 			xotmp = _xpc_prim_create(_XPC_TYPE_FD, val, 0);
@@ -174,7 +178,8 @@ xpc2nv_primitive(nvlist_t *nv, const char *key, xpc_object_t value)
 		break;
 
 	case _XPC_TYPE_DATE:
-		break;	
+		nvlist_add_date(nv, key, xpc_date_get_value(xotmp));
+		break;
 
 	case _XPC_TYPE_DATA:
 		nvlist_add_binary(nv, key,
@@ -446,6 +451,16 @@ xpc_dictionary_set_double(xpc_object_t xdict, const char *key, double value)
 }
 
 void
+xpc_dictionary_set_date(xpc_object_t xdict, const char *key, int64_t value)
+{
+	struct xpc_object *xo, *xotmp;
+
+	xo = xdict;
+	xotmp = xpc_date_create(value);
+	xpc_dictionary_set_value(xdict, key, xotmp);
+}
+
+void
 xpc_dictionary_set_data(xpc_object_t xdict, const char *key,
     const void *bytes, size_t length)
 {
@@ -453,6 +468,16 @@ xpc_dictionary_set_data(xpc_object_t xdict, const char *key,
 
 	xo = xdict;
 	xotmp = xpc_data_create(bytes, length);
+	xpc_dictionary_set_value(xdict, key, xotmp);
+}
+
+void
+xpc_dictionary_set_uuid(xpc_object_t xdict, const char *key, const uuid_t uuid)
+{
+	struct xpc_object *xo, *xotmp;
+
+	xo = xdict;
+	xotmp = xpc_uuid_create(uuid);
 	xpc_dictionary_set_value(xdict, key, xotmp);
 }
 
@@ -504,6 +529,15 @@ xpc_dictionary_get_double(xpc_object_t xdict, const char *key)
 	return (xpc_double_get_value(xo));
 }
 
+int64_t
+xpc_dictionary_get_date(xpc_object_t xdict, const char *key)
+{
+	struct xpc_object *xo;
+
+	xo = xpc_dictionary_get_value(xdict, key);
+	return (xpc_date_get_value(xo));
+}
+
 const void *
 xpc_dictionary_get_data(xpc_object_t xdict, const char *key, size_t *length)
 {
@@ -519,6 +553,15 @@ xpc_dictionary_get_data(xpc_object_t xdict, const char *key, size_t *length)
 	if (length != NULL)
 		*length = xpc_data_get_length(xo);
 	return (xpc_data_get_bytes_ptr(xo));
+}
+
+const uint8_t *
+xpc_dictionary_get_uuid(xpc_object_t xdict, const char *key)
+{
+	struct xpc_object *xo;
+
+	xo = xpc_dictionary_get_value(xdict, key);
+	return (xpc_uuid_get_bytes(xo));
 }
 
 const char *
