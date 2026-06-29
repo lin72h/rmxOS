@@ -33,7 +33,7 @@
 		<string>-f</string>
 		<string>/usr/share/sandbox/syslogd.sb</string>
 -->
-		<string>/usr/sbin/syslogd</string>
+		<string>/usr/sbin/asld</string>
 	</array>
 	<key>EnvironmentVariables</key>
 	<dict>
