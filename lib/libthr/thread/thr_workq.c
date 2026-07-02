@@ -46,6 +46,7 @@ struct twq_runtime {
 	int			tr_configuring;
 	int			tr_initialized;
 	int			tr_reaper_started;
+	int			tr_supported_checked;
 	int			tr_supported_features;
 	int			tr_dispatch_offset;
 	uint64_t		tr_queue_serialno_offs;
@@ -80,6 +81,7 @@ static int twq_kernel_sync_request(uint16_t desired,
 static int twq_kernel_thread_transfer(uint16_t from_desired,
     pthread_priority_t from_priority, pthread_priority_t to_priority);
 static int twq_spawn_workers(struct twq_runtime *rt, uint16_t count);
+static int twq_sys_kernreturn(int op, void *arg2, int arg3, int arg4);
 
 static inline bool
 twq_priority_is_overcommit(pthread_priority_t priority)
@@ -193,11 +195,33 @@ twq_trace_event(struct twq_runtime *rt, const char *event, int lane,
 }
 
 static uint32_t
-twq_supported_features(void)
+twq_requested_features(void)
 {
 
 	return (WORKQ_FEATURE_DISPATCHFUNC | WORKQ_FEATURE_FINEPRIO |
 	    WORKQ_FEATURE_MAINTENANCE);
+}
+
+static uint32_t
+twq_probe_supported_features(void)
+{
+	struct twq_init_args init_args;
+	uint32_t requested;
+	int ret, saved_errno;
+
+	requested = twq_requested_features();
+	memset(&init_args, 0, sizeof(init_args));
+	init_args.tqi_version = PTHREAD_WORKQUEUE_SPI_VERSION;
+	init_args.tqi_requested_features = requested;
+	init_args.tqi_stack_size = _pthread_attr_default.stacksize_attr;
+	init_args.tqi_guard_size = _pthread_attr_default.guardsize_attr;
+
+	saved_errno = errno;
+	ret = twq_sys_kernreturn(TWQ_OP_INIT, &init_args, sizeof(init_args), 0);
+	errno = saved_errno;
+	if (ret == -1)
+		return (0);
+	return ((uint32_t)ret & requested);
 }
 
 static uint32_t
@@ -531,7 +555,10 @@ static void
 twq_runtime_init_locked(struct twq_runtime *rt)
 {
 
-	rt->tr_supported_features = twq_supported_features();
+	if (!rt->tr_supported_checked) {
+		rt->tr_supported_features = twq_probe_supported_features();
+		rt->tr_supported_checked = 1;
+	}
 	rt->tr_last_activity_msec = twq_now_msec();
 }
 

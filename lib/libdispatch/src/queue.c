@@ -779,7 +779,10 @@ _dispatch_root_queues_init_workq(void)
 #endif
 		r = pthread_workqueue_setdispatch_np(_dispatch_worker_thread2);
 #if !DISPATCH_USE_LEGACY_WORKQUEUE_FALLBACK
-		(void)dispatch_assume_zero(r);
+		if (r) {
+			_dispatch_log("libdispatch pthread workqueue "
+					"setdispatch failed: %d", r);
+		}
 #endif
 		result = !r;
 	}
@@ -869,8 +872,11 @@ static dispatch_once_t _dispatch_root_queues_pred;
 static void
 _dispatch_root_queues_init(void *context DISPATCH_UNUSED)
 {
+	bool use_workq;
+
 	_dispatch_safe_fork = false;
-	if (!_dispatch_root_queues_init_workq()) {
+	use_workq = _dispatch_root_queues_init_workq();
+	if (!use_workq) {
 #if DISPATCH_ENABLE_THREAD_POOL
 		int i;
 		for (i = 0; i < DISPATCH_ROOT_QUEUE_COUNT; i++) {
@@ -890,6 +896,8 @@ _dispatch_root_queues_init(void *context DISPATCH_UNUSED)
 		DISPATCH_CRASH("Root queue initialization failed");
 #endif // DISPATCH_ENABLE_THREAD_POOL
 	}
+	_dispatch_log("libdispatch concurrency engine: %s",
+			use_workq ? "twq kernel workqueue" : "pthread pool");
 }
 
 #define countof(x) (sizeof(x) / sizeof(x[0]))
