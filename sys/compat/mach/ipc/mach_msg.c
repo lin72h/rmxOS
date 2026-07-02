@@ -323,7 +323,7 @@ mach_msg_receive(
 	ipc_space_t space = current_space();
 	vm_map_t map = current_map();
 	ipc_object_t object;
-	ipc_kmsg_t kmsg;
+	ipc_kmsg_t kmsg = IKM_NULL;
 	mach_port_seqno_t seqno;
 	mach_msg_return_t mr;
 	mach_msg_body_t *slist;
@@ -377,7 +377,8 @@ mach_msg_receive(
 	if (mr != MACH_MSG_SUCCESS) {
 		if (mr == MACH_RCV_TOO_LARGE || mr == MACH_RCV_SCATTER_SMALL
 		    ) {
-			if (msg_receive_error(kmsg, msg, option, seqno, space)
+			if (kmsg != IKM_NULL &&
+			    msg_receive_error(kmsg, msg, option, seqno, space)
 			    == MACH_RCV_INVALID_DATA)
 				mr = MACH_RCV_INVALID_DATA;
 		}

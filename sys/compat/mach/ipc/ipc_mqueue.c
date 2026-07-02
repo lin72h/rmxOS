@@ -772,7 +772,9 @@ ipc_mqueue_receive(
 
 		rc = ipc_mqueue_pset_receive(bits, option, max_size, timeout, thread);
 		if (rc == THREAD_NOT_WAITING) {
-			if (thread->ith_state == MACH_RCV_TIMED_OUT || thread->ith_state == MACH_RCV_TOO_LARGE) {
+			if (thread->ith_state == MACH_RCV_TIMED_OUT ||
+			    (thread->ith_state == MACH_RCV_TOO_LARGE &&
+			    thread->ith_kmsg == IKM_NULL)) {
 				ips_unlock(pset);
 				ips_release(pset);
 				return (thread->ith_state);
@@ -799,7 +801,9 @@ ipc_mqueue_receive(
 		/* a message is already on the queue */
 		if (kmsg != IKM_NULL) {
 			ipc_mqueue_post_on_thread(port, option, max_size, thread);
-			if (thread->ith_state == MACH_MSG_SUCCESS) 
+			if (thread->ith_state == MACH_MSG_SUCCESS ||
+			    (thread->ith_state == MACH_RCV_TOO_LARGE &&
+			    thread->ith_kmsg != IKM_NULL))
 				goto rx_done;
 			else {
 				io_unlock(thread->ith_object);
