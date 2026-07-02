@@ -145,6 +145,19 @@ sx_assert_locked(void *arg, int what)
 	sx_assert((struct sx *)arg, what);
 }
 
+static int
+filt_machport_direct_receive(struct knote *kn)
+{
+	/*
+	 * libdispatch's readiness flag DISPATCH_MACH_RECV_MESSAGE has the same
+	 * numeric value as MACH_RCV_MSG.  Only treat MACH_RCV_MSG as a direct
+	 * receive request when the knote also carries the receive buffer that a
+	 * direct receive needs.
+	 */
+	return ((kn->kn_sfflags & MACH_RCV_MSG) != 0 &&
+	    kn->kn_kevent.ext[0] != 0 && kn->kn_kevent.ext[1] != 0);
+}
+
 void
 io_validate(ipc_object_t io)
 {
@@ -623,10 +636,9 @@ filt_machport(struct knote *kn, long hint)
 		panic("invalid hint %ld\n", hint);
 
 
-	option = kn->kn_sfflags & (MACH_RCV_MSG|MACH_RCV_LARGE|MACH_RCV_LARGE_IDENTITY|
-				   MACH_RCV_TRAILER_MASK|MACH_RCV_VOUCHER);
-
-	if (option & MACH_RCV_MSG) {
+	if (filt_machport_direct_receive(kn)) {
+		option = kn->kn_sfflags & (MACH_RCV_MSG|MACH_RCV_LARGE|MACH_RCV_LARGE_IDENTITY|
+					   MACH_RCV_TRAILER_MASK|MACH_RCV_VOUCHER);
 		self->ith_msg_addr = (mach_vm_address_t)kn->kn_kevent.ext[0];
 		size = (mach_msg_size_t)kn->kn_kevent.ext[1];
 #ifdef DEBUG_KEVENT
