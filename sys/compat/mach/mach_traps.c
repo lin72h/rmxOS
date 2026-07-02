@@ -255,16 +255,12 @@ sys__kernelrpc_mach_port_insert_right_trap(struct thread *td, struct _kernelrpc_
 	mach_msg_type_name_t disp;
 	int rv = MACH_SEND_INVALID_DEST;
 
-	if (task != current_task())
-		goto done;
 	rv = ipc_object_copyin(task->itk_space, uap->poly, uap->polyPoly, (ipc_object_t *)&port);
 	if (rv != KERN_SUCCESS)
 		goto done;
 	disp = ipc_object_copyin_type(uap->polyPoly);
 	rv = mach_port_insert_right(task->itk_space, uap->name, port, disp);
 done:
-	if (task)
-		task_deallocate(task);
 	td->td_retval[0] = rv;
 	return (0);
 }
