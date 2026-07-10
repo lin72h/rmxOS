@@ -139,6 +139,11 @@ xpc_unpack(void *buf, size_t size)
 void
 xpc_object_destroy(struct xpc_object *xo)
 {
+	if (xo->xo_xpc_type == _XPC_TYPE_CONNECTION) {
+		xpc_connection_destroy((struct xpc_connection *)xo);
+		return;
+	}
+
 	if (xo->xo_xpc_type == _XPC_TYPE_DICTIONARY)
 		xpc_dictionary_destroy(xo);
 

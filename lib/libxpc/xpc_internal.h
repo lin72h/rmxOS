@@ -103,28 +103,36 @@ struct xpc_pending_call {
 	xpc_object_t		xp_response;
 	dispatch_queue_t	xp_queue;
 	xpc_handler_t		xp_handler;
+	mach_port_t		xp_remote_port;
 	TAILQ_ENTRY(xpc_pending_call) xp_link;
 };
 
 struct xpc_connection {
+	struct xpc_object	xc_object;
 	const char *		xc_name;
 	mach_port_t		xc_remote_port;
 	mach_port_t		xc_local_port;
 	xpc_handler_t		xc_handler;
+	xpc_finalizer_t		xc_finalizer;
 	dispatch_source_t	xc_recv_source;
 	dispatch_queue_t	xc_send_queue;
 	dispatch_queue_t	xc_recv_queue;
 	dispatch_queue_t	xc_target_queue;
 	dispatch_source_t	xc_send_source;
 	dispatch_source_t	xc_proc_source;
-	int			xc_suspend_count;
+	volatile u_int		xc_suspend_count;
 	int			xc_transaction_count;
 	int 			xc_flags;
 	volatile u_int		xc_cancelled;
 	volatile u_int		xc_interrupted;
+	volatile u_int		xc_started;
+	volatile u_int		xc_sources_cancelled;
+	volatile u_int		xc_source_cancel_count;
 	volatile uint64_t	xc_last_id;
 	void *			xc_context;
 	struct xpc_connection * xc_parent;
+	bool			xc_owns_local_port;
+	bool			xc_owns_remote_port;
 	uid_t			xc_remote_euid;
 	gid_t			xc_remote_guid;
 	pid_t			xc_remote_pid;
@@ -161,6 +169,7 @@ __private_extern__ const char *_xpc_get_type_name(xpc_object_t obj);
 __private_extern__ struct xpc_object *nv2xpc(const nvlist_t *nv);
 __private_extern__ nvlist_t *xpc2nv(struct xpc_object *xo);
 __private_extern__ void xpc_object_destroy(struct xpc_object *xo);
+__private_extern__ void xpc_connection_destroy(struct xpc_connection *conn);
 __private_extern__ int xpc_pipe_send(xpc_object_t obj, mach_port_t dst,
     mach_port_t local, uint64_t id);
 __private_extern__ int xpc_pipe_receive(mach_port_t local, mach_port_t *remote,
