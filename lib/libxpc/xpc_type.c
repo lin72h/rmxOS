@@ -31,6 +31,7 @@
 #include "xpc_internal.h"
 
 struct _xpc_type_s {
+	uint8_t xt_type;
 };
 
 struct _xpc_dictionary_s {
@@ -44,22 +45,22 @@ struct _xpc_dictionary_s {
 };
 
 typedef const struct _xpc_type_s xt;
-xt _xpc_type_array;
-xt _xpc_type_bool;
-xt _xpc_type_connection;
-xt _xpc_type_data;
-xt _xpc_type_date;
-xt _xpc_type_dictionary;
-xt _xpc_type_endpoint;
-xt _xpc_type_null;
-xt _xpc_type_error;
-xt _xpc_type_fd;
-xt _xpc_type_int64;
-xt _xpc_type_uint64;
-xt _xpc_type_shmem;
-xt _xpc_type_string;
-xt _xpc_type_uuid;
-xt _xpc_type_double;
+xt _xpc_type_array = { .xt_type = _XPC_TYPE_ARRAY };
+xt _xpc_type_bool = { .xt_type = _XPC_TYPE_BOOL };
+xt _xpc_type_connection = { .xt_type = _XPC_TYPE_CONNECTION };
+xt _xpc_type_data = { .xt_type = _XPC_TYPE_DATA };
+xt _xpc_type_date = { .xt_type = _XPC_TYPE_DATE };
+xt _xpc_type_dictionary = { .xt_type = _XPC_TYPE_DICTIONARY };
+xt _xpc_type_endpoint = { .xt_type = _XPC_TYPE_ENDPOINT };
+xt _xpc_type_null = { .xt_type = _XPC_TYPE_NULL };
+xt _xpc_type_error = { .xt_type = _XPC_TYPE_ERROR };
+xt _xpc_type_fd = { .xt_type = _XPC_TYPE_FD };
+xt _xpc_type_int64 = { .xt_type = _XPC_TYPE_INT64 };
+xt _xpc_type_uint64 = { .xt_type = _XPC_TYPE_UINT64 };
+xt _xpc_type_shmem = { .xt_type = _XPC_TYPE_SHMEM };
+xt _xpc_type_string = { .xt_type = _XPC_TYPE_STRING };
+xt _xpc_type_uuid = { .xt_type = _XPC_TYPE_UUID };
+xt _xpc_type_double = { .xt_type = _XPC_TYPE_DOUBLE };
 
 const char *const _xpc_error_key_description = "XPCErrorDescription";
 
