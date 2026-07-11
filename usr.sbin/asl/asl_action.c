@@ -1462,7 +1462,7 @@ _act_file_final(asl_out_module_t *m, asl_out_rule_t *r, asl_msg_t *msg)
 {
 	asl_action_file_data_t *f_data;
 	int is_dup;
-	uint32_t len, msg_hash = 0;
+	uint32_t encoding, len, msg_hash = 0;
 	char *str;
 	time_t now;
 
@@ -1486,7 +1486,17 @@ _act_file_final(asl_out_module_t *m, asl_out_rule_t *r, asl_msg_t *msg)
 
 	is_dup = 0;
 
-	str = asl_format_message(msg, r->dst->fmt, r->dst->tfmt, ASL_ENCODE_SAFE, &len);
+	encoding = ASL_ENCODE_SAFE;
+	if ((r->dst->fmt != NULL) &&
+	    ((!strcmp(r->dst->fmt, ASL_MSG_FMT_XML)) ||
+	    ((!strncmp(r->dst->fmt, ASL_MSG_FMT_XML, 3)) && (r->dst->fmt[3] == '.') &&
+	    (r->dst->fmt[4] != '\0') &&
+	    (strspn(r->dst->fmt + 4, "0123456789") == strlen(r->dst->fmt + 4)))))
+	{
+		encoding = ASL_ENCODE_XML;
+	}
+
+	str = asl_format_message(msg, r->dst->fmt, r->dst->tfmt, encoding, &len);
 
 	if (r->dst->flags & MODULE_FLAG_COALESCE)
 	{

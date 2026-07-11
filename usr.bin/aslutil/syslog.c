@@ -2168,6 +2168,13 @@ main(int argc, char *argv[])
 				pflags = FORMAT_XML;
 				encode = ASL_ENCODE_XML;
 			}
+			else if ((!strncmp(argv[i], ASL_MSG_FMT_XML, 3)) && (argv[i][3] == '.') &&
+			    (argv[i][4] != '\0') && (strspn(argv[i] + 4, "0123456789") == strlen(argv[i] + 4)))
+			{
+				pflags = FORMAT_XML;
+				pfmt = argv[i];
+				encode = ASL_ENCODE_XML;
+			}
 			else 
 			{
 				pflags = 0;

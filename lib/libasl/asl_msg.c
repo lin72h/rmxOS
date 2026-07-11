@@ -2557,7 +2557,7 @@ asl_format_message(asl_msg_t *msg, const char *mfmt, const char *tfmt, uint32_t 
 
 	mf = MFMT_RAW;
 
-	if (mfmt == NULL) mf = MFMT_RAW;
+	if (mfmt == NULL) mf = MFMT_STD;
 	else if (!strcmp(mfmt, ASL_MSG_FMT_RAW)) mf = MFMT_RAW;
 	else if (!strcmp(mfmt, ASL_MSG_FMT_STD)) mf = MFMT_STD;
 	else if (!strcmp(mfmt, ASL_MSG_FMT_BSD)) mf = MFMT_BSD;
@@ -2585,6 +2585,16 @@ asl_format_message(asl_msg_t *msg, const char *mfmt, const char *tfmt, uint32_t 
 	{
 		mf = MFMT_BSD;
 		if ((tfmt == NULL) && (mfmt[4] != '\0'))
+		{
+			snprintf(tfmt_ext, sizeof(tfmt_ext), "lcl.%s", mfmt + 4);
+			tfmt = (const char *)tfmt_ext;
+		}
+	}
+	else if ((!strncmp(mfmt, ASL_MSG_FMT_XML, 3)) && (mfmt[3] == '.') &&
+	    (mfmt[4] != '\0') && (strspn(mfmt + 4, "0123456789") == strlen(mfmt + 4)))
+	{
+		mf = MFMT_XML;
+		if (tfmt == NULL)
 		{
 			snprintf(tfmt_ext, sizeof(tfmt_ext), "lcl.%s", mfmt + 4);
 			tfmt = (const char *)tfmt_ext;
@@ -2838,6 +2848,12 @@ asl_format_message(asl_msg_t *msg, const char *mfmt, const char *tfmt, uint32_t 
 
 		if (mfmt[i] == '\\')
 		{
+			if (mfmt[i + 1] == '\0')
+			{
+				asl_string_append_char_no_encoding(str, '\\');
+				break;
+			}
+
 			i++;
 			if (mfmt[i] == '$') asl_string_append_char_no_encoding(str, '$');
 			else if (mfmt[i] == 'e') asl_string_append_char_no_encoding(str, '\e');

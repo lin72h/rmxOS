@@ -56,7 +56,9 @@ asl_is_utf8_char(const unsigned char *p, int *state, int *ctype)
 				*state = 1;
 				if ((*p >= 0xc2) && (*p <= 0xdf)) *ctype = 1;
 				else if (*p == 0xe0) *ctype = 2;
-				else if ((*p >= 0xe1) && (*p <= 0xef)) *ctype = 3;
+				else if ((*p >= 0xe1) && (*p <= 0xec)) *ctype = 3;
+				else if (*p == 0xed) *ctype = 7;
+				else if ((*p >= 0xee) && (*p <= 0xef)) *ctype = 3;
 				else if (*p == 0xf0) *ctype = 4;
 				else if ((*p >= 0xf1) && (*p <= 0xf3)) *ctype = 5;
 				else if (*p == 0xf4) *ctype = 6;
@@ -112,6 +114,13 @@ asl_is_utf8_char(const unsigned char *p, int *state, int *ctype)
 					break;
 				}
 
+				case 7:
+				{
+					if ((*p >= 0x80) && (*p <= 0x9f)) *state = 2;
+					else return 0;
+					break;
+				}
+
 				default: return 0;
 			}
 
@@ -120,7 +129,7 @@ asl_is_utf8_char(const unsigned char *p, int *state, int *ctype)
 
 		case 2:
 		{
-			if ((*ctype >= 2) && (*ctype <= 3))
+			if (((*ctype >= 2) && (*ctype <= 3)) || (*ctype == 7))
 			{
 				if ((*p >= 0x80) && (*p <= 0xbf)) *state = 0;
 				else return 0;
@@ -174,7 +183,7 @@ asl_is_utf8(const char *str)
 		flag = asl_is_utf8_char(p, &state, &ctype);
 	}
 
-	return flag;
+	return ((flag == 1) && (state == 0));
 }
 
 __private_extern__ uint8_t *
