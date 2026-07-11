@@ -132,6 +132,8 @@ xpc_unpack(void *buf, size_t size)
 	nvlist_t *nv;
 
 	nv = nvlist_unpack(buf, size);
+	if (nv == NULL)
+		return (NULL);
 	xo = nv2xpc(nv);
 	return (xo);
 }
@@ -475,6 +477,8 @@ xpc_pipe_receive(mach_port_t local, mach_port_t *remote, xpc_object_t *result,
 	data_size = message.size;
 	LOG("unpacking data_size=%d", data_size);
 	xo = xpc_unpack(&message.data, data_size);
+	if (xo == NULL)
+		return (EINVAL);
 	xo->xo_flags |= _XPC_FROM_WIRE;
 
 	tr = (mach_msg_trailer_t *)(((char *)&message) + request->msgh_size);
@@ -530,6 +534,8 @@ xpc_pipe_try_receive(mach_port_t portset, xpc_object_t *requestobj, mach_port_t 
 	data_size = request->msgh_size;
 	LOG("unpacking data_size=%d", data_size);
 	xo = xpc_unpack(&message.data, data_size);
+	if (xo == NULL)
+		return (EINVAL);
 	xo->xo_flags |= _XPC_FROM_WIRE;
 	/* is padding for alignment enforced in the kernel?*/
 	tr = (mach_msg_trailer_t *)(((char *)&message) + request->msgh_size);

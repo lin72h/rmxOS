@@ -248,7 +248,6 @@ xpc2nv(struct xpc_object *xo)
 
 	if (xo->xo_xpc_type == _XPC_TYPE_DICTIONARY) {
 		nv = nvlist_create_dictionary(0);
-		printf("nv = %p\n", nv);
 		xpc_dictionary_apply(xo, ^(const char *k, xpc_object_t v) {
 			xpc2nv_primitive(nv, k, v);
 			return ((bool)true);
