@@ -19,7 +19,7 @@
 .\"
 .\"@APPLE_LICENSE_HEADER_END@
 .\"
-.Dd December 7, 2007
+.Dd July 11, 2026
 .Dt ASLMANAGER 8
 .Os "Mac OS X"
 .Sh NAME
@@ -27,6 +27,7 @@
 .Nd Apple System Log data life-cycle manager
 .Sh SYNOPSIS
 .Nm
+.Op Fl once
 .Op Fl s Ar store_dir
 .Op Fl a Op Ar archive_dir
 .Op Fl ttl Ar days
@@ -43,7 +44,9 @@
 manages rotated files and ASL data written by the
 .Nm asld
 server.
-It is started automatically at various times by
+On rmxOS 1.0-preview, it is scheduled by
+.Li launchd
+as described below; it is not started automatically by
 .Nm asld .
 It may also be invoked from the command line by the superuser (root).
 It manages the life-cycle of data in the ASL database, rotated log files,
@@ -56,6 +59,28 @@ and from command-line options that may be specified to override some settings
 found in the configuration files.
 In normal operation, it first checks the ASL database in /var/log/asl,
 then it checks the files and directories specified by /etc/asl.conf and each ASL output module.
+.Pp
+The
+.Fl once
+option is an rmxOS routing override.
+It forces one normal command-line maintenance pass even when
+.Li launchd
+reports the process as managed, and the process returns after that pass.
+Returning allows the periodic job to re-arm the utility.
+The option does not schedule itself and is not a dry run.
+A managed invocation without an exact
+.Fl once
+token retains the
+.Li com.apple.aslmanager
+XPC-server mode, even when other command-line arguments are present.
+For rmxOS 1.0-preview, the
+.Li com.rmxos.aslmanager.once
+job combines
+.Li RunAtLoad
+with a 900-second
+.Li StartInterval .
+This is a bounded preview scheduling mode, not macOS parity, an activation
+claim, or an exact wall-clock guarantee.
 .Pp
 If the
 .Fl asldb

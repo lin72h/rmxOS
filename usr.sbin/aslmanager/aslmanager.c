@@ -1467,7 +1467,11 @@ cli_main(int argc, char *argv[])
 
 	for (i = 1; i < argc; i++)
 	{
-		if (!strcmp(argv[i], "-a"))
+		if (!strcmp(argv[i], "-once"))
+		{
+			continue;
+		}
+		else if (!strcmp(argv[i], "-a"))
 		{
 			if (((i + 1) < argc) && (argv[i + 1][0] != '-')) asl_store_dst->rotate_dir = strdup(argv[++i]);
 			else asl_store_dst->rotate_dir = strdup(PATH_ASL_ARCHIVE);
@@ -1585,11 +1589,17 @@ accept_connection(xpc_connection_t peer)
 int
 main(int argc, char *argv[])
 {
+	int i, run_once = 0;
 	int64_t is_managed = 0;
+
+	for (i = 1; i < argc; i++)
+	{
+		if (!strcmp(argv[i], "-once")) run_once = 1;
+	}
 
 	vproc_swap_integer(NULL, VPROC_GSK_IS_MANAGED, NULL, &is_managed);
 
-	if (is_managed == 0) return cli_main(argc, argv);
+	if ((is_managed == 0) || (run_once != 0)) return cli_main(argc, argv);
 
 	/* XPC server */
 	serverq = dispatch_queue_create("aslmanager", NULL);
