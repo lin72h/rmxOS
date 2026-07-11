@@ -4201,6 +4201,7 @@ job_callback_proc(job_t j, struct kevent *kev)
 	}
 
 	if (fflags & NOTE_EXIT) {
+#if !defined(__FreeBSD__)
 		if (kev->data & NOTE_EXIT_DECRYPTFAIL) {
 			j->fpfail = true;
 			job_log(j, LOG_WARNING, "FairPlay decryption failed on binary for job.");
@@ -4208,6 +4209,7 @@ job_callback_proc(job_t j, struct kevent *kev)
 			j->jettisoned = true;
 			job_log(j, LOG_INFO, "Job was killed due to memory pressure.");
 		}
+#endif
 
 		job_reap(j);
 
