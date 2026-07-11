@@ -2432,16 +2432,6 @@ XPC_EXPORT XPC_NORETURN XPC_NONNULL1
 void
 xpc_main(xpc_connection_handler_t handler);
 
-#if XPC_HOSTING_OLD_MAIN
-typedef void (*xpc_service_event_handler_t)(xpc_connection_t, xpc_object_t);
-
-__OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_7, __MAC_10_7, __IPHONE_5_0, __IPHONE_5_0)
-XPC_EXPORT XPC_NORETURN XPC_NONNULL3
-void
-xpc_service_main(int argc, const char *argv[],
-	xpc_service_event_handler_t handler);
-#endif // XPC_HOSTING_OLD_MAIN
-
 #pragma mark Transactions
 /*!
  * @function xpc_transaction_begin
