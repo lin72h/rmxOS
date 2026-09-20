@@ -942,16 +942,6 @@ kern_fdfree(struct filedesc *fdp, int fd, struct filecaps *fcaps)
 #endif
 }
 
-static void
-filecaps_fill(struct filecaps *fcaps)
-{
-
-	CAP_ALL(&fcaps->fc_rights);
-	fcaps->fc_ioctls = NULL;
-	fcaps->fc_nioctls = -1;
-	fcaps->fc_fcntls = CAP_FCNTL_ALL;
-}
-
 /*
  * Install a file in a file descriptor table.
  */
