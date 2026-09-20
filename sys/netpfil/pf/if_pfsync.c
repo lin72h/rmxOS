@@ -2039,7 +2039,7 @@ pfsync_sendout(int schedswi, int c)
 		return;
 	}
 
-	m = m_get2(max_linkhdr + b->b_len, M_NOWAIT, MT_DATA, M_PKTHDR);
+	m = m_get3(max_linkhdr + b->b_len, M_NOWAIT, MT_DATA, M_PKTHDR);
 	if (m == NULL) {
 		if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, 1);
 		V_pfsyncstats.pfsyncs_onomem++;
@@ -2356,7 +2356,11 @@ pfsync_undefer_state_locked(struct pf_kstate *st, int drop)
 		}
 	}
 
-	panic("%s: unable to find deferred state", __func__);
+	/*
+	 * If we don't find this state in b_deferrals that might be because we
+	 * overflowed the list (see pfsync_defer()'s >= 128 check') or because
+	 * the deferral timed out already (see pfsync_defer_tomo()).
+	 */
 }
 
 static void

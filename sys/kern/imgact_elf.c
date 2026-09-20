@@ -858,12 +858,12 @@ __elfN(load_file)(struct thread *td, const char *file, u_long *addr,
 		goto fail;
 	}
 
-	if (!aligned(imgp->image_header + hdr->e_phoff, Elf_Addr) ||
-	    hdr->e_phnum > __elfN(phnums)) {
+	if (hdr->e_phnum > __elfN(phnums)) {
 		error = ENOEXEC;
 		goto fail;
 	}
-	if (__elfN(phdr_in_zero_page)(hdr)) {
+	if (__elfN(phdr_in_zero_page)(hdr) &&
+	    aligned(imgp->image_header + hdr->e_phoff, Elf_Addr)) {
 		phdr = (const Elf_Phdr *)(imgp->image_header + hdr->e_phoff);
 	} else {
 		VOP_UNLOCK(imgp->vp);
@@ -1157,10 +1157,6 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	free_interp = false;
 	m_phdrs = NULL;
 
-	if (!aligned(imgp->image_header + hdr->e_phoff, Elf_Addr)) {
-		uprintf("Unaligned program headers\n");
-		return (ENOEXEC);
-	}
 	if (hdr->e_phoff + hdr->e_phnum * hdr->e_phentsize < hdr->e_phoff) {
 		uprintf("PHDRS wrap\n");
 		return (ENOEXEC);
@@ -1170,7 +1166,8 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 		    hdr->e_phnum, __elfN(phnums));
 		return (ENOEXEC);
 	}
-	if (__elfN(phdr_in_zero_page)(hdr)) {
+	if (__elfN(phdr_in_zero_page)(hdr) &&
+	    aligned(imgp->image_header + hdr->e_phoff, Elf_Addr)) {
 		phdr = (const Elf_Phdr *)(imgp->image_header + hdr->e_phoff);
 	} else {
 		VOP_UNLOCK(imgp->vp);
@@ -1272,11 +1269,39 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 		error = ENOEXEC;
 		goto ret;
 	}
+
+	/*
+	 * Avoid a possible deadlock if the current address space is destroyed
+	 * and that address space maps the locked vnode.  In the common case,
+	 * the locked vnode's v_usecount is decremented but remains greater
+	 * than zero.  Consequently, the vnode lock is not needed by vrele().
+	 * However, in cases where the vnode lock is external, such as nullfs,
+	 * v_usecount may become zero.
+	 *
+	 * The VV_TEXT flag prevents modifications to the executable while
+	 * the vnode is unlocked.
+	 */
+	VOP_UNLOCK(imgp->vp);
+
+	/*
+	 * Decide whether to enable randomization of user mappings.  First,
+	 * reset user preferences for the setid binaries.  Then, account for the
+	 * support of randomization by the ABI, by user preferences, and make
+	 * special treatment for PIE binaries.
+	 */
+	if (imgp->credential_setid) {
+		PROC_LOCK(imgp->proc);
+		imgp->proc->p_flag2 &= ~(P2_ASLR_ENABLE | P2_ASLR_DISABLE |
+		    P2_WXORX_DISABLE | P2_WXORX_ENABLE_EXEC);
+		PROC_UNLOCK(imgp->proc);
+	}
+
 	sv = brand_info->sysvec;
 	if (hdr->e_type == ET_DYN) {
 		if ((brand_info->flags & BI_CAN_EXEC_DYN) == 0) {
 			uprintf("Cannot execute shared object\n");
 			error = ENOEXEC;
+			(void)vn_lock(imgp->vp, LK_SHARED | LK_RETRY);
 			goto ret;
 		}
 		/*
@@ -1294,33 +1319,6 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 			else
 				imgp->et_dyn_addr = __elfN(pie_base);
 		}
-	}
-
-	/*
-	 * Avoid a possible deadlock if the current address space is destroyed
-	 * and that address space maps the locked vnode.  In the common case,
-	 * the locked vnode's v_usecount is decremented but remains greater
-	 * than zero.  Consequently, the vnode lock is not needed by vrele().
-	 * However, in cases where the vnode lock is external, such as nullfs,
-	 * v_usecount may become zero.
-	 *
-	 * The VV_TEXT flag prevents modifications to the executable while
-	 * the vnode is unlocked.
-	 */
-	VOP_UNLOCK(imgp->vp);
-
-	/*
-	 * Decide whether to enable randomization of user mappings.
-	 * First, reset user preferences for the setid binaries.
-	 * Then, account for the support of the randomization by the
-	 * ABI, by user preferences, and make special treatment for
-	 * PIE binaries.
-	 */
-	if (imgp->credential_setid) {
-		PROC_LOCK(imgp->proc);
-		imgp->proc->p_flag2 &= ~(P2_ASLR_ENABLE | P2_ASLR_DISABLE |
-		    P2_WXORX_DISABLE | P2_WXORX_ENABLE_EXEC);
-		PROC_UNLOCK(imgp->proc);
 	}
 	if ((sv->sv_flags & SV_ASLR) == 0 ||
 	    (imgp->proc->p_flag2 & P2_ASLR_DISABLE) != 0 ||
@@ -1586,6 +1584,8 @@ typedef void (*segment_callback)(vm_map_entry_t, void *);
 struct phdr_closure {
 	Elf_Phdr *phdr;		/* Program header to fill in */
 	Elf_Off offset;		/* Offset of segment in core file */
+	int numsegs;		/* Maximum number of segments */
+	int nextseg;		/* Next segment to fill in */
 };
 
 struct note_info {
@@ -1702,10 +1702,15 @@ __elfN(coredump)(struct thread *td, struct coredump_writer *cdw, off_t limit, in
 	}
 
 	/*
-	 * Allocate memory for building the header, fill it up,
-	 * and write it out following the notes.
+	 * Allocate memory for building the header, fill it up, and write it out
+	 * following the notes.
+	 *
+	 * Note that a process sharing our vmspace might be concurrently
+	 * mutating the map, in which case we could populate fewer than
+	 * seginfo.count headers.  Zero the buffer to ensure that unpopulated
+	 * headers are still initialized.
 	 */
-	hdr = malloc(hdrsize, M_TEMP, M_WAITOK);
+	hdr = malloc(hdrsize, M_TEMP, M_WAITOK | M_ZERO);
 	error = __elfN(corehdr)(&params, seginfo.count, hdr, hdrsize, &notelst,
 	    notesz, flags);
 
@@ -1758,6 +1763,11 @@ cb_put_phdr(vm_map_entry_t entry, void *closure)
 	struct phdr_closure *phc = (struct phdr_closure *)closure;
 	Elf_Phdr *phdr = phc->phdr;
 
+	if (phc->nextseg >= phc->numsegs) {
+		/* Only write as many headers as we have space for. */
+		return;
+	}
+
 	phc->offset = round_page(phc->offset);
 
 	phdr->p_type = PT_LOAD;
@@ -1770,6 +1780,8 @@ cb_put_phdr(vm_map_entry_t entry, void *closure)
 
 	phc->offset += phdr->p_filesz;
 	phc->phdr++;
+
+	phc->nextseg++;
 }
 
 /*
@@ -2032,6 +2044,8 @@ __elfN(puthdr)(struct thread *td, void *hdr, size_t hdrsize, int numsegs,
 	/* All the writable segments from the program. */
 	phc.phdr = phdr;
 	phc.offset = round_page(hdrsize + notesz);
+	phc.numsegs = numsegs;
+	phc.nextseg = 0;
 	each_dumpable_segment(td, cb_put_phdr, &phc, flags);
 }
 
@@ -2373,14 +2387,14 @@ __elfN(set_fpregset)(struct regset *rs, struct thread *td, void *buf,
 {
 	elf_prfpregset_t *fpregset;
 
-	fpregset = buf;
 	KASSERT(size == sizeof(*fpregset), ("%s: invalid size", __func__));
+
+	fpregset = buf;
 #if defined(COMPAT_FREEBSD32) && __ELF_WORD_SIZE == 32
-	set_fpregs32(td, fpregset);
+	return (set_fpregs32(td, fpregset) == 0);
 #else
-	set_fpregs(td, fpregset);
+	return (set_fpregs(td, fpregset) == 0);
 #endif
-	return (true);
 }
 
 static struct regset __elfN(regset_fpregset) = {

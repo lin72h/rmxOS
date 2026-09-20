@@ -4423,7 +4423,7 @@ ipf_rule_compare(frentry_t *fr1, frentry_t *fr2)
 /* Returns:     int - 0 == success, > 0 == errno value                      */
 /* Parameters:  unit(I)     - device for which this is for                  */
 /*              req(I)      - ioctl command (SIOC*)                         */
-/*              data(I)     - pointr to ioctl data                          */
+/*              data(I)     - pointer to ioctl data                         */
 /*              set(I)      - 1 or 0 (filter set)                           */
 /*              makecopy(I) - flag indicating whether data points to a rule */
 /*                            in kernel space & hence doesn't need copying. */
@@ -8546,7 +8546,7 @@ ipf_matcharray_load(ipf_main_softc_t *softc, caddr_t data, ipfobj_t *objp,
 int
 ipf_matcharray_verify(int *array, int arraysize)
 {
-	int i, nelem, maxidx;
+	u_int i, nelem, maxidx;
 	ipfexp_t *e;
 
 	nelem = arraysize / sizeof(*array);
@@ -8607,7 +8607,7 @@ ipf_matcharray_verify(int *array, int arraysize)
 static int
 ipf_fr_matcharray(fr_info_t *fin, int *array)
 {
-	int i, n, *x, rv, p;
+	u_int i, n, *x, rv, p;
 	ipfexp_t *e;
 
 	rv = 0;

@@ -392,6 +392,7 @@
 #define	FREEBSD32_SYS_thr_set_name	464
 #define	FREEBSD32_SYS_freebsd32_aio_fsync	465
 #define	FREEBSD32_SYS_rtprio_thread	466
+#define	FREEBSD32_SYS_freebsd32_twq_kernreturn	468
 #define	FREEBSD32_SYS_sctp_peeloff	471
 #define	FREEBSD32_SYS_sctp_generic_sendmsg	472
 #define	FREEBSD32_SYS_sctp_generic_sendmsg_iov	473
@@ -522,6 +523,9 @@
 #define	FREEBSD32_SYS_pdrfork	600
 #define	FREEBSD32_SYS_freebsd32_pdwait	601
 #define	FREEBSD32_SYS_renameat2	602
+#define	FREEBSD32_SYS_pdopenpid	603
+#define	FREEBSD32_SYS_pddupfd	604
+#define	FREEBSD32_SYS_freebsd32_pdptrace	605
 #define	FREEBSD32_SYS__kernelrpc_mach_vm_allocate_trap	610
 #define	FREEBSD32_SYS__kernelrpc_mach_vm_deallocate_trap	612
 #define	FREEBSD32_SYS__kernelrpc_mach_vm_protect_trap	614

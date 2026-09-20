@@ -543,6 +543,9 @@
 #define	SYS_pdrfork	600
 #define	SYS_pdwait	601
 #define	SYS_renameat2	602
+#define	SYS_pdopenpid	603
+#define	SYS_pddupfd	604
+#define	SYS_pdptrace	605
 #define	SYS__kernelrpc_mach_vm_allocate_trap	610
 #define	SYS__kernelrpc_mach_vm_deallocate_trap	612
 #define	SYS__kernelrpc_mach_vm_protect_trap	614

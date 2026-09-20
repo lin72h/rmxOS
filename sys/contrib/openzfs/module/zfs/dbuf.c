@@ -671,8 +671,7 @@ dnode_level_is_l2cacheable(blkptr_t *bp, dnode_t *dn, int64_t level)
 {
 	if (dn->dn_objset->os_secondary_cache == ZFS_CACHE_ALL ||
 	    (dn->dn_objset->os_secondary_cache == ZFS_CACHE_METADATA &&
-	    (level > 0 ||
-	    DMU_OT_IS_METADATA(dn->dn_handle->dnh_dnode->dn_type)))) {
+	    (level > 0 || DMU_OT_IS_METADATA(dn->dn_type)))) {
 		if (l2arc_exclude_special == 0)
 			return (B_TRUE);
 
@@ -1477,17 +1476,25 @@ dbuf_read_hole(dmu_buf_impl_t *db, dnode_t *dn, blkptr_t *bp)
 
 	int is_hole = bp == NULL || BP_IS_HOLE(bp);
 	/*
-	 * For level 0 blocks only, if the above check fails:
-	 * Recheck BP_IS_HOLE() after dnode_block_freed() in case dnode_sync()
-	 * processes the delete record and clears the bp while we are waiting
-	 * for the dn_mtx (resulting in a "no" from block_freed).
+	 * For level 0 blocks only, if the above check didn't find a hole,
+	 * consult dnode_block_freed() to check for pending frees.
 	 *
-	 * If bp != db->db_blkptr, it means that it was overridden (by a block
-	 * clone or direct I/O write). We cannot rely on dnode_block_freed as
-	 * the range can be freed in an earlier TXG but overridden in later.
+	 * If the block has been overridden by a block clone or direct I/O
+	 * write, we can't use dnode_block_freed() directly because it would
+	 * find frees from TXGs before the override, which should not make
+	 * the block appear freed.  Instead, check only free ranges from
+	 * TXGs after the override.
 	 */
-	if (!is_hole && db->db_level == 0 && bp == db->db_blkptr)
-		is_hole = dnode_block_freed(dn, db->db_blkid) || BP_IS_HOLE(bp);
+	if (!is_hole && db->db_level == 0) {
+		dbuf_dirty_record_t *dr = list_head(&db->db_dirty_records);
+		if (dr != NULL &&
+		    (dr->dt.dl.dr_brtwrite || dr->dt.dl.dr_diowrite)) {
+			is_hole = dnode_block_freed_after(dn,
+			    db->db_blkid, dr->dr_txg);
+		} else {
+			is_hole = dnode_block_freed(dn, db->db_blkid);
+		}
+	}
 
 	if (is_hole) {
 		db_data = dbuf_alloc_arcbuf(db);
@@ -3629,7 +3636,6 @@ typedef struct dbuf_prefetch_arg {
 	int dpa_curlevel; /* The current level that we're reading */
 	dnode_t *dpa_dnode; /* The dnode associated with the prefetch */
 	zio_priority_t dpa_prio; /* The priority I/Os should be issued at. */
-	zio_t *dpa_zio; /* The parent zio_t for all prefetches. */
 	arc_flags_t dpa_aflags; /* Flags to pass to the final prefetch. */
 	dbuf_prefetch_fn dpa_cb; /* prefetch completion callback */
 	void *dpa_arg; /* prefetch completion arg */
@@ -3681,8 +3687,7 @@ dbuf_issue_final_prefetch(dbuf_prefetch_arg_t *dpa, blkptr_t *bp)
 
 	ASSERT3U(dpa->dpa_curlevel, ==, BP_GET_LEVEL(bp));
 	ASSERT3U(dpa->dpa_curlevel, ==, dpa->dpa_zb.zb_level);
-	ASSERT(dpa->dpa_zio != NULL);
-	(void) arc_read(dpa->dpa_zio, dpa->dpa_spa, bp,
+	(void) arc_read(NULL, dpa->dpa_spa, bp,
 	    dbuf_issue_final_prefetch_done, dpa,
 	    dpa->dpa_prio, zio_flags, &aflags, &dpa->dpa_zb);
 }
@@ -3782,7 +3787,7 @@ dbuf_prefetch_indirect_done(zio_t *zio, const zbookmark_phys_t *zb,
 		SET_BOOKMARK(&zb, dpa->dpa_zb.zb_objset,
 		    dpa->dpa_zb.zb_object, dpa->dpa_curlevel, nextblkid);
 
-		(void) arc_read(dpa->dpa_zio, dpa->dpa_spa,
+		(void) arc_read(NULL, dpa->dpa_spa,
 		    bp, dbuf_prefetch_indirect_done, dpa,
 		    ZIO_PRIORITY_SYNC_READ,
 		    ZIO_FLAG_CANFAIL | ZIO_FLAG_SPECULATIVE,
@@ -3877,9 +3882,6 @@ dbuf_prefetch_impl(dnode_t *dn, int64_t level, uint64_t blkid,
 
 	ASSERT3U(curlevel, ==, BP_GET_LEVEL(&bp));
 
-	zio_t *pio = zio_root(dmu_objset_spa(dn->dn_objset), NULL, NULL,
-	    ZIO_FLAG_CANFAIL);
-
 	dbuf_prefetch_arg_t *dpa = kmem_zalloc(sizeof (*dpa), KM_SLEEP);
 	dsl_dataset_t *ds = dn->dn_objset->os_dsl_dataset;
 	SET_BOOKMARK(&dpa->dpa_zb, ds != NULL ? ds->ds_object : DMU_META_OBJSET,
@@ -3890,7 +3892,6 @@ dbuf_prefetch_impl(dnode_t *dn, int64_t level, uint64_t blkid,
 	dpa->dpa_spa = dn->dn_objset->os_spa;
 	dpa->dpa_dnode = dn;
 	dpa->dpa_epbs = epbs;
-	dpa->dpa_zio = pio;
 	dpa->dpa_cb = cb;
 	dpa->dpa_arg = arg;
 
@@ -3919,17 +3920,12 @@ dbuf_prefetch_impl(dnode_t *dn, int64_t level, uint64_t blkid,
 
 		SET_BOOKMARK(&zb, ds != NULL ? ds->ds_object : DMU_META_OBJSET,
 		    dn->dn_object, curlevel, curblkid);
-		(void) arc_read(dpa->dpa_zio, dpa->dpa_spa,
+		(void) arc_read(NULL, dpa->dpa_spa,
 		    &bp, dbuf_prefetch_indirect_done, dpa,
 		    ZIO_PRIORITY_SYNC_READ,
 		    ZIO_FLAG_CANFAIL | ZIO_FLAG_SPECULATIVE,
 		    &iter_aflags, &zb);
 	}
-	/*
-	 * We use pio here instead of dpa_zio since it's possible that
-	 * dpa may have already been freed.
-	 */
-	zio_nowait(pio);
 	return (1);
 no_issue:
 	if (cb != NULL)

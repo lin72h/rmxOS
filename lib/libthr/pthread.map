@@ -374,5 +374,6 @@ FBSD_1.8 {
 };
 
 FBSD_1.9 {
+	 pthread_cond_clockwait;
 	 pthread_tryjoin_np;
 };

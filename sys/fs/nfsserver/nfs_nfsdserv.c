@@ -579,6 +579,16 @@ nfsrvd_setattr(struct nfsrv_descript *nd, __unused int isdgram,
 		NFSVNO_SETATTRVAL(&nva2, btime, nva.na_btime);
 		nd->nd_repstat = nfsvno_setattr(vp, &nva2, nd->nd_cred, p,
 		    exp);
+		/*
+		 * ZFS stores with early versions do not support va_birthtime
+		 * and will reply EINVAL when setting is attempted.  This
+		 * breaks the MacOS NFSv4 client, so pretend it succeeded if
+		 * ctime and/or mtime were set as well.
+		 */
+		if (nd->nd_repstat == EINVAL &&
+		    (NFSISSET_ATTRBIT(&retbits, NFSATTRBIT_TIMEACCESSSET) ||
+		     NFSISSET_ATTRBIT(&retbits, NFSATTRBIT_TIMEMODIFYSET)))
+			nd->nd_repstat = 0;
 		if (!nd->nd_repstat)
 		    NFSSETBIT_ATTRBIT(&retbits, NFSATTRBIT_TIMECREATE);
 	    }
@@ -1018,13 +1028,16 @@ nfsrvd_read(struct nfsrv_descript *nd, __unused int isdgram,
 	if (cnt > 0) {
 		/*
 		 * If cnt > MCLBYTES and the reply will not be saved, use
-		 * ext_pgs mbufs for TLS.
+		 * ext_pgs mbufs for TLS of if enabled via
+		 * vfs.nfsd.enable_mextpg.
 		 * For NFSv4.0, we do not know for sure if the reply will
 		 * be saved, so do not use ext_pgs mbufs for NFSv4.0.
 		 * Always use ext_pgs mbufs if ND_EXTPG is set.
 		 */
 		if ((nd->nd_flag & ND_EXTPG) != 0 || (cnt > MCLBYTES &&
-		    (nd->nd_flag & (ND_TLS | ND_SAVEREPLY)) == ND_TLS &&
+		    ((nd->nd_flag & (ND_TLS | ND_SAVEREPLY)) == ND_TLS ||
+		     (nd->nd_flag & (ND_CANEXTPG | ND_SAVEREPLY)) ==
+		      ND_CANEXTPG) &&
 		    (nd->nd_flag & (ND_NFSV4 | ND_NFSV41)) != ND_NFSV4))
 			nd->nd_repstat = nfsvno_read(vp, off, cnt, nd->nd_cred,
 			    nd->nd_maxextsiz, p, &m3, &m2);

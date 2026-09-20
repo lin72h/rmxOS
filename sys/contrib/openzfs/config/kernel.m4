@@ -65,6 +65,7 @@ AC_DEFUN([ZFS_AC_KERNEL_TEST_SRC], [
 	ZFS_AC_KERNEL_SRC_SHRINKER
 	ZFS_AC_KERNEL_SRC_MKDIR
 	ZFS_AC_KERNEL_SRC_LOOKUP_FLAGS
+	ZFS_AC_KERNEL_SRC_IDMAP
 	ZFS_AC_KERNEL_SRC_CREATE
 	ZFS_AC_KERNEL_SRC_PERMISSION
 	ZFS_AC_KERNEL_SRC_TMPFILE
@@ -77,9 +78,10 @@ AC_DEFUN([ZFS_AC_KERNEL_TEST_SRC], [
 	ZFS_AC_KERNEL_SRC_TRUNCATE_SETSIZE
 	ZFS_AC_KERNEL_SRC_SECURITY_INODE
 	ZFS_AC_KERNEL_SRC_FS_CONTEXT
+	ZFS_AC_KERNEL_SRC_FS_PARSE
+	ZFS_AC_KERNEL_SRC_VFS_PARSE_FS_STRING_3ARGS
 	ZFS_AC_KERNEL_SRC_SB_DYING
 	ZFS_AC_KERNEL_SRC_SET_NLINK
-	ZFS_AC_KERNEL_SRC_SGET
 	ZFS_AC_KERNEL_SRC_VFS_FILEMAP_DIRTY_FOLIO
 	ZFS_AC_KERNEL_SRC_VFS_READ_FOLIO
 	ZFS_AC_KERNEL_SRC_VFS_MIGRATE_FOLIO
@@ -96,7 +98,7 @@ AC_DEFUN([ZFS_AC_KERNEL_TEST_SRC], [
 	ZFS_AC_KERNEL_SRC_VFS_DEDUPE_FILE_RANGE
 	ZFS_AC_KERNEL_SRC_KMAP_ATOMIC_ARGS
 	ZFS_AC_KERNEL_SRC_KMAP_LOCAL_PAGE
-	ZFS_AC_KERNEL_SRC_FOLLOW_DOWN_ONE
+	ZFS_AC_KERNEL_SRC_FOLLOW_DOWN
 	ZFS_AC_KERNEL_SRC_MAKE_REQUEST_FN
 	ZFS_AC_KERNEL_SRC_GENERIC_IO_ACCT
 	ZFS_AC_KERNEL_SRC_FPU
@@ -142,6 +144,7 @@ AC_DEFUN([ZFS_AC_KERNEL_TEST_SRC], [
 	ZFS_AC_KERNEL_SRC_INODE_GENERIC_DROP
 	ZFS_AC_KERNEL_SRC_KASAN_ENABLED
 	ZFS_AC_KERNEL_SRC_FILELOCK_HEADER
+	ZFS_AC_KERNEL_SRC_WORKQUEUE
 	case "$host_cpu" in
 		powerpc*)
 			ZFS_AC_KERNEL_SRC_CPU_HAS_FEATURE
@@ -152,9 +155,7 @@ AC_DEFUN([ZFS_AC_KERNEL_TEST_SRC], [
 			;;
 	esac
 
-	AC_MSG_CHECKING([for available kernel interfaces])
-	ZFS_LINUX_TEST_COMPILE_ALL([kabi])
-	AC_MSG_RESULT([done])
+	ZFS_LINUX_TEST_COMPILE_ALL([kabi], [for available kernel interfaces])
 ])
 
 dnl #
@@ -189,6 +190,7 @@ AC_DEFUN([ZFS_AC_KERNEL_TEST_RESULT], [
 	ZFS_AC_KERNEL_SHRINKER
 	ZFS_AC_KERNEL_MKDIR
 	ZFS_AC_KERNEL_LOOKUP_FLAGS
+	ZFS_AC_KERNEL_IDMAP
 	ZFS_AC_KERNEL_CREATE
 	ZFS_AC_KERNEL_PERMISSION
 	ZFS_AC_KERNEL_TMPFILE
@@ -201,9 +203,10 @@ AC_DEFUN([ZFS_AC_KERNEL_TEST_RESULT], [
 	ZFS_AC_KERNEL_TRUNCATE_SETSIZE
 	ZFS_AC_KERNEL_SECURITY_INODE
 	ZFS_AC_KERNEL_FS_CONTEXT
+	ZFS_AC_KERNEL_FS_PARSE
+	ZFS_AC_KERNEL_VFS_PARSE_FS_STRING_3ARGS
 	ZFS_AC_KERNEL_SB_DYING
 	ZFS_AC_KERNEL_SET_NLINK
-	ZFS_AC_KERNEL_SGET
 	ZFS_AC_KERNEL_VFS_FILEMAP_DIRTY_FOLIO
 	ZFS_AC_KERNEL_VFS_READ_FOLIO
 	ZFS_AC_KERNEL_VFS_MIGRATE_FOLIO
@@ -220,7 +223,7 @@ AC_DEFUN([ZFS_AC_KERNEL_TEST_RESULT], [
 	ZFS_AC_KERNEL_VFS_DEDUPE_FILE_RANGE
 	ZFS_AC_KERNEL_KMAP_ATOMIC_ARGS
 	ZFS_AC_KERNEL_KMAP_LOCAL_PAGE
-	ZFS_AC_KERNEL_FOLLOW_DOWN_ONE
+	ZFS_AC_KERNEL_FOLLOW_DOWN
 	ZFS_AC_KERNEL_MAKE_REQUEST_FN
 	ZFS_AC_KERNEL_GENERIC_IO_ACCT
 	ZFS_AC_KERNEL_FPU
@@ -267,6 +270,7 @@ AC_DEFUN([ZFS_AC_KERNEL_TEST_RESULT], [
 	ZFS_AC_KERNEL_INODE_GENERIC_DROP
 	ZFS_AC_KERNEL_KASAN_ENABLED
 	ZFS_AC_KERNEL_FILELOCK_HEADER
+	ZFS_AC_KERNEL_WORKQUEUE
 	case "$host_cpu" in
 		powerpc*)
 			ZFS_AC_KERNEL_CPU_HAS_FEATURE
@@ -752,6 +756,108 @@ AC_DEFUN([ZFS_LINUX_TEST_MODPOST], [
 ])
 
 dnl #
+dnl # Progress output for ZFS_LINUX_TEST_COMPILE_ALL
+dnl #
+dnl # From clean, we currently have ~250 kernel tests to compile. This can
+dnl # take anywhere from a few seconds to a few minutes while we wait for
+dnl # the module build invocation to complete (see ZFS_LINUX_COMPILE).
+dnl #
+dnl # To show some progress in the main set of tests, we start a background
+dnl # job to monitor the build progress and update the output.
+dnl #
+AC_DEFUN([_ZFS_LINUX_TEST_COMPILE_PROGRESS_START], [
+	dnl # normal "checking for..." output
+	AC_MSG_CHECKING([$2])
+
+	dnl # don't start the background job if configure was called with
+	dnl # --silent or --quiet, or if configure's output stream is not
+	dnl # attached to a terminal
+	AS_IF([test "x$silent" != "xyes" -a -t AS_MESSAGE_FD], [
+		dnl # save "checking" message for cleanup later
+		_zfs_linux_test_progress_text="$2"
+
+		dnl # new shell job in background
+		(
+			dnl # ZFS_LINUX_CONFTEST_MAKEFILE adds one line per
+			dnl # test to the top Makefile, so the line count
+			dnl # is our target
+			total=$(wc -l < $1/Makefile)
+			count=0
+
+			dnl # eject if our parent process has gone away. this
+			dnl # is protection against the parent being killed.
+			dnl # (we can't use trap because autoconf generates
+			dnl # that and doesn't provide an easy way to hook it).
+			while kill -0 $$ 2>/dev/null ; do
+
+				dnl # ZFS_LINUX_TEST_COMPILE_ALL has a short
+				dnl # second stage for modpost, where build.log
+				dnl # recreated. we make some effort to both
+				dnl # detect that and handle it, mostly by
+				dnl # making sure the counter never goes
+				dnl # backwards.
+				if test "$count" -lt "$total" ; then
+					dnl # if build.log went away, then
+					dnl # we never got to do a last count,
+					dnl # so we can assume they're all
+					dnl # finished and just bump the count
+					dnl # to the total
+					if ! test -f $1/build.log ; then
+						count=$total
+					else
+						dnl # look for compilation lines
+						dnl # (CC) for .o files that
+						dnl # are in a dir (so not
+						dnl # whole-of-build artifacts)
+						dnl # and only have a a single
+						dnl # period (so not .mod.o
+						dnl # link artifacts)
+						count_n=$(awk '/CC/ && /\/[[^\.]]+\.o$/ { c++ } END { print c }' $1/build.log 2>/dev/null)
+						if test "x$count_n" != "x" ; then
+							dnl # empty output
+							dnl # means awk failed,
+							dnl # likely build.log
+							dnl # went away. use
+							dnl # the current count
+							count=$count_n
+						fi
+					fi
+
+					dnl # re-output the entire message with
+					dnl # the new counts
+					printf '\rchecking %s... %d/%d' "$2" "$count" "$total" >&6
+				fi
+
+				dnl # yield before loop
+				sleep 0.5
+			done
+		) &
+
+		dnl # save the pid so we can kill it later
+		_zfs_linux_test_progress_pid=$!
+	])
+])
+
+AC_DEFUN([_ZFS_LINUX_TEST_COMPILE_PROGRESS_DONE], [
+	dnl # only do cleanup if we actually started the job
+	AS_IF([test "x$_zfs_linux_test_progress_pid" != "x"], [
+		dnl # kill it; no-op if it already died
+		kill $_zfs_linux_test_progress_pid 2>/dev/null
+		dnl # wait for it to really go away and clean it up
+		wait $_zfs_linux_test_progress_pid 2>/dev/null
+		dnl # reprint the original checking line. the control code
+		dnl # is ANSI "erase entire line"
+		printf '\r\033\1332Kchecking %s... ' "$_zfs_linux_test_progress_text" >&AS_MESSAGE_FD
+		dnl # cleanup for next run
+		_zfs_linux_test_progress_pid=
+		_zfs_linux_test_progress_text=
+	])
+
+	dnl # normal final output for screen and config.log
+	AC_MSG_RESULT([$1])
+])
+
+dnl #
 dnl # Perform the compilation of the test cases in two phases.
 dnl #
 dnl # Phase 1) attempt to build the object files for all of the tests
@@ -769,6 +875,10 @@ dnl # The maximum allowed parallelism can be controlled by setting the
 dnl # TEST_JOBS environment variable.  Otherwise, it default to $(nproc).
 dnl #
 AC_DEFUN([ZFS_LINUX_TEST_COMPILE_ALL], [
+	AS_IF([test "x$2" != "x"], [
+		_ZFS_LINUX_TEST_COMPILE_PROGRESS_START([build], [$2])
+	])
+
 	dnl # Phase 1 - Compilation only, final linking is skipped.
 	ZFS_LINUX_TEST_COMPILE([$1], [build])
 
@@ -815,6 +925,10 @@ AC_DEFUN([ZFS_LINUX_TEST_COMPILE_ALL], [
 				touch build/$name/$name.ko
 			])
 		done
+	])
+
+	AS_IF([test "x$2" != "x"], [
+		_ZFS_LINUX_TEST_COMPILE_PROGRESS_DONE([done])
 	])
 ])
 

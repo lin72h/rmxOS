@@ -483,6 +483,8 @@ add_iscsi_port(struct kports &kports, struct conf *conf,
 			log_warnx("Failed to add portal-group \"%s\"", pg_name);
 			return;
 		}
+
+		pg->set_kernel();
 	}
 	pg->set_tag(port.cfiscsi_portal_group_tag);
 	if (!conf->add_port(targ, pg, port.port_id)) {
@@ -520,6 +522,8 @@ add_nvmf_port(struct conf *conf, const struct cctl_port &port,
 			    tg_name);
 			return;
 		}
+
+		pg->set_kernel();
 	}
 	pg->set_tag(port.portid);
 	if (!conf->add_port(targ, pg, port.port_id)) {
@@ -545,7 +549,10 @@ conf_new_from_kernel(struct kports &kports)
 			continue;
 
 		std::string name = port.port_name;
-		if (port.pp != 0) {
+		if (port.port_frontend == "ioctl")
+			name += "/" + std::to_string(port.pp) + "/" +
+			    std::to_string(port.vp);
+		else if (port.pp != 0 || port.vp != 0) {
 			name += "/" + std::to_string(port.pp);
 			if (port.vp != 0)
 				name += "/" + std::to_string(port.vp);

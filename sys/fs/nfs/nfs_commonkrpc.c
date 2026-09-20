@@ -1145,7 +1145,20 @@ tryagain:
 			if ((nmp != NULL && i == NFSV4OP_SEQUENCE && j != 0) ||
 			   (clp != NULL && i == NFSV4OP_CBSEQUENCE && j != 0)) {
 				NFSCL_DEBUG(1, "failed seq=%d\n", j);
-				if (sep != NULL && i == NFSV4OP_SEQUENCE &&
+				KASSERT(slot == -1, ("newnfs_request: slot not"
+				    " -1"));
+				/*
+				 * RFC8881 (unlike RFC5661) specifies that a
+				 * NFSERR_DELAY reply to SEQUENCE is handled
+				 * by a retry with same slot/sequence#.
+				 * (Although not explicit, I will assume this
+				 *  applies to CB_SEQUENCE as well.)
+				 */
+				if (j == NFSERR_DELAY) {
+					nd->nd_repstat =
+					    NFSERR_RETRYUNCACHEDREP;
+				} else if (sep != NULL &&
+				    i == NFSV4OP_SEQUENCE &&
 				    j == NFSERR_SEQMISORDERED) {
 					mtx_lock(&sep->nfsess_mtx);
 					sep->nfsess_badslots |=
@@ -1265,19 +1278,29 @@ tryagain:
 					goto out;
 				}
 				sep = NFSMNT_MDSSESSION(nmp);
-				if (bcmp(sep->nfsess_sessionid, nd->nd_sequence,
-				    NFSX_V4SESSIONID) == 0) {
-					printf("Initiate recovery. If server "
-					    "has not rebooted, "
-					    "check NFS clients for unique "
-					    "/etc/hostid's\n");
-					/* Initiate recovery. */
+				if (bcmp(sep->nfsess_sessionid,
+				    nd->nd_sessionid, NFSX_V4SESSIONID) == 0) {
+					/*
+					 * Initiate recovery.  Even if
+					 * nfsess_defunct is already set,
+					 * another recovery may be needed.
+					 * NFSCLFLAGS_RECVRINPRG |
+					 * NFSCLFLAGS_RECOVER should avoid
+					 * recovery storms.
+					 */
 					sep->nfsess_defunct = 1;
 					NFSCL_DEBUG(1, "Marked defunct\n");
-					if (nmp->nm_clp != NULL) {
+					if (nmp->nm_clp != NULL &&
+					    (nmp->nm_clp->nfsc_flags &
+					     (NFSCLFLAGS_RECVRINPROG |
+					      NFSCLFLAGS_RECOVER)) == 0) {
 						nmp->nm_clp->nfsc_flags |=
 						    NFSCLFLAGS_RECOVER;
 						wakeup(nmp->nm_clp);
+						printf("Initiate recovery. If "
+						    "server has not rebooted, "
+						    "check NFS clients for "
+						    "unique /etc/hostid's\n");
 					}
 				}
 				NFSUNLOCKCLSTATE();

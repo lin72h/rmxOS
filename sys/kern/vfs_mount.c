@@ -500,7 +500,7 @@ vfs_ref_from_vp(struct vnode *vp)
 	if (__predict_false(mp == NULL)) {
 		return (mp);
 	}
-	if (vfs_op_thread_enter(mp, mpcpu)) {
+	if (vfs_op_thread_enter(mp, &mpcpu)) {
 		if (__predict_true(mp == vp->v_mount)) {
 			vfs_mp_count_add_pcpu(mpcpu, ref, 1);
 			vfs_op_thread_exit(mp, mpcpu);
@@ -527,7 +527,7 @@ vfs_ref(struct mount *mp)
 	struct mount_pcpu *mpcpu;
 
 	CTR2(KTR_VFS, "%s: mp %p", __func__, mp);
-	if (vfs_op_thread_enter(mp, mpcpu)) {
+	if (vfs_op_thread_enter(mp, &mpcpu)) {
 		vfs_mp_count_add_pcpu(mpcpu, ref, 1);
 		vfs_op_thread_exit(mp, mpcpu);
 		return;
@@ -645,7 +645,7 @@ vfs_rel(struct mount *mp)
 	struct mount_pcpu *mpcpu;
 
 	CTR2(KTR_VFS, "%s: mp %p", __func__, mp);
-	if (vfs_op_thread_enter(mp, mpcpu)) {
+	if (vfs_op_thread_enter(mp, &mpcpu)) {
 		vfs_mp_count_sub_pcpu(mpcpu, ref, 1);
 		vfs_op_thread_exit(mp, mpcpu);
 		return;
@@ -1155,12 +1155,12 @@ vfs_domount_first(
 	if (error == 0)
 		error = vinvalbuf(vp, V_SAVE, 0, 0);
 	if (vfsp->vfc_flags & VFCF_FILEMOUNT) {
-		if (error == 0 && vp->v_type != VDIR && vp->v_type != VREG)
+		if (error == 0 && vp->v_type != VDIR && vp->v_type != VREG && vp->v_type != VSOCK)
 			error = EINVAL;
 		/*
 		 * For file mounts, ensure that there is only one hardlink to the file.
 		 */
-		if (error == 0 && vp->v_type == VREG && va.va_nlink != 1)
+		if (error == 0 && (vp->v_type == VREG || vp->v_type == VSOCK) && va.va_nlink != 1)
 			error = EINVAL;
 	} else {
 		if (error == 0 && vp->v_type != VDIR)
@@ -1678,7 +1678,7 @@ vfs_domount(
 	 * Don't allow stacking file mounts to work around problems with the way
 	 * that namei sets nd.ni_dvp to vp_crossmp for these.
 	 */
-	if (vp->v_type == VREG)
+	if (vp->v_type == VREG || vp->v_type == VSOCK)
 		fsflags |= MNT_NOCOVER;
 	if ((fsflags & MNT_UPDATE) == 0) {
 		if ((vp->v_vflag & VV_ROOT) != 0 &&
@@ -1852,7 +1852,8 @@ vfs_check_usecounts(struct mount *mp)
 }
 
 static void
-dounmount_cleanup(struct mount *mp, struct vnode *coveredvp, int mntkflags)
+dounmount_cleanup(struct mount *mp, struct vnode *coveredvp, int mntkflags,
+    bool disablerec)
 {
 
 	mtx_assert(MNT_MTX(mp), MA_OWNED);
@@ -1864,6 +1865,8 @@ dounmount_cleanup(struct mount *mp, struct vnode *coveredvp, int mntkflags)
 	vfs_op_exit_locked(mp);
 	MNT_IUNLOCK(mp);
 	if (coveredvp != NULL) {
+		if (disablerec)
+			VN_LOCK_DREC(coveredvp);
 		VOP_UNLOCK(coveredvp);
 		vdrop(coveredvp);
 	}
@@ -2165,6 +2168,7 @@ dounmount(struct mount *mp, uint64_t flags, struct thread *td)
 	uint64_t async_flag;
 	int mnt_gen_r;
 	unsigned int retries;
+	bool coveredrec;
 
 	KASSERT((flags & MNT_DEFERRED) == 0 ||
 	    (flags & (MNT_RECURSE | MNT_FORCE)) == (MNT_RECURSE | MNT_FORCE),
@@ -2273,6 +2277,7 @@ dounmount(struct mount *mp, uint64_t flags, struct thread *td)
 	if ((flags & MNT_DEFERRED) != 0)
 		vfs_ref(mp);
 
+	coveredrec = false;
 	if ((coveredvp = mp->mnt_vnodecovered) != NULL) {
 		mnt_gen_r = mp->mnt_gen;
 		VI_LOCK(coveredvp);
@@ -2289,6 +2294,19 @@ dounmount(struct mount *mp, uint64_t flags, struct thread *td)
 			vfs_rel(mp);
 			return (EBUSY);
 		}
+
+		/*
+		 * For some complex nullfs mount configurations, it is
+		 * possible to get the covered vnode lock for the
+		 * mount shared with some inside-mount vnode lock.
+		 * Then at unmount time, vflush() would recurse on the
+		 * covered vnode lock when reclaiming the vnode.
+		 *
+		 * To work around it, temprorarily allow recursion for
+		 * the covered vnode lock.
+		 */
+		coveredrec = VN_LOCK_CANREC(coveredvp);
+		VN_LOCK_AREC(coveredvp);
 	}
 
 	vfs_op_enter(mp);
@@ -2298,7 +2316,7 @@ dounmount(struct mount *mp, uint64_t flags, struct thread *td)
 	if ((mp->mnt_kern_flag & MNTK_UNMOUNT) != 0 ||
 	    (mp->mnt_flag & MNT_UPDATE) != 0 ||
 	    !TAILQ_EMPTY(&mp->mnt_uppers)) {
-		dounmount_cleanup(mp, coveredvp, 0);
+		dounmount_cleanup(mp, coveredvp, 0, !coveredrec);
 		return (EBUSY);
 	}
 	mp->mnt_kern_flag |= MNTK_UNMOUNT;
@@ -2311,7 +2329,8 @@ dounmount(struct mount *mp, uint64_t flags, struct thread *td)
 		MNT_ILOCK(mp);
 		if (error != 0) {
 			vn_seqc_write_end(coveredvp);
-			dounmount_cleanup(mp, coveredvp, MNTK_UNMOUNT);
+			dounmount_cleanup(mp, coveredvp, MNTK_UNMOUNT,
+			    !coveredrec);
 			if (rootvp != NULL) {
 				vn_seqc_write_end(rootvp);
 				vrele(rootvp);
@@ -2393,6 +2412,8 @@ dounmount(struct mount *mp, uint64_t flags, struct thread *td)
 		MNT_IUNLOCK(mp);
 		if (coveredvp) {
 			vn_seqc_write_end(coveredvp);
+			if (!coveredrec)
+				VN_LOCK_DREC(coveredvp);
 			VOP_UNLOCK(coveredvp);
 			vdrop(coveredvp);
 		}
@@ -2413,6 +2434,8 @@ dounmount(struct mount *mp, uint64_t flags, struct thread *td)
 		coveredvp->v_mountedhere = NULL;
 		vn_seqc_write_end_locked(coveredvp);
 		VI_UNLOCK(coveredvp);
+		if (!coveredrec)
+			VN_LOCK_DREC(coveredvp);
 		VOP_UNLOCK(coveredvp);
 		vdrop(coveredvp);
 	}

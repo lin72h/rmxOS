@@ -863,6 +863,9 @@ typedef struct {
 #define	NT_ARM_SVE	0x405	/* ARM SVE registers */
 #define	NT_ARM_ADDR_MASK	0x406	/* arm64 address mask (e.g. for TBI) */
 
+/* FDO (freedesktop.org) note types. */
+#define	NT_FDO_PACKAGING_METADATA		0xcafe1a7e
+
 /* GNU note types. */
 #define	NT_GNU_ABI_TAG		1
 #define	NT_GNU_HWCAP		2
@@ -1146,6 +1149,7 @@ typedef struct {
 #define	R_ARM_THM_JUMP19	51
 #define	R_ARM_GNU_VTENTRY	100
 #define	R_ARM_GNU_VTINHERIT	101
+#define	R_ARM_IRELATIVE		160
 #define	R_ARM_RSBREL32		250
 #define	R_ARM_THM_RPC22		251
 #define	R_ARM_RREL32		252

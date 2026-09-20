@@ -113,7 +113,7 @@ SDT_PROBE_DEFINE4(vfs, namei, lookup, return, "int", "struct vnode *", "bool",
 uma_zone_t namei_zone;
 
 /* Placeholder vnode for mp traversal. */
-static struct vnode *vp_crossmp;
+struct vnode *vp_crossmp;
 
 static int
 crossmp_vop_islocked(struct vop_islocked_args *ap)
@@ -133,7 +133,7 @@ crossmp_vop_lock1(struct vop_lock1_args *ap)
 	lk = vp->v_vnlock;
 	flags = ap->a_flags;
 
-	KASSERT((flags & (LK_SHARED | LK_NOWAIT)) == (LK_SHARED | LK_NOWAIT),
+	KASSERT((flags & LK_TYPE_MASK) == LK_SHARED,
 	    ("%s: invalid lock request 0x%x for crossmp", __func__, flags));
 
 	if ((flags & LK_INTERLOCK) != 0)
@@ -1483,15 +1483,41 @@ nextname:
 		error = EROFS;
 		goto bad2;
 	}
-	if (!wantparent) {
+	if (wantparent) {
+		/*
+		 * Do not return vp_crossmp for the case of mount
+		 * over the regular file.  Substitute ni_dvp with the
+		 * covered vnode.
+		 */
+		if (ndp->ni_dvp == vp_crossmp &&
+		    (dp->v_vflag & VV_ROOT) != 0 && dp->v_type != VDIR) {
+			struct vnode *mvp;
+
+			vput(ndp->ni_dvp);
+			mvp = dp->v_mount->mnt_vnodecovered;
+			vref(mvp);
+			ndp->ni_dvp = mvp;
+			if ((cnp->cn_flags & LOCKPARENT) != 0) {
+				vn_lock_pair(dp, true, VOP_ISLOCKED(dp), mvp,
+				    false, LK_EXCLUSIVE);
+				if (VN_IS_DOOMED(dp) || VN_IS_DOOMED(mvp)) {
+					error = ENOENT;
+					goto bad2;
+				}
+			} else {
+				ni_dvp_unlocked = 1;
+			}
+		} else if ((cnp->cn_flags & LOCKPARENT) == 0 &&
+		    ndp->ni_dvp != dp) {
+			VOP_UNLOCK(ndp->ni_dvp);
+			ni_dvp_unlocked = 1;
+		}
+	} else {
 		ni_dvp_unlocked = 2;
 		if (ndp->ni_dvp != dp)
 			vput(ndp->ni_dvp);
 		else
 			vrele(ndp->ni_dvp);
-	} else if ((cnp->cn_flags & LOCKPARENT) == 0 && ndp->ni_dvp != dp) {
-		VOP_UNLOCK(ndp->ni_dvp);
-		ni_dvp_unlocked = 1;
 	}
 
 	if (cnp->cn_flags & AUDITVNODE1)

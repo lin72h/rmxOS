@@ -2304,6 +2304,16 @@ systrace_args(int sysnum, void *params, uint64_t *uarg, int *n_args)
 		*n_args = 3;
 		break;
 	}
+	/* freebsd32_twq_kernreturn */
+	case 468: {
+		struct freebsd32_twq_kernreturn_args *p = params;
+		iarg[a++] = p->op; /* int */
+		uarg[a++] = (intptr_t)p->arg2; /* void * */
+		iarg[a++] = p->arg3; /* int */
+		iarg[a++] = p->arg4; /* int */
+		*n_args = 4;
+		break;
+	}
 	/* sctp_peeloff */
 	case 471: {
 		struct sctp_peeloff_args *p = params;
@@ -3478,6 +3488,34 @@ systrace_args(int sysnum, void *params, uint64_t *uarg, int *n_args)
 		*n_args = 5;
 		break;
 	}
+	/* pdopenpid */
+	case 603: {
+		struct pdopenpid_args *p = params;
+		iarg[a++] = p->pid; /* pid_t */
+		iarg[a++] = p->flags; /* int */
+		*n_args = 2;
+		break;
+	}
+	/* pddupfd */
+	case 604: {
+		struct pddupfd_args *p = params;
+		iarg[a++] = p->pd; /* int */
+		iarg[a++] = p->fd; /* int */
+		iarg[a++] = p->flags; /* int */
+		*n_args = 3;
+		break;
+	}
+	/* freebsd32_pdptrace */
+	case 605: {
+		struct freebsd32_pdptrace_args *p = params;
+		iarg[a++] = p->req; /* int */
+		iarg[a++] = p->pfd; /* int */
+		iarg[a++] = p->lwpid; /* int */
+		uarg[a++] = (intptr_t)p->addr; /* void * */
+		iarg[a++] = p->data; /* int */
+		*n_args = 5;
+		break;
+	}
 	/* _kernelrpc_mach_vm_allocate_trap */
 	case 610: {
 		struct _kernelrpc_mach_vm_allocate_trap_args *p = params;
@@ -3655,9 +3693,8 @@ systrace_args(int sysnum, void *params, uint64_t *uarg, int *n_args)
 		uarg[a++] = p->rcv_name; /* uint32_t */
 		uarg[a++] = p->timeout; /* uint32_t */
 		uarg[a++] = p->notify; /* uint32_t */
-		uarg[a++] = (intptr_t)p->rcv_msg; /* void * */
-		uarg[a++] = p->scatter_list_size; /* uint32_t */
-		*n_args = 9;
+		uarg[a++] = (intptr_t)p->overwrite_args; /* void * */
+		*n_args = 8;
 		break;
 	}
 	/* semaphore_signal_trap */
@@ -7614,6 +7651,25 @@ systrace_entry_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 			break;
 		};
 		break;
+	/* freebsd32_twq_kernreturn */
+	case 468:
+		switch (ndx) {
+		case 0:
+			p = "int";
+			break;
+		case 1:
+			p = "userland void *";
+			break;
+		case 2:
+			p = "int";
+			break;
+		case 3:
+			p = "int";
+			break;
+		default:
+			break;
+		};
+		break;
 	/* sctp_peeloff */
 	case 471:
 		switch (ndx) {
@@ -9804,6 +9860,57 @@ systrace_entry_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 			break;
 		};
 		break;
+	/* pdopenpid */
+	case 603:
+		switch (ndx) {
+		case 0:
+			p = "pid_t";
+			break;
+		case 1:
+			p = "int";
+			break;
+		default:
+			break;
+		};
+		break;
+	/* pddupfd */
+	case 604:
+		switch (ndx) {
+		case 0:
+			p = "int";
+			break;
+		case 1:
+			p = "int";
+			break;
+		case 2:
+			p = "int";
+			break;
+		default:
+			break;
+		};
+		break;
+	/* freebsd32_pdptrace */
+	case 605:
+		switch (ndx) {
+		case 0:
+			p = "int";
+			break;
+		case 1:
+			p = "int";
+			break;
+		case 2:
+			p = "int";
+			break;
+		case 3:
+			p = "userland void *";
+			break;
+		case 4:
+			p = "int";
+			break;
+		default:
+			break;
+		};
+		break;
 	/* _kernelrpc_mach_vm_allocate_trap */
 	case 610:
 		switch (ndx) {
@@ -10118,9 +10225,6 @@ systrace_entry_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 			break;
 		case 7:
 			p = "userland void *";
-			break;
-		case 8:
-			p = "uint32_t";
 			break;
 		default:
 			break;
@@ -11817,6 +11921,11 @@ systrace_return_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 		if (ndx == 0 || ndx == 1)
 			p = "int";
 		break;
+	/* freebsd32_twq_kernreturn */
+	case 468:
+		if (ndx == 0 || ndx == 1)
+			p = "int";
+		break;
 	/* sctp_peeloff */
 	case 471:
 		if (ndx == 0 || ndx == 1)
@@ -12418,6 +12527,21 @@ systrace_return_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 		break;
 	/* renameat2 */
 	case 602:
+		if (ndx == 0 || ndx == 1)
+			p = "int";
+		break;
+	/* pdopenpid */
+	case 603:
+		if (ndx == 0 || ndx == 1)
+			p = "int";
+		break;
+	/* pddupfd */
+	case 604:
+		if (ndx == 0 || ndx == 1)
+			p = "int";
+		break;
+	/* freebsd32_pdptrace */
+	case 605:
 		if (ndx == 0 || ndx == 1)
 			p = "int";
 		break;
