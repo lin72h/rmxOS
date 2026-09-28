@@ -12,6 +12,10 @@ SUBDIR=		dtaudit		\
 		sdt		\
 		systrace
 
+.if ${WITHOUT_MODULES:U:Mdtnfscl} != ""
+SUBDIR:= ${SUBDIR:Ndtnfscl}
+.endif
+
 .if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "i386"
 SUBDIR+=	fasttrap systrace_linux
 .endif

@@ -1,0 +1,10 @@
+# rmxOS base-release kernel configuration.
+# Keep the Mach/workqueue debug baseline and disable NFS in the release kernel.
+include MACHDEBUGDEBUG
+
+ident	RMXOS-RELEASE
+
+nooptions	NFSCL
+nooptions	NFSD
+nooptions	NFSLOCKD
+nooptions	NFS_ROOT
