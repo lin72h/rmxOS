@@ -444,6 +444,10 @@ SUBDIR=	\
 	xz \
 	zlib
 
+.if ${KERN_OPTS:MCOMPAT_MACH}
+SUBDIR+=	mach
+.endif
+
 .if ${MK_AUTOFS} != "no" || defined(ALL_MODULES)
 _autofs=	autofs
 .endif
