@@ -48,61 +48,43 @@ __FBSDID("$FreeBSD$");
 #include <sys/mach/clock_types.h>
 #include <sys/mach/clock_server.h>
 
-#define timespecsub_netbsd(tsp, usp, vsp)                               \
-        do {                                                            \
-                (vsp)->tv_sec = (tsp)->tv_sec - (usp)->tv_sec;          \
-                (vsp)->tv_nsec = (tsp)->tv_nsec - (usp)->tv_nsec;       \
-                if ((vsp)->tv_nsec < 0) {                               \
-                        (vsp)->tv_sec--;                                \
-                        (vsp)->tv_nsec += 1000000000L;                  \
-                }                                                       \
-        } while (/* CONSTCOND */ 0)
-
-
-
 kern_return_t
-clock_sleep(mach_port_name_t clock_name, mach_sleep_type_t type, int sleep_sec, int sleep_nsec, mach_timespec_t *wakeup_time)
+clock_sleep(mach_port_name_t clock_name, mach_sleep_type_t type, int sleep_sec,
+    int sleep_nsec, mach_timespec_t *wakeup_time)
 {
-	struct timespec mts, cts, tts;
-	mach_timespec_t mcts;
-	int error;
-	int ticks;
-	thread_t thread;
+	struct timespec now;
+	mach_timespec_t wake;
+	sbintime_t deadline, uptime;
+	int error, channel = 0;
 
-	mts.tv_sec = sleep_sec;
-	mts.tv_nsec = sleep_nsec;
-
-	if (type == TIME_ABSOLUTE) {
-		nanotime(&cts);
-		timespecsub_netbsd(&mts, &cts, &tts);
-	} else {
-		tts.tv_sec = mts.tv_sec;
-		tts.tv_nsec = mts.tv_nsec;
+	/* Only the system uptime clock is supported by this trap. */
+	if (clock_name != 0 || (type != TIME_ABSOLUTE && type != TIME_RELATIVE) ||
+	    sleep_sec < 0 || sleep_nsec < 0 || sleep_nsec >= 1000000000)
+		return (KERN_INVALID_ARGUMENT);
+	deadline = (sbintime_t)sleep_sec * SBT_1S + nstosbt(sleep_nsec);
+	uptime = sbinuptime();
+	if (type == TIME_RELATIVE) {
+		if (deadline > SBT_MAX - uptime)
+			return (KERN_INVALID_ARGUMENT);
+		deadline += uptime;
 	}
-
-	ticks = tts.tv_sec * hz;
-	ticks += (tts.tv_nsec * hz) / 100000000L;
-
-	if (ticks <= 0)
-		return (EINVAL);
-
-	thread = current_thread();
-	thread->ith_block_lock_data = &curproc->p_mtx;
-	thread->timeout = ticks;
-	PROC_LOCK(curproc);
-	thread_block();
-	PROC_UNLOCK(curproc);
-
+	/* A private channel cannot be awakened by Mach thread_go(). */
+	if (deadline > uptime) {
+		error = msleep_sbt(&channel, (struct mtx *)NULL, PCATCH | PSOCK, "mach_clock",
+		    deadline, 0, C_ABSOLUTE);
+		if (error == EINTR || error == ERESTART)
+			return (KERN_ABORTED);
+		if (error != EWOULDBLOCK && error != 0)
+			return (KERN_FAILURE);
+	}
 	if (wakeup_time != NULL) {
-		nanotime(&cts);
-		mcts.tv_sec = cts.tv_sec;
-		mcts.tv_nsec = cts.tv_nsec;
-		error = copyout(&mcts, wakeup_time, sizeof(mcts));
-		if (error != 0)
-			return (error);
+		nanouptime(&now);
+		wake.tv_sec = now.tv_sec;
+		wake.tv_nsec = now.tv_nsec;
+		if (copyout(&wake, wakeup_time, sizeof(wake)) != 0)
+			return (KERN_INVALID_ADDRESS);
 	}
-
-	return (0);
+	return (KERN_SUCCESS);
 }
 
 int
