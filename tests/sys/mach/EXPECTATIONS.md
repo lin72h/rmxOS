@@ -19,6 +19,8 @@ annotations hide alpha2 failures.
 | 4 | mach_dead_name_test:dead_name | PANIC | PASS |
 | 5 | mach_named_pset_test:named_pset | PANIC | PASS |
 | 6 | mach_translate_test:seeded_output | FAIL | PASS |
+| 7 | mach_file_lifetime_test:success_eof | FAIL | PASS |
+| 7 | mach_file_lifetime_test:fd_exhaustion | PANIC | PASS |
 
 The Zig program links ATF's C ABI; registration and metadata-only `-l` do not
 execute its syscall observations. Every case allocates its own receive right.

@@ -447,15 +447,15 @@ ipc_entry_port_to_file(ipc_space_t space, mach_port_name_t *namep, ipc_object_t 
 	fp = (void *)port->ip_context;
 	/* the receiver will have been set by the sender of the port */
 	port->ip_receiver = space;
-	ipc_port_dealloc_special(port, space);
 
 	/* Are sent file O_CLOEXEC? */
 	if (kern_finstall(curthread, fp, namep, 0, NULL) != 0) {
-		fdrop(fp, curthread);
 		if (mach_debug_enable)
 			printf("finstall failed\n");
 		return (KERN_RESOURCE_SHORTAGE);
 	}
+	ipc_port_dealloc_special(port, space);
+	fdrop(fp, curthread);
 	if (mach_debug_enable)
 		printf(" installing received file *fp=%p at %d\n", fp, *namep);
 	return (KERN_SUCCESS);
