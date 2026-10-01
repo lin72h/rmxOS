@@ -514,6 +514,11 @@ ipc_mqueue_copyin(
 
 	bits = entry->ie_bits;
 	object = entry->ie_object;
+	if ((bits & (MACH_PORT_TYPE_RECEIVE | MACH_PORT_TYPE_PORT_SET)) == 0 ||
+	    object == IO_NULL) {
+		mr = MACH_RCV_INVALID_NAME;
+		goto error;
+	}
 	ipc_object_reference(object);
 
 	if (bits & MACH_PORT_TYPE_RECEIVE) {
@@ -529,10 +534,6 @@ ipc_mqueue_copyin(
 		assert(ips_active((ipc_pset_t)object));
 		assert(((ipc_pset_t)object)->ips_local_name == name);
 		is_read_unlock(space);
-	} else {
-		ipc_object_release(object);
-		mr = MACH_RCV_INVALID_NAME;
-		goto error;
 	}
 
 	/*

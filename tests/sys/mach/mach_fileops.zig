@@ -57,7 +57,7 @@ fn Case(comptime op: Operation) type {
         fn body(_: [*c]const c.atf_tc_t) callconv(.c) void {
             var name: u32 = 0;
             const r = c.syscall(c.SYS__kernelrpc_mach_port_allocate_trap, @as(c_uint, 0), @as(c_uint, 1), &name);
-            if (r != 0) c.atf_tc_fail("Mach receive right setup failed result=%ld errno=%d", r, c.__error().*);
+            if (r != 0) c.atf_tc_fail("Mach receive right setup failed result=%d errno=%d", r, c.__error().*);
             defer _ = c.close(@intCast(name));
             const o = observe(op, @intCast(name));
             _ = c.printf("operation=%s result=%d errno=%d detail=%d\n", @tagName(op).ptr, o.result, o.err, o.detail);

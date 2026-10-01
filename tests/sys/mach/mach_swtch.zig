@@ -17,8 +17,8 @@ fn Case(comptime number: c_int, comptime name: [:0]const u8) type {
         fn body(_: [*c]const c.atf_tc_t) callconv(.c) void {
             const observed = c.syscall(number, @as(c_int, 0));
             const err = c.__error().*;
-            _ = c.printf("operation=%s expected=0 observed=%ld errno=%d\n", name.ptr, observed, err);
-            if (observed != 0) c.atf_tc_fail("yield expected=0 observed=%ld errno=%d", observed, err);
+            _ = c.printf("operation=%s expected=0 observed=%d errno=%d\n", name.ptr, observed, err);
+            if (observed != 0) c.atf_tc_fail("yield expected=0 observed=%d errno=%d", observed, err);
         }
     };
 }
