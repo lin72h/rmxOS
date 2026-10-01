@@ -1,3 +1,4 @@
 syntax(2)
 test_suite("FreeBSD")
 atf_test_program{name="mach_fileops_test"}
+atf_test_program{name="mach_swtch_test"}

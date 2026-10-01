@@ -13,6 +13,8 @@ annotations hide alpha2 failures.
 | 1 | mach_fileops_test:chown | PANIC | PASS |
 | 1 | mach_fileops_test:kevent_read | PANIC | PASS |
 | 1 | mach_fileops_test:kevent_write | PANIC | PASS |
+| 2 | mach_swtch_test:swtch_pri | PANIC | PASS |
+| 2 | mach_swtch_test:swtch | PANIC | PASS |
 
 The Zig program links ATF's C ABI; registration and metadata-only `-l` do not
 execute its syscall observations. Every case allocates its own receive right.

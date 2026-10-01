@@ -175,7 +175,6 @@ _swtch_pri(struct thread *td)
 	if (td->td_state == TDS_RUNNING)
 		td->td_proc->p_stats->p_cru.ru_nivcsw++;        /* XXXSMP */
 	mi_switch(SW_VOL | SWT_RELINQUISH);
-	thread_unlock(td);
 	return (0);
 }
 
