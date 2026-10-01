@@ -388,9 +388,15 @@ ipc_entry_lookup(ipc_space_t space, mach_port_name_t name)
 	return (entry);
 }
 
+struct ipc_file {
+	struct file *fp;
+	struct filecaps caps;
+};
+
 kern_return_t
 ipc_entry_file_to_port(ipc_space_t space, mach_port_name_t name, ipc_object_t *objectp)
 {
+	struct ipc_file *file;
 	struct file *fp;
 	ipc_port_t port;
 	cap_rights_t rights;
@@ -400,19 +406,29 @@ ipc_entry_file_to_port(ipc_space_t space, mach_port_name_t name, ipc_object_t *o
 	if (curthread->td_proc->p_fd == NULL)
 		return (KERN_INVALID_ARGUMENT);
 
-	if (fget(curthread, name, cap_rights_init(&rights, CAP_ALL1), &fp) != 0) {
+	file = malloc(sizeof(*file), M_MACH_IPC_ENTRY, M_WAITOK | M_ZERO);
+	if (fget_cap(curthread, name, cap_rights_init(&rights), NULL, &fp,
+	    &file->caps) != 0) {
+		free(file, M_MACH_IPC_ENTRY);
 		log(LOG_DEBUG, "%s:%d entry for port name: %d not found\n", curproc->p_comm, curproc->p_pid, name);
 		return (KERN_INVALID_ARGUMENT);
 	}
 	if (fp->f_type == DTYPE_MACH_IPC ||
 	    (fp->f_ops->fo_flags & DFLAG_PASSABLE) == 0) {
+		filecaps_free(&file->caps);
+		free(file, M_MACH_IPC_ENTRY);
 		fdrop(fp, curthread);
 		return (KERN_INVALID_ARGUMENT);
 	}
-	if ((port = ipc_port_alloc_special(space)) == NULL)
+	if ((port = ipc_port_alloc_special(space)) == NULL) {
+		filecaps_free(&file->caps);
+		free(file, M_MACH_IPC_ENTRY);
+		fdrop(fp, curthread);
 		return (KERN_RESOURCE_SHORTAGE);
+	}
 
-	port->ip_context = (mach_vm_address_t) fp;
+	file->fp = fp;
+	port->ip_context = (mach_vm_address_t)file;
 	port->ip_flags = IP_CONTEXT_FILE;
 	port->ip_receiver = space;
 	port->ip_receiver_name = name;
@@ -425,37 +441,43 @@ void
 ipc_entry_file_destroy(ipc_object_t objectp)
 {
 	ipc_port_t port;
-	struct file *fp;
+	struct ipc_file *file;
 
 	if (curthread->td_proc->p_fd == NULL)
 		return;
 
 	port = (ipc_port_t)objectp;
-	fp = (void *)port->ip_context;
+	file = (void *)port->ip_context;
 	ipc_port_dealloc_special(port, current_space());
-	fdrop(fp, curthread);
+	filecaps_free(&file->caps);
+	fdrop(file->fp, curthread);
+	free(file, M_MACH_IPC_ENTRY);
 }
 
 kern_return_t
 ipc_entry_port_to_file(ipc_space_t space, mach_port_name_t *namep, ipc_object_t object)
 {
 	ipc_port_t port;
+	struct ipc_file *file;
 	struct file *fp;
 
 	port = (ipc_port_t)object;
 	MPASS(object != NULL);
 	MPASS(port->ip_flags & IP_CONTEXT_FILE);
-	fp = (void *)port->ip_context;
+	file = (void *)port->ip_context;
+	fp = file->fp;
 	/* the receiver will have been set by the sender of the port */
 	port->ip_receiver = space;
 
 	/* Are sent file O_CLOEXEC? */
-	if (kern_finstall(curthread, fp, namep, 0, NULL) != 0) {
+	if (kern_finstall(curthread, fp, namep, 0, &file->caps) != 0) {
 		if (mach_debug_enable)
 			printf("finstall failed\n");
 		return (KERN_RESOURCE_SHORTAGE);
 	}
 	ipc_port_dealloc_special(port, space);
+	filecaps_free(&file->caps);
+	free(file, M_MACH_IPC_ENTRY);
 	fdrop(fp, curthread);
 	if (mach_debug_enable)
 		printf(" installing received file *fp=%p at %d\n", fp, *namep);

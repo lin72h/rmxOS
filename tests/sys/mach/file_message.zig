@@ -10,6 +10,7 @@ pub const c = @cImport({
     @cInclude("fcntl.h");
     @cInclude("errno.h");
     @cInclude("stdio.h");
+    @cInclude("sys/filio.h");
 });
 pub extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 pub const Header = extern struct { bits: u32, size: u32, remote: u32, local: u32, voucher: u32, id: i32 };
