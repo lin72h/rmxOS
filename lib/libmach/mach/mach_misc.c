@@ -189,7 +189,7 @@ mach_absolute_time(void)
 {
 	struct timespec tp;
 
-	if (clock_gettime(CLOCK_REALTIME_FAST, &tp))
+	if (clock_gettime(CLOCK_UPTIME, &tp))
 		return (0);
 
 	return (tp.tv_sec*NSEC_PER_SEC + tp.tv_nsec);

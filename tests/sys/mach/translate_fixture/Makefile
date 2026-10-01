@@ -8,6 +8,7 @@ CFLAGS+= -Wno-error=undef
 ZIG?= zig
 probe.o: ${.CURDIR}/probe.zig
 	${ZIG} build-obj ${.ALLSRC} -target x86_64-freestanding-none \
+	    -mcpu=baseline-mmx-sse-sse2 \
 	    -mcmodel=kernel -mno-red-zone -fno-stack-check -fno-stack-protector \
 	    -fno-compiler-rt -femit-bin=${.TARGET}
 .include <bsd.kmod.mk>

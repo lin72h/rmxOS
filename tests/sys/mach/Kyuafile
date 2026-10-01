@@ -12,3 +12,4 @@ atf_test_program{name="mach_proc_info_test"}
 atf_test_program{name="mach_filecaps_test"}
 atf_test_program{name="mach_timeout_test"}
 atf_test_program{name="mach_clock_test"}
+atf_test_program{name="mach_timebase_test"}

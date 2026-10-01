@@ -96,9 +96,9 @@ mach_timebase_info(mach_timebase_info_t infop)
 	int error;
 	struct mach_timebase_info info;
 
-	/* XXX This is probably bus speed, fill it accurately */
-	info.numer = 4000000000UL;
-	info.denom = 75189611UL;
+	/* mach_absolute_time() reports uptime nanoseconds. */
+	info.numer = 1;
+	info.denom = 1;
 
 	if ((error = copyout(&info, (void *)infop,
 	    sizeof(info))) != 0)
