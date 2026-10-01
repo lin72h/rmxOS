@@ -12,9 +12,17 @@
 #include <sys/mach/ipc/ipc_kmsg.h>
 #include <sys/mach/ipc/ipc_port.h>
 #include <sys/mach/thread.h>
+#include <sys/proc_info.h>
 
 struct observation { int result; int owned; };
 extern int rmx_translate_observe(uint32_t, struct observation *);
+extern int rmx_proc_observe(uint32_t, struct observation *);
+size_t rmx_fixture_proc_size(void);
+size_t rmx_fixture_bsdinfo_size(void);
+void rmx_fixture_proc_copy(void *);
+void rmx_fixture_proc_set_fd(void *, void *);
+void rmx_fixture_proc_set_group(void *, void *);
+int rmx_fixture_nfiles(void *);
 void *rmx_fixture_space(void);
 void *rmx_fixture_entry(uint32_t);
 void *rmx_fixture_object(void *);
@@ -27,6 +35,12 @@ void *rmx_fixture_entry(uint32_t name) {
 void *rmx_fixture_object(void *entry) { return (((ipc_entry_t)entry)->ie_object); }
 int rmx_fixture_owned(void *object) { return (io_lock_owned(object)); }
 void rmx_fixture_unlock(void *object) { io_unlock(object); }
+size_t rmx_fixture_proc_size(void) { return (sizeof(struct proc)); }
+size_t rmx_fixture_bsdinfo_size(void) { return (sizeof(struct proc_bsdinfo)); }
+void rmx_fixture_proc_copy(void *p) { bcopy(curproc, p, sizeof(struct proc)); }
+void rmx_fixture_proc_set_fd(void *p, void *fd) { ((struct proc *)p)->p_fd = fd; }
+void rmx_fixture_proc_set_group(void *p, void *pg) { ((struct proc *)p)->p_pgrp = pg; }
+int rmx_fixture_nfiles(void *info) { return (((struct proc_bsdinfo *)info)->pbi_nfiles); }
 
 static int
 observe_sysctl(SYSCTL_HANDLER_ARGS)
@@ -37,14 +51,17 @@ observe_sysctl(SYSCTL_HANDLER_ARGS)
 	error = SYSCTL_IN(req, &name, sizeof(name));
 	if (error != 0)
 		return (error);
-	error = rmx_translate_observe(name, &observed);
+ error = ((int (*)(uint32_t, struct observation *))arg1)(name, &observed);
 	if (error != 0)
 		return (error);
 	return (SYSCTL_OUT(req, &observed, sizeof(observed)));
 }
 SYSCTL_PROC(_debug, OID_AUTO, rmx_translate_observe,
-    CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0, observe_sysctl,
+    CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, rmx_translate_observe, 0, observe_sysctl,
     "S,observation", "Mach translation lock observation for ATF");
+SYSCTL_PROC(_debug, OID_AUTO, rmx_proc_observe,
+    CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, rmx_proc_observe, 0, observe_sysctl,
+    "S,observation", "Mach BSD proc observation for ATF");
 static int module_event(module_t mod __unused, int event, void *arg __unused)
 {
 	return (event == MOD_LOAD || event == MOD_UNLOAD ? 0 : EOPNOTSUPP);

@@ -23,6 +23,7 @@ annotations hide alpha2 failures.
 | 7 | mach_file_lifetime_test:fd_exhaustion | PANIC | PASS |
 | 8 | mach_passable_test:reject_kqueue | FAIL | PASS |
 | 8 | mach_passable_test:accept_pipe (positive control) | PASS | PASS |
+| 9 | mach_proc_info_test:null_fd | PANIC | PASS |
 
 The Zig program links ATF's C ABI; registration and metadata-only `-l` do not
 execute its syscall observations. Every case allocates its own receive right.
@@ -34,3 +35,8 @@ Fix 6 uses a freestanding Zig test module in the disposable guest. Its C adapter
 only projects kernel ABI fields and routes module/sysctl calls; all observation
 logic is Zig. The output pointer starts equal to the valid object pointer, so
 alpha2 deterministically reports owned=0 instead of depending on stack reuse.
+
+Fix 9 calls the live Mach proc_pidbsdinfo routine through leak-locals on a
+private proc snapshot with p_fd=NULL. It never edits a live process descriptor
+table. The source kernel/module ABI is projected by the C adapter; the snapshot
+setup, call and observed count are in the Zig fixture.

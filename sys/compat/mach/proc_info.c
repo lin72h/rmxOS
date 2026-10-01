@@ -198,6 +198,7 @@ proc_pidbsdinfo(struct proc *p, struct proc_bsdinfo * pbsd, int zombie)
 	struct  session *sessionp = NULL;
 	struct pgrp * pg;
 	struct ucred *cred;
+	struct filedesc *fdp;
 
 	pg = p->p_pgrp;
 	if (pg)
@@ -255,8 +256,10 @@ proc_pidbsdinfo(struct proc *p, struct proc_bsdinfo * pbsd, int zombie)
 			pbsd->pbi_flags |= PROC_FLAG_CTTY;
 	}
 		
-	if (zombie == 0)
-		pbsd->pbi_nfiles = p->p_fd->fd_nfiles;
+	/* The process lock keeps a non-NULL snapshot alive during exit. */
+	fdp = atomic_load_ptr(&p->p_fd);
+	if (zombie == 0 && fdp != NULL)
+		pbsd->pbi_nfiles = fdp->fd_nfiles;
 	
 	pbsd->e_tdev = (uint32_t)NODEV;
 	if (pg != NULL) {
