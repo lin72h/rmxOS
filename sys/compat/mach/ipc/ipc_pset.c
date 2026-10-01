@@ -255,6 +255,10 @@ ipc_pset_alloc_name(
 	/* pset is locked */
 
 	pset->ips_local_name = name;
+	TAILQ_INIT(&pset->ips_ports);
+	sx_init(&pset->ips_note_lock, "pset knote lock");
+	knlist_init(&pset->ips_note, &pset->ips_note_lock,
+				kn_sx_lock, kn_sx_unlock, sx_assert_locked);
 	thread_pool_init(&pset->ips_thread_pool);
 	*psetp = pset;
 	return KERN_SUCCESS;

@@ -1,12 +1,12 @@
 TESTSDIR= ${TESTSBASE}/sys/mach
 KYUAFILE= yes
-SCRIPTS+= mach_fileops_test mach_swtch_test mach_short_kevent_test mach_dead_name_test
+SCRIPTS+= mach_fileops_test mach_swtch_test mach_short_kevent_test mach_dead_name_test mach_named_pset_test
 SCRIPTSDIR= ${TESTSDIR}
 ZIG?= zig
 ZIG_SYSROOT?= ${SYSROOT}
 ATF_C_ARCHIVE?= ${SYSROOT}/usr/lib/libprivateatf-c.a
 
-.for _test in fileops swtch short_kevent dead_name
+.for _test in fileops swtch short_kevent dead_name named_pset
 mach_${_test}_test: ${.CURDIR}/mach_${_test}.zig
 	${ZIG} build-exe ${.ALLSRC:M*.zig} -target x86_64-freebsd -lc \
 	    --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf \
