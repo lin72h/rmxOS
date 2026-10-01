@@ -119,6 +119,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_capsicum.h"
 
 #include <sys/types.h>
+#include <sys/poll.h>
 #include <sys/param.h>
 #include <sys/limits.h>
 #include <sys/eventhandler.h>
@@ -217,18 +218,37 @@ ipc_entry_hash_delete(
 
 static fo_close_t mach_port_close;
 static fo_stat_t mach_port_stat;
+static fo_poll_t mach_port_poll;
 #if MODERN
 static fo_fill_kinfo_t mach_port_fill_kinfo;
 #endif
 
 struct fileops mach_fileops  = {
+	.fo_read = invfo_rdwr,
+	.fo_write = invfo_rdwr,
+	.fo_truncate = invfo_truncate,
+	.fo_ioctl = invfo_ioctl,
+	.fo_poll = mach_port_poll,
+	.fo_kqfilter = invfo_kqfilter,
 	.fo_close = mach_port_close,
 	.fo_stat = mach_port_stat,
+	.fo_chmod = invfo_chmod,
+	.fo_chown = invfo_chown,
+	.fo_sendfile = invfo_sendfile,
+	.fo_cmp = file_kcmp_generic,
 #if MODERN
 	.fo_fill_kinfo = mach_port_fill_kinfo,
 #endif
 	.fo_flags = 0,
 };
+
+static int
+mach_port_poll(struct file *fp __unused, int events __unused,
+    struct ucred *active_cred __unused, struct thread *td __unused)
+{
+
+	return (POLLNVAL);
+}
 
 static int
 mach_port_close(struct file *fp, struct thread *td)

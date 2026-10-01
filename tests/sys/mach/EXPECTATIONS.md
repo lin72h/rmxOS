@@ -1,0 +1,21 @@
+# Mach fix regressions
+
+These are expected results, not guest observations. The Gatekeeper runs the
+same test artifacts on unchanged alpha2 and the fixed image. No expected-failure
+annotations hide alpha2 failures.
+
+| Fix | ATF program:case | alpha2 | after fix |
+|---|---|---|---|
+| 1 | mach_fileops_test:poll | PANIC | PASS |
+| 1 | mach_fileops_test:nonblock | PANIC | PASS |
+| 1 | mach_fileops_test:async_flag | PANIC | PASS |
+| 1 | mach_fileops_test:chmod | PANIC | PASS |
+| 1 | mach_fileops_test:chown | PANIC | PASS |
+| 1 | mach_fileops_test:kevent_read | PANIC | PASS |
+| 1 | mach_fileops_test:kevent_write | PANIC | PASS |
+
+The Zig program links ATF's C ABI; registration and metadata-only `-l` do not
+execute its syscall observations. Every case allocates its own receive right.
+The poll error is POLLNVAL; the fcntl errors are ENOTTY; chmod, chown and native
+read/write filter registration return EINVAL. The kevent cases require an
+EV_ERROR receipt, not merely any event.
