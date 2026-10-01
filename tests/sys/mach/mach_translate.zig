@@ -38,8 +38,12 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
     _ = c.printf("translate expected_result=0 observed_result=%d expected_owned=1 observed_owned=%d\n", observed.result, observed.owned);
     if (observed.result != 0 or observed.owned != 1) c.atf_tc_fail("translation did not acquire the object lock");
 }
+fn cleanup(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const module = c.kldfind("rmx_translate_fixture.ko");
+    if (module >= 0) _ = c.kldunload(module);
+}
 fn addTests(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const err = c.atf_tc_init(&tc, "seeded_output", &head, &body, null, c.atf_tp_get_config(tp));
+    const err = c.atf_tc_init(&tc, "seeded_output", &head, &body, &cleanup, c.atf_tp_get_config(tp));
     if (c.atf_is_error(err)) return err;
     return c.atf_tp_add_tc(tp, &tc);
 }

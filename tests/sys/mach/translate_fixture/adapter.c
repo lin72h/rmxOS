@@ -17,6 +17,13 @@
 struct observation { int result; int owned; };
 extern int rmx_translate_observe(uint32_t, struct observation *);
 extern int rmx_proc_observe(uint32_t, struct observation *);
+extern int rmx_timeout_observe(uint32_t, struct observation *);
+void *rmx_fixture_thread(void);
+uint32_t rmx_fixture_timeout(void *);
+void rmx_fixture_set_timeout(void *, uint32_t);
+void *rmx_fixture_thread(void) { return (current_thread()); }
+uint32_t rmx_fixture_timeout(void *t) { return (((thread_t)t)->timeout); }
+void rmx_fixture_set_timeout(void *t, uint32_t value) { ((thread_t)t)->timeout = value; }
 size_t rmx_fixture_proc_size(void);
 size_t rmx_fixture_bsdinfo_size(void);
 void rmx_fixture_proc_copy(void *);
@@ -62,6 +69,9 @@ SYSCTL_PROC(_debug, OID_AUTO, rmx_translate_observe,
 SYSCTL_PROC(_debug, OID_AUTO, rmx_proc_observe,
     CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, rmx_proc_observe, 0, observe_sysctl,
     "S,observation", "Mach BSD proc observation for ATF");
+SYSCTL_PROC(_debug, OID_AUTO, rmx_timeout_observe,
+    CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, rmx_timeout_observe, 0, observe_sysctl,
+    "S,observation", "Mach timeout tick observation for ATF");
 static int module_event(module_t mod __unused, int event, void *arg __unused)
 {
 	return (event == MOD_LOAD || event == MOD_UNLOAD ? 0 : EOPNOTSUPP);

@@ -17,6 +17,19 @@ extern fn rmx_fixture_proc_set_fd(*anyopaque, ?*anyopaque) void;
 extern fn rmx_fixture_proc_set_group(*anyopaque, ?*anyopaque) void;
 extern fn rmx_fixture_nfiles(*anyopaque) c_int;
 extern fn proc_pidbsdinfo(*anyopaque, *anyopaque, c_int) c_int;
+extern fn rmx_fixture_thread() *anyopaque;
+extern fn rmx_fixture_timeout(*anyopaque) u32;
+extern fn rmx_fixture_set_timeout(*anyopaque, u32) void;
+extern fn thread_will_wait_with_timeout(*anyopaque, u32) void;
+export fn rmx_timeout_observe(milliseconds: u32, out: *Observation) c_int {
+    const thread = rmx_fixture_thread();
+    const saved = rmx_fixture_timeout(thread);
+    defer rmx_fixture_set_timeout(thread, saved);
+    thread_will_wait_with_timeout(thread, milliseconds);
+    out.result = 0;
+    out.owned = @intCast(rmx_fixture_timeout(thread));
+    return 0;
+}
 export fn rmx_proc_observe(_: u32, out: *Observation) c_int {
     const snapshot = malloc(rmx_fixture_proc_size(), &M_TEMP, 2) orelse return 12;
     defer free(snapshot, &M_TEMP);

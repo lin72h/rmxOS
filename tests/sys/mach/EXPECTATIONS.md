@@ -25,6 +25,7 @@ annotations hide alpha2 failures.
 | 8 | mach_passable_test:accept_pipe (positive control) | PASS | PASS |
 | 9 | mach_proc_info_test:null_fd | PANIC | PASS |
 | 10 | mach_filecaps_test:preserve_caps | FAIL | PASS |
+| 11 | mach_timeout_test:milliseconds | FAIL | PASS |
 
 The Zig program links ATF's C ABI; registration and metadata-only `-l` do not
 execute its syscall observations. Every case allocates its own receive right.

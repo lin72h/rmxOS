@@ -182,11 +182,14 @@ thread_block(void)
 }
 
 void
-thread_will_wait_with_timeout(thread_t thread, int timeout)
+thread_will_wait_with_timeout(thread_t thread, uint32_t timeout)
 {
+	uint64_t sleep_ticks;
 
 	thread->sleep_stamp = ticks;
-	thread->timeout = timeout;
+	/* Mach timeouts are milliseconds; msleep takes rounded-up ticks. */
+	sleep_ticks = ((uint64_t)timeout * hz + 999) / 1000;
+	thread->timeout = MIN(sleep_ticks, INT_MAX);
 }
 
 
