@@ -5,3 +5,4 @@ atf_test_program{name="mach_swtch_test"}
 atf_test_program{name="mach_short_kevent_test"}
 atf_test_program{name="mach_dead_name_test"}
 atf_test_program{name="mach_named_pset_test"}
+atf_test_program{name="mach_translate_test"}

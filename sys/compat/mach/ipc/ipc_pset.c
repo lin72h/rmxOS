@@ -552,7 +552,8 @@ filt_machportattach(struct knote *kn)
 	kern_return_t		kr;
 	struct knlist		*note;
 
-	kr = ipc_object_translate(current_space(), name, MACH_PORT_RIGHT_PORT_SET,
+	kr = ipc_object_translate_known(current_space(), name, MACH_PORT_RIGHT_PORT_SET,
+                                  (ipc_object_t)pset,
 							  (ipc_object_t *)&pset);
 
 	if (kr != KERN_SUCCESS)

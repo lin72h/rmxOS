@@ -227,6 +227,10 @@ extern kern_return_t ipc_object_translate(
 	mach_port_right_t	right,
 	ipc_object_t		*objectp);
 
+/* Filter lookup with an explicit known object; not an output argument. */
+extern kern_return_t ipc_object_translate_known(ipc_space_t, mach_port_name_t,
+    mach_port_right_t, ipc_object_t, ipc_object_t *);
+
 /* Allocate a dead-name entry */
 extern kern_return_t
 ipc_object_alloc_dead(

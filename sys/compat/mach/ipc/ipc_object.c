@@ -115,11 +115,12 @@ uma_zone_t ipc_object_zones[IOT_NUMBER];
  *		KERN_INVALID_RIGHT	Name doesn't denote the correct right.
  */
 
-kern_return_t
-ipc_object_translate(
+static kern_return_t
+ipc_object_translate_internal(
 	ipc_space_t		space,
 	mach_port_name_t		name,
 	mach_port_right_t	right,
+	ipc_object_t		known,
 	ipc_object_t		*objectp)
 {
 	ipc_entry_t entry;
@@ -136,12 +137,28 @@ ipc_object_translate(
 	if (object == IO_NULL)
 		return (KERN_TERMINATED);
 
-	/* caller already holds locked reference */
-	if (*objectp != object)
+	/* Only the explicit filter entry point may suppress this lock. */
+	if (known != object)
 		io_lock(object);
 
 	*objectp = object;
 	return KERN_SUCCESS;
+}
+
+kern_return_t
+ipc_object_translate(ipc_space_t space, mach_port_name_t name,
+    mach_port_right_t right, ipc_object_t *objectp)
+{
+
+	return (ipc_object_translate_internal(space, name, right, IO_NULL, objectp));
+}
+
+kern_return_t
+ipc_object_translate_known(ipc_space_t space, mach_port_name_t name,
+    mach_port_right_t right, ipc_object_t known, ipc_object_t *objectp)
+{
+
+	return (ipc_object_translate_internal(space, name, right, known, objectp));
 }
 
 /*
