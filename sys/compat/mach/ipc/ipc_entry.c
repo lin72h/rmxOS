@@ -404,7 +404,8 @@ ipc_entry_file_to_port(ipc_space_t space, mach_port_name_t name, ipc_object_t *o
 		log(LOG_DEBUG, "%s:%d entry for port name: %d not found\n", curproc->p_comm, curproc->p_pid, name);
 		return (KERN_INVALID_ARGUMENT);
 	}
-	if (fp->f_type == DTYPE_MACH_IPC) {
+	if (fp->f_type == DTYPE_MACH_IPC ||
+	    (fp->f_ops->fo_flags & DFLAG_PASSABLE) == 0) {
 		fdrop(fp, curthread);
 		return (KERN_INVALID_ARGUMENT);
 	}
