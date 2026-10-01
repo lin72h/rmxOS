@@ -1,0 +1,5 @@
+include RMXOS-RELEASE
+
+ident	RMXOS-KCSAN
+
+options	KCSAN
