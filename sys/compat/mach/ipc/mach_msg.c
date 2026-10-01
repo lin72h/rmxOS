@@ -537,14 +537,13 @@ msg_receive_error(
 
 
 static mach_msg_return_t
-mach_msg_receive_results_error(thread_t thread)
+mach_msg_receive_results_error(thread_t thread, ipc_kmsg_t kmsg)
 {
 	ipc_space_t space = current_space();
 
 	mach_msg_return_t mr = thread->ith_state;
 	mach_vm_address_t msg_addr = thread->ith_msg_addr;
 	mach_msg_option_t option = thread->ith_option;
-	ipc_kmsg_t        kmsg = thread->ith_kmsg;
 	mach_port_seqno_t seqno = thread->ith_seqno;
 	mach_msg_header_t *msg = (void *)msg_addr;
 
@@ -594,7 +593,7 @@ mach_msg_receive_results(thread_t thread)
 
 	thread->ith_kmsg = NULL;
 	if (mr != MACH_MSG_SUCCESS)
-		return mach_msg_receive_results_error(thread);
+		return mach_msg_receive_results_error(thread, kmsg);
 
 
 #ifdef notyet
