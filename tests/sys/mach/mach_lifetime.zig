@@ -11,10 +11,11 @@ const c = @cImport({
     @cInclude("unistd.h");
     @cInclude("pthread.h");
     @cInclude("stdio.h");
+    @cInclude("fcntl.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 const Observation = extern struct { result: c_int = 0, owned: c_int = 0 };
-var cases: [5]c.atf_tc_t = undefined;
+var cases: [7]c.atf_tc_t = undefined;
 fn observe(command_value: u32) Observation {
     var command = command_value;
     var result: Observation = .{};
@@ -111,9 +112,60 @@ fn cleanup(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const module = c.kldfind("rmx_translate_fixture.ko");
     if (module >= 0) _ = c.kldunload(module);
 }
+const Divorce = extern struct { fresh: c_int, special: c_int, old_result: c_int, new_result: c_int, new_count: c_int };
+fn nameRefs(name_value: u32) Observation {
+    var name = name_value;
+    var result: Observation = .{};
+    var size: usize = @sizeOf(Observation);
+    if (c.sysctlbyname("debug.rmx_urefs_observe", &result, &size, &name, @sizeOf(u32)) != 0) c._exit(2);
+    return result;
+}
+fn divorce(t: [*c]const c.atf_tc_t, flags: c_int) void {
+    load(t);
+    var cwd: [4096]u8 = undefined;
+    var path: [4096]u8 = undefined;
+    if (c.getcwd(&cwd, cwd.len) == null) c.atf_tc_fail("getcwd failed");
+    const length = c.snprintf(&path, path.len, "%s/rfork-observation", &cwd);
+    if (length < 0 or length >= path.len) c.atf_tc_fail("observation path too long");
+    const child = c.rfork(c.RFPROC);
+    if (child == 0) {
+        if (observe(1).result != 0) c._exit(2);
+        var old: u32 = 0;
+        if (c.syscall(c.SYS__kernelrpc_mach_port_allocate_trap, @as(c_uint, 0), @as(c_uint, 4), &old) != 0) c._exit(2);
+        _ = observe(8);
+        if (c.rfork(flags) != 0) c._exit(2);
+        const space = observe(9);
+        const previous = nameRefs(old);
+        var new: u32 = 0;
+        if (c.syscall(c.SYS__kernelrpc_mach_port_allocate_trap, @as(c_uint, 0), @as(c_uint, 4), &new) != 0) c._exit(2);
+        const next = nameRefs(new);
+        const result = Divorce{ .fresh = space.result, .special = space.owned, .old_result = previous.result, .new_result = next.result, .new_count = next.owned };
+        // RFCFDG closes every descriptor, including ATF's result channel.
+        // Reopen a private file; only the parent performs the ATF verdict.
+        const fd = c.open(&path, c.O_CREAT | c.O_TRUNC | c.O_WRONLY, @as(c_uint, 0o600));
+        if (fd < 0 or c.write(fd, &result, @sizeOf(Divorce)) != @sizeOf(Divorce)) c._exit(2);
+        _ = c.close(fd);
+        c._exit(0);
+    }
+    wait(child);
+    const fd = c.open(&path, c.O_RDONLY);
+    if (fd < 0) c.atf_tc_fail("child observation missing");
+    var result: Divorce = undefined;
+    if (c.read(fd, &result, @sizeOf(Divorce)) != @sizeOf(Divorce)) c.atf_tc_fail("child observation truncated");
+    _ = c.close(fd);
+    _ = c.unlink(&path);
+    _ = c.printf("rfork expected_fresh=1 observed_fresh=%d expected_special=1 observed_special=%d expected_old_result=15 observed_old_result=%d expected_new_result=0 observed_new_result=%d expected_new_urefs=1 observed_new_urefs=%d\n", result.fresh, result.special, result.old_result, result.new_result, result.new_count);
+    if (result.fresh != 1 or result.special != 1 or result.old_result != 15 or result.new_result != 0 or result.new_count != 1) c.atf_tc_fail("in-place rfork did not rebind the empty namespace while retaining task special ports");
+}
+fn unshare(t: [*c]const c.atf_tc_t) callconv(.c) void {
+    divorce(t, c.RFFDG);
+}
+fn cleanTable(t: [*c]const c.atf_tc_t) callconv(.c) void {
+    divorce(t, c.RFCFDG);
+}
 fn addTests(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "inherited_rights", "task_control_death", "incarnation", "thread_control_death", "shared_fd_exit" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &inherited, &taskDeath, &reuse, &threadDeath, &shared };
+    const names = [_][*:0]const u8{ "inherited_rights", "task_control_death", "incarnation", "thread_control_death", "shared_fd_exit", "rfork_unshare", "rfork_clean_table" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &inherited, &taskDeath, &reuse, &threadDeath, &shared, &unshare, &cleanTable };
     for (names, bodies, 0..) |name, body, i| {
         const err = c.atf_tc_init(&cases[i], name, &head, body, &cleanup, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;

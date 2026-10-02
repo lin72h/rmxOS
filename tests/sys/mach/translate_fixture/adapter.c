@@ -34,6 +34,8 @@ void rmx_fixture_port_drop(void *);
 void rmx_fixture_port_hold(void *port) { ip_reference((ipc_port_t)port); }
 void rmx_fixture_port_drop(void *port) { ip_release((ipc_port_t)port); }
 void *rmx_fixture_task(void) { return (current_task()); }
+void *rmx_fixture_bootstrap(void);
+void *rmx_fixture_bootstrap(void) { return (current_task()->itk_bootstrap); }
 void *rmx_fixture_control_port(int thread) {
 	return (thread ? current_thread()->ith_self : current_task()->itk_self);
 }

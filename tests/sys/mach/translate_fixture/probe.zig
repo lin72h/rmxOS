@@ -20,7 +20,13 @@ extern fn rmx_fixture_port_drop(*anyopaque) void;
 extern fn task_set_special_port(*anyopaque, c_int, ?*anyopaque) c_int;
 var watched_control: ?*anyopaque = null;
 var watched_bootstrap: ?*anyopaque = null;
+var watched_space: ?*anyopaque = null;
+extern fn rmx_fixture_bootstrap() ?*anyopaque;
+extern fn ipc_space_reference(*anyopaque) void;
+extern fn ipc_space_release(*anyopaque) void;
 export fn rmx_lifetime_clear() void {
+    if (watched_space) |space| ipc_space_release(space);
+    watched_space = null;
     if (watched_control) |port| rmx_fixture_port_drop(port);
     watched_control = null;
     if (watched_bootstrap) |port| ipc_port_dealloc_kernel(port);
@@ -43,6 +49,14 @@ export fn rmx_lifetime_observe(command: u32, out: *Observation) c_int {
         },
         4 => out.owned = rmx_fixture_port_active(watched_control orelse return 22),
         5 => rmx_lifetime_clear(),
+        8 => {
+            watched_space = rmx_fixture_space();
+            ipc_space_reference(watched_space.?);
+        },
+        9 => {
+            out.result = @intFromBool(rmx_fixture_space() != watched_space);
+            out.owned = @intFromBool(rmx_fixture_bootstrap() == watched_bootstrap and watched_bootstrap != null and rmx_fixture_port_active(watched_bootstrap.?) == 1);
+        },
         else => return 22,
     }
     return 0;
