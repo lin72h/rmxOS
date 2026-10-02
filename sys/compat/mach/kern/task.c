@@ -384,17 +384,7 @@ task_terminate(
 	 *	Shut down IPC.
 	 */
 	ipc_task_terminate(task);
-	if (task->itk_exec_thread != NULL) {
-		mach_thread_retire(task->itk_exec_thread);
-		thread_deallocate(task->itk_exec_thread);
-		task->itk_exec_thread = NULL;
-	}
-
-	/*
-	 *	Deallocate the task's reference to itself.
-	 */
-	task_deallocate(task);
-
+	/* The IPC binding owns and releases the former alive reference. */
 	return(KERN_SUCCESS);
 }
 
