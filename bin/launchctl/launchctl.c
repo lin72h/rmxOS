@@ -60,7 +60,6 @@
 #define STALL_TIMEOUT	30	// Sleep N seconds after problem
 
 static launch_data_t to_launchd(json_t *json);
-static launch_data_t to_launchd_sockets(json_t *json);
 static launch_data_t create_sockets_from_launch_data(launch_data_t sockets);
 static launch_data_t create_socket_from_launch_data(launch_data_t spec);
 static void materialize_job_sockets(launch_data_t job);
@@ -154,18 +153,6 @@ bootstrap_scan_has_plist_peer(struct dirent **files, int nfiles,
 	free(plist_name);
 
 	return (found);
-}
-
-static launch_data_t
-to_launchd_sockets(json_t *json)
-{
-	launch_data_t result, spec;
-
-	spec = to_launchd(json);
-	result = create_sockets_from_launch_data(spec);
-	launch_data_free(spec);
-
-	return (result);
 }
 
 static void
@@ -447,13 +434,6 @@ to_launchd(json_t *json)
 	case JSON_OBJECT:
 		dict = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
 		json_object_foreach(json, key, val) {
-			if (!strcmp(key, "Sockets")) {
-				launch_data_dict_insert(dict,
-				    to_launchd_sockets(val), key);
-
-				continue;
-			}
-
 			launch_data_dict_insert(dict, to_launchd(val), key);
 		}
 
@@ -772,6 +752,8 @@ read_job_file(const char *filename, bool materialize_sockets)
 
 	job = to_launchd(plist);
 	json_decref(plist);
+	if (materialize_sockets)
+		materialize_job_sockets(job);
 	return (job);
 }
 
