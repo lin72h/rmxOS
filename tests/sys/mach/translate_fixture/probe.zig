@@ -12,8 +12,8 @@ extern fn rmx_fixture_task() *anyopaque;
 extern fn rmx_fixture_control_port(c_int) *anyopaque;
 extern fn rmx_fixture_port_active(*anyopaque) c_int;
 extern fn rmx_fixture_send_count(*anyopaque) u32;
-extern fn ipc_port_alloc_kernel() ?*anyopaque;
-extern fn ipc_port_dealloc_kernel(*anyopaque) void;
+extern fn rmx_fixture_alloc_kernel() ?*anyopaque;
+extern fn rmx_fixture_dealloc_kernel(*anyopaque) void;
 extern fn ipc_port_make_send(*anyopaque) ?*anyopaque;
 extern fn rmx_fixture_port_hold(*anyopaque) void;
 extern fn rmx_fixture_port_drop(*anyopaque) void;
@@ -29,7 +29,7 @@ export fn rmx_lifetime_clear() void {
     watched_space = null;
     if (watched_control) |port| rmx_fixture_port_drop(port);
     watched_control = null;
-    if (watched_bootstrap) |port| ipc_port_dealloc_kernel(port);
+    if (watched_bootstrap) |port| rmx_fixture_dealloc_kernel(port);
     watched_bootstrap = null;
 }
 // ATF serializes commands: observe a real control port or bootstrap send count.
@@ -37,7 +37,7 @@ export fn rmx_lifetime_observe(command: u32, out: *Observation) c_int {
     out.* = .{ .result = 0, .owned = 0 };
     switch (command) {
         1 => {
-            watched_bootstrap = ipc_port_alloc_kernel() orelse return 12;
+            watched_bootstrap = rmx_fixture_alloc_kernel() orelse return 12;
             out.result = task_set_special_port(rmx_fixture_task(), 4, ipc_port_make_send(watched_bootstrap.?));
         },
         2 => out.owned = @intCast(rmx_fixture_send_count(watched_bootstrap orelse return 22)),

@@ -22,6 +22,11 @@
 /* Observe the attachment ABI common to both images, without a new symbol. */
 #undef current_space
 #define current_space() current_task()->itk_space
+/* Project the function-like kernel-space macros through the C ABI. */
+void *rmx_fixture_alloc_kernel(void);
+void rmx_fixture_dealloc_kernel(void *);
+void *rmx_fixture_alloc_kernel(void) { return (ipc_port_alloc_kernel()); }
+void rmx_fixture_dealloc_kernel(void *p) { ipc_port_dealloc_kernel(p); }
 extern kern_return_t mach_port_get_refs(ipc_space_t, mach_port_name_t,
     mach_port_right_t, mach_port_urefs_t *);
 
