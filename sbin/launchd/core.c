@@ -955,6 +955,8 @@ static int s_no_hang_fd = -1;
 // process wide globals
 mach_port_t inherited_bootstrap_port;
 jobmgr_t root_jobmgr;
+static bool single_user_handoff;
+static bool logins_blocked;
 bool launchd_shutdown_debugging = false;
 bool launchd_verbose_boot = false;
 bool launchd_embedded_handofgod = false;
@@ -1402,6 +1404,18 @@ jobmgr_remove(jobmgr_t jm)
 			raise(SIGTERM);
 		}
 	} else if (pid1_magic) {
+		if (single_user_handoff) {
+			/* Native init takes over PID 1, including the single-user shell. */
+			(void)kill(-1, SIGTERM);
+			sleep(3);
+			(void)kill(-1, SIGKILL);
+			execl("/sbin/init", "init", "-s", NULL);
+			jobmgr_log(jm, LOG_EMERG | LOG_CONSOLE,
+			    "Cannot hand PID 1 to /sbin/init: %s", strerror(errno));
+			/* Do not turn a failed single-user handoff into a reboot. */
+			for (;;)
+				pause();
+		}
 		eliminate_double_reboot();
 		launchd_log_vm_stats();
 		jobmgr_log_stray_children(jm, true);
@@ -4001,6 +4015,9 @@ job_dispatch_curious_jobs(job_t j)
 job_t
 job_dispatch(job_t j, bool kickstart)
 {
+	if (pid1_magic && logins_blocked &&
+	    strcmp(j->label, "com.rmxos.console-getty") == 0)
+		return (j);
 	// Don't dispatch a job if it has no audit session set.
 	syslog(LOG_DEBUG, "dispatching job j=%p kickstart=%d", j, kickstart);
 	#ifdef notyet
@@ -5881,7 +5898,8 @@ calendarinterval_sanity_check(void)
 	time_t now = time(NULL);
 
 	if (unlikely(ci && (ci->when_next < now))) {
-		(void)jobmgr_assumes_zero_p(root_jobmgr, raise(SIGUSR1));
+		/* SIGUSR1 means halt to native FreeBSD PID 1. */
+		calendarinterval_callback();
 	}
 }
 
@@ -7001,9 +7019,11 @@ jobmgr_new(jobmgr_t jm, mach_port_t requestorport, mach_port_t transfer_port, bo
 
 	if (!jm) {
 		syslog(LOG_ERR, "kevent_moddding");
-		(void)jobmgr_assumes_zero_p(jmr, kevent_mod(SIGTERM, EVFILT_SIGNAL, EV_ADD, 0, 0, jmr));
-		(void)jobmgr_assumes_zero_p(jmr, kevent_mod(SIGUSR1, EVFILT_SIGNAL, EV_ADD, 0, 0, jmr));
-		(void)jobmgr_assumes_zero_p(jmr, kevent_mod(SIGUSR2, EVFILT_SIGNAL, EV_ADD, 0, 0, jmr));
+		if (!pid1_magic) {
+			(void)jobmgr_assumes_zero_p(jmr, kevent_mod(SIGTERM, EVFILT_SIGNAL, EV_ADD, 0, 0, jmr));
+			(void)jobmgr_assumes_zero_p(jmr, kevent_mod(SIGUSR1, EVFILT_SIGNAL, EV_ADD, 0, 0, jmr));
+			(void)jobmgr_assumes_zero_p(jmr, kevent_mod(SIGUSR2, EVFILT_SIGNAL, EV_ADD, 0, 0, jmr));
+		}
 		(void)jobmgr_assumes_zero_p(jmr, kevent_mod(SIGINFO, EVFILT_SIGNAL, EV_ADD, 0, 0, jmr));
 		(void)jobmgr_assumes_zero_p(jmr, kevent_mod(0, EVFILT_FS, EV_ADD, VQ_MOUNT|VQ_UNMOUNT|VQ_UPDATE, 0, jmr));
 	}
@@ -8716,6 +8736,34 @@ job_mig_register_gui_session(job_t j, mach_port_t asport)
 
 	jm->req_gui_asport = asport;
 	return KERN_SUCCESS;
+}
+
+/* Trusted local requests from PID 1's main-kqueue signal callback. */
+void
+launchd_request_reboot(int flags)
+{
+	root_jobmgr->reboot_flags = flags;
+	launchd_shutdown();
+}
+
+void
+launchd_request_single_user(void)
+{
+	single_user_handoff = true;
+	launchd_shutdown();
+}
+
+void
+launchd_set_logins_blocked(bool blocked)
+{
+	job_t console;
+
+	logins_blocked = blocked;
+	if (!blocked && !launchd_shutting_down) {
+		console = job_find(root_jobmgr, "com.rmxos.console-getty");
+		if (console != NULL)
+			(void)job_dispatch(console, false);
+	}
 }
 
 kern_return_t

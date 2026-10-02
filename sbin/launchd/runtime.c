@@ -133,6 +133,7 @@ static const int init_compat_signals[] = {
 	SIGTERM,	// Go to single user mode
 	SIGINT,	// Reboot
 	SIGTSTP,	// Stop further logins
+	SIGHUP,		// Resume logins after an aborted reboot
 };
 
 static const int sigigns[] = { SIGHUP, SIGPIPE, SIGALRM,
@@ -265,45 +266,32 @@ launchd_runtime_init(void)
 #endif
 }
 
+/* Dispatched by the main kqueue, never from an asynchronous signal handler. */
 static void
-sighandler_init_compat(int signo)
+init_compat_callback(void *unused __unused, struct kevent *event)
 {
-	int kr;
-	int rflags = 0;
-	_launchd_syslog(LOG_CRIT, "%s(%d)", __FUNCTION__, signo);
-	switch (signo) {
-	case SIGUSR2:
-		rflags = RB_POWEROFF;
+	switch (event->ident) {
 	case SIGUSR1:
-		rflags |= RB_HALT;
-		// halt and power off
-		kr = job_mig_reboot2(root_jobmgr, rflags);
-		if (kr != KERN_SUCCESS) {
-			_launchd_syslog(LOG_CRIT, "%s(%d):  kr = %d", __FUNCTION__, __LINE__, kr);
-		}
+		launchd_request_reboot(RB_HALT);
 		break;
-	case SIGTERM:
-		_launchd_syslog(LOG_CRIT, "%s(%d):  Got SIGTERM", __FUNCTION__, __LINE__);
-		// Single user mode
+	case SIGUSR2:
+		launchd_request_reboot(RB_HALT | RB_POWEROFF);
 		break;
 	case SIGINT:
-		// Reboot
-		kr = job_mig_reboot2(root_jobmgr, RB_AUTOBOOT);
-		if (kr != KERN_SUCCESS) {
-			_launchd_syslog(LOG_CRIT, "%s(%d):  kr = %d", __FUNCTION__, __LINE__, kr);
-		}
+		launchd_request_reboot(RB_AUTOBOOT);
+		break;
+	case SIGTERM:
+		launchd_request_single_user();
 		break;
 	case SIGTSTP:
-		// Block further logins
+		launchd_set_logins_blocked(true);
 		break;
 	case SIGHUP:
-		// Rescan the ttys file
-		break;
-	default:
-		_launchd_syslog(LOG_DEBUG, "%s:  unknown signal number %d", __FUNCTION__, signo);
+		launchd_set_logins_blocked(false);
 		break;
 	}
 }
+static kq_callback init_compat_kqueue = init_compat_callback;
 
 void
 launchd_runtime_init2(void)
@@ -311,12 +299,21 @@ launchd_runtime_init2(void)
 	size_t i;
 
 	__OS_COMPILETIME_ASSERT__(SIG_ERR == (typeof(SIG_ERR))-1);
-	for (i = 0; i < (sizeof(init_compat_signals) / sizeof(int)); i++) {
-		signal(init_compat_signals[i], sighandler_init_compat);
-	}
 	for (i = 0; i < (sizeof(sigigns) / sizeof(int)); i++) {
 		sigaddset(&sigign_set, sigigns[i]);
 		(void)posix_assumes_zero(signal(sigigns[i], SIG_IGN));
+	}
+	if (pid1_magic) {
+		for (i = 0; i < (sizeof(init_compat_signals) / sizeof(int)); i++) {
+			(void)posix_assumes_zero(signal(init_compat_signals[i], SIG_IGN));
+			(void)posix_assumes_zero(kevent_mod(init_compat_signals[i],
+			    EVFILT_SIGNAL, EV_ADD, 0, 0, &init_compat_kqueue));
+		}
+	} else {
+		/* The per-user manager owns these kqueue events, not init semantics. */
+		(void)posix_assumes_zero(signal(SIGTERM, SIG_IGN));
+		(void)posix_assumes_zero(signal(SIGUSR1, SIG_IGN));
+		(void)posix_assumes_zero(signal(SIGUSR2, SIG_IGN));
 	}
 }
 
