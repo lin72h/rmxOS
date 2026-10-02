@@ -1092,6 +1092,15 @@ task_synchronizer_destroy_all(task_t task)
 static long task_uniqueid;
 
 static void
+mach_task_release_inherited(void *arg __unused, struct proc *p)
+{
+	task_t task = p->p_machdata;
+
+	if (task != TASK_NULL)
+		ipc_task_release_special_ports(task);
+}
+
+static void
 mach_task_init(void *arg __unused, struct proc *p)
 {
 	task_t task;
@@ -1148,6 +1157,8 @@ task_sysinit(void *arg __unused)
 
 	EVENTHANDLER_REGISTER(process_init, mach_task_init, NULL, EVENTHANDLER_PRI_ANY);
 	EVENTHANDLER_REGISTER(process_fork, mach_task_fork, NULL, EVENTHANDLER_PRI_ANY);
+	EVENTHANDLER_REGISTER(process_exit, mach_task_release_inherited, NULL,
+	    EVENTHANDLER_PRI_ANY);
 }
 
 /* before SI_SUB_INTRINSIC and after SI_SUB_EVENTHANDLER */

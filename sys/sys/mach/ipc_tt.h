@@ -181,4 +181,7 @@ extern void ipc_thr_act_init(thread_act_t);
 
 extern void ipc_thr_act_terminate(thread_act_t);
 
+/* Clear and release all task-owned non-control special send rights once. */
+extern void ipc_task_release_special_ports(task_t);
+
 #endif	/* _KERN_IPC_TT_H_ */

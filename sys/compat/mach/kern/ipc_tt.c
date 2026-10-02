@@ -265,6 +265,39 @@ ipc_task_disable(
  */
 
 void
+ipc_task_release_special_ports(task_t task)
+{
+	ipc_port_t ports[EXC_TYPES_COUNT + TASK_PORT_REGISTER_MAX + 7];
+	unsigned int count = 0, i;
+
+	/* Transfer ownership under the task IPC lock; destroy outside it. */
+	itk_lock(task);
+	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
+		ports[count++] = task->exc_actions[i].port;
+		task->exc_actions[i].port = IP_NULL;
+	}
+	for (i = 0; i < TASK_PORT_REGISTER_MAX; i++) {
+		ports[count++] = task->itk_registered[i];
+		task->itk_registered[i] = IP_NULL;
+	}
+#define TAKE_SPECIAL(field) do { \
+	ports[count++] = task->field; \
+	task->field = IP_NULL; \
+} while (0)
+	TAKE_SPECIAL(itk_bootstrap);
+	TAKE_SPECIAL(itk_host);
+	TAKE_SPECIAL(itk_seatbelt);
+	TAKE_SPECIAL(itk_gssd);
+	TAKE_SPECIAL(itk_debug_control);
+	TAKE_SPECIAL(itk_task_access);
+#undef TAKE_SPECIAL
+	itk_unlock(task);
+	for (i = 0; i < count; i++)
+		if (IP_VALID(ports[i]))
+			ipc_port_release_send(ports[i]);
+}
+
+void
 ipc_task_terminate(
 	task_t		task)
 {
