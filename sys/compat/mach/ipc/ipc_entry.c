@@ -454,14 +454,25 @@ ipc_entry_t
 ipc_entry_lookup(ipc_space_t space, mach_port_name_t name)
 {
 	ipc_entry_t entry;
+	struct file *fp;
+	cap_rights_t rights;
+	boolean_t matches;
 
 	rw_assert(&space->is_lock_data, RA_LOCKED);
-	if (!space->is_active || space != current_space())
+	if (!space->is_active || space != current_space() || curproc->p_fd == NULL)
 		return (IE_NULL);
 	/* The fd remains an opaque name outside this entry layer. */
 	LIST_FOREACH(entry, &space->is_entry_list, ie_space_link) {
-		if (entry->ie_name == name && !entry->ie_revoked)
-			return (entry);
+		if (entry->ie_name != name || entry->ie_revoked)
+			continue;
+		/* Preserve descriptor admission without nesting the fd-table lock. */
+		if (fget_unlocked(curthread, name,
+		    cap_rights_init(&rights, CAP_KQUEUE_EVENT | CAP_KQUEUE_CHANGE),
+		    &fp) != 0)
+			return (IE_NULL);
+		matches = fp == entry->ie_fp;
+		fdrop(fp, curthread);
+		return (matches ? entry : IE_NULL);
 	}
 	return (IE_NULL);
 }
