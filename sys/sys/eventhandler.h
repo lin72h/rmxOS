@@ -274,6 +274,8 @@ EVENTHANDLER_DECLARE(thread_ctor, thread_ctor_fn);
 EVENTHANDLER_DECLARE(thread_dtor, thread_dtor_fn);
 EVENTHANDLER_DECLARE(thread_init, thread_init_fn);
 EVENTHANDLER_DECLARE(thread_fini, thread_fini_fn);
+/* Prepared thread now has its native owner; callbacks must not allocate/sleep. */
+EVENTHANDLER_DECLARE(thread_published, thread_ctor_fn);
 
 typedef void (*uma_zone_chfn)(void *);
 EVENTHANDLER_DECLARE(nmbclusters_change, uma_zone_chfn);

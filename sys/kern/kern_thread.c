@@ -175,6 +175,7 @@ EVENTHANDLER_LIST_DEFINE(thread_ctor);
 EVENTHANDLER_LIST_DEFINE(thread_dtor);
 EVENTHANDLER_LIST_DEFINE(thread_init);
 EVENTHANDLER_LIST_DEFINE(thread_fini);
+EVENTHANDLER_LIST_DEFINE(thread_published);
 
 static bool
 thread_count_inc_try(void)

@@ -28,6 +28,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/eventhandler.h>
 #include <sys/cpuset.h>
 #include <sys/kthread.h>
 #include <sys/lock.h>
@@ -317,6 +318,7 @@ kthread_add1(void (*func)(void *), void *arg, struct proc *p,
 	/* This code is similar to thread_create() in kern_thr.c. */
 	p->p_flag |= P_HADTHREADS;
 	thread_link(newtd, p);
+	EVENTHANDLER_INVOKE(thread_published, newtd);
 	thread_lock(oldtd);
 	/* let the scheduler know about these things. */
 	sched_fork_thread(oldtd, newtd);

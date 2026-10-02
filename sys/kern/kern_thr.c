@@ -31,6 +31,7 @@
 #include "opt_hwpmc_hooks.h"
 #include "opt_hwt_hooks.h"
 #include <sys/systm.h>
+#include <sys/eventhandler.h>
 #include <sys/kernel.h>
 #ifdef KTRACE
 #include <sys/ktrace.h>
@@ -266,6 +267,7 @@ thread_create(struct thread *td, struct rtprio *rtp,
 	PROC_LOCK(p);
 	p->p_flag |= P_HADTHREADS;
 	thread_link(newtd, p);
+	EVENTHANDLER_INVOKE(thread_published, newtd);
 	bcopy(p->p_comm, newtd->td_name, sizeof(newtd->td_name));
 	thread_lock(td);
 	/* let the scheduler know about these things. */
