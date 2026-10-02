@@ -174,7 +174,8 @@ struct fileops {
 	fo_fspacectl_t	*fo_fspacectl;
 	fo_cmp_t	*fo_cmp;
 	fo_fork_t	*fo_fork;
-	fo_spare_t	*fo_spares[7];	/* Spare slots */
+	fo_fdclose_t	*fo_fdpostclose; /* after the descriptor lock is released */
+	fo_spare_t	*fo_spares[6];	/* Spare slots */
 	fo_flags_t	fo_flags;	/* DFLAG_* below */
 };
 

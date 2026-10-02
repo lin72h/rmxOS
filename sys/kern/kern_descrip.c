@@ -1415,6 +1415,8 @@ closefp_impl(struct filedesc *fdp, int fd, struct file *fp, struct thread *td,
 	if (fp->f_ops->fo_fdclose != NULL)
 		fp->f_ops->fo_fdclose(fp, fd, td);
 	FILEDESC_XUNLOCK(fdp);
+	if (fp->f_ops->fo_fdpostclose != NULL)
+		fp->f_ops->fo_fdpostclose(fp, fd, td);
 
 #ifdef AUDIT
 	if (AUDITING_TD(td) && audit)
@@ -2718,6 +2720,11 @@ fdescfree_fds(struct thread *td, struct filedesc *fdp)
 	FILEDESC_FOREACH_FDE(fdp, i, fde) {
 		fp = fde->fde_file;
 		fdefree_last(fde);
+		if (fp->f_ops->fo_fdpostclose != NULL &&
+		    fp->f_ops->fo_fdclose != NULL)
+			fp->f_ops->fo_fdclose(fp, i, td);
+		if (fp->f_ops->fo_fdpostclose != NULL)
+			fp->f_ops->fo_fdpostclose(fp, i, td);
 		(void) closef(fp, td);
 	}
 
@@ -2850,6 +2857,11 @@ fdclose(struct thread *td, struct file *fp, int idx)
 	FILEDESC_XLOCK(fdp);
 	if (fdp->fd_ofiles[idx].fde_file == fp) {
 		fdfree(fdp, idx);
+		if (fp->f_ops->fo_fdpostclose != NULL) {
+			/* closefp also removes knotes and invokes both removal hooks. */
+			(void)closefp(fdp, idx, fp, td, true, true);
+			return;
+		}
 		FILEDESC_XUNLOCK(fdp);
 		fdrop(fp, td);
 	} else
