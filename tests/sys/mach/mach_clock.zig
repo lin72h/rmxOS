@@ -9,6 +9,7 @@ const c = @cImport({
     @cInclude("signal.h");
     @cInclude("sys/wait.h");
     @cInclude("stdio.h");
+    @cInclude("poll.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 const MachTime = extern struct { sec: u32, nsec: c_int };
@@ -19,6 +20,39 @@ fn now() u64 {
 }
 fn sleep(clock: u32, kind: u32, sec: c_int, nsec: c_int, out: ?*MachTime) c_int {
     return c.syscall(c.SYS_clock_sleep_trap, clock, kind, sec, nsec, out);
+}
+// Keep the observation in a child so a broken absolute sleep cannot hold the
+// ATF body until its outer timeout. The parent reports an ordinary ATF failure.
+fn boundedSleep(kind: u32, sec: c_int, nsec: c_int, wake: *MachTime) c_int {
+    const Observation = extern struct { result: c_int, wake: MachTime };
+    var pipe: [2]c_int = undefined;
+    if (c.pipe(&pipe) != 0) c.atf_tc_fail("clock observation pipe failed");
+    const child = c.fork();
+    if (child < 0) c.atf_tc_fail("clock observation fork failed");
+    if (child == 0) {
+        _ = c.close(pipe[0]);
+        var observation = Observation{ .result = 0, .wake = .{ .sec = 0, .nsec = 0 } };
+        observation.result = sleep(0, kind, sec, nsec, &observation.wake);
+        const written = c.write(pipe[1], &observation, @sizeOf(Observation));
+        c._exit(if (written == @sizeOf(Observation)) 0 else 1);
+    }
+    _ = c.close(pipe[1]);
+    defer _ = c.close(pipe[0]);
+    var ready = c.struct_pollfd{ .fd = pipe[0], .events = c.POLLIN, .revents = 0 };
+    const poll_result = c.poll(&ready, 1, 2000);
+    if (poll_result <= 0) {
+        _ = c.kill(child, c.SIGKILL);
+        var status: c_int = 0;
+        if (c.waitpid(child, &status, 0) != child) c.atf_tc_fail("clock observation cleanup failed");
+        if (poll_result == 0) c.atf_tc_fail("clock sleep exceeded its 2000 ms observation bound");
+        c.atf_tc_fail("clock observation poll failed");
+    }
+    var observation: Observation = undefined;
+    const received = c.read(pipe[0], &observation, @sizeOf(Observation));
+    var status: c_int = 0;
+    if (c.waitpid(child, &status, 0) != child or status != 0 or received != @sizeOf(Observation)) c.atf_tc_fail("clock observation child failed");
+    wake.* = observation.wake;
+    return observation.result;
 }
 var cases: [5]c.atf_tc_t = undefined;
 const names = [_][*:0]const u8{ "relative", "absolute", "past", "invalid", "interrupt" };
@@ -37,7 +71,7 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
         return;
     }
     if (std.mem.eql(u8, name, "past")) {
-        if (sleep(0, 0, 0, 0, &wake) != 0) c.atf_tc_fail("past deadline must succeed");
+        if (boundedSleep(0, 0, 0, &wake) != 0) c.atf_tc_fail("past deadline must succeed");
         return;
     }
     if (std.mem.eql(u8, name, "interrupt")) {
@@ -61,7 +95,7 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
     var result: c_int = undefined;
     if (std.mem.eql(u8, name, "absolute")) {
         const deadline = before + 200000000;
-        result = sleep(0, 0, @intCast(deadline / 1000000000), @intCast(deadline % 1000000000), &wake);
+        result = boundedSleep(0, @intCast(deadline / 1000000000), @intCast(deadline % 1000000000), &wake);
     } else {
         result = sleep(0, 1, 0, 200000000, &wake);
     }

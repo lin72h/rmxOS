@@ -4,6 +4,11 @@ These are expected results, not guest observations. The Gatekeeper runs the
 same test artifacts on unchanged alpha2 and the fixed image. No expected-failure
 annotations hide alpha2 failures.
 
+absolute and past run the clock syscall in a child observed through a pipe.
+The parent bounds the observation to 2000 ms, kills and reaps a delayed child,
+and emits ATF FAIL before the outer 15-second bound. Fixed expectations and
+the absolute duration/wakeup checks remain unchanged.
+
 | Fix | ATF program:case | alpha2 | after fix |
 |---|---|---|---|
 | 1 | mach_fileops_test:poll | PANIC | PASS |
