@@ -18,6 +18,7 @@ TESTS_SUBDIRS+=		fs
 TESTS_SUBDIRS+=		geom
 TESTS_SUBDIRS+=		kern
 TESTS_SUBDIRS+=		kqueue
+TESTS_SUBDIRS+=		launchd
 TESTS_SUBDIRS+=		mac
 TESTS_SUBDIRS+=		mach
 TESTS_SUBDIRS+=		mqueue
