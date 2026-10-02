@@ -567,7 +567,7 @@ ipc_process_command(launch_data_t data, const char *cmd, void *context)
 				if ((j = job_find(NULL, launch_data_get_string(data))) == NULL) {
 					resp = launch_data_new_errno(errno);
 				} else {
-					resp = job_export(ctx->j);
+					resp = job_export(j);
 					ipc_revoke_fds(resp);
 				}
 			}
