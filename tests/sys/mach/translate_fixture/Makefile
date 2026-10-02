@@ -7,8 +7,9 @@ CFLAGS+= -DCOMPAT_MACH -I${SYSDIR}/sys -I${SYSDIR}/../include -I${SYSDIR}/../inc
 CFLAGS+= -Wno-error=undef
 ZIG?= zig
 probe.o: ${.CURDIR}/probe.zig
-	${ZIG} build-obj ${.ALLSRC} -target x86_64-freestanding-none \
+	${ZIG} build-obj ${.ALLSRC} -target x86_64-freestanding-none -fllvm \
 	    -mcpu=baseline-mmx-sse-sse2 \
-	    -mcmodel=kernel -mno-red-zone -fno-stack-check -fno-stack-protector \
+	    -mcmodel=kernel -mno-red-zone -fno-unwind-tables -fno-PIC \
+	    -fno-stack-check -fno-stack-protector \
 	    -fno-compiler-rt -femit-bin=${.TARGET}
 .include <bsd.kmod.mk>

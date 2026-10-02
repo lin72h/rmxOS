@@ -4,6 +4,7 @@
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/module.h>
+#include <sys/malloc.h>
 #include <sys/sysctl.h>
 #include <sys/mach/mach_types.h>
 #include <sys/mach/ipc/ipc_entry.h>
@@ -15,6 +16,8 @@
 #include <sys/proc_info.h>
 
 struct observation { int result; int owned; };
+void *rmx_fixture_malloc_type(void);
+void *rmx_fixture_malloc_type(void) { return (M_TEMP); }
 extern int rmx_translate_observe(uint32_t, struct observation *);
 extern int rmx_proc_observe(uint32_t, struct observation *);
 extern int rmx_timeout_observe(uint32_t, struct observation *);
