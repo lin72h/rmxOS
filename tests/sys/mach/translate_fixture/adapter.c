@@ -13,6 +13,7 @@
 #include <sys/mach/ipc/ipc_kmsg.h>
 #include <sys/mach/ipc/ipc_port.h>
 #include <sys/mach/thread.h>
+#include <sys/mach/task.h>
 #include <sys/proc_info.h>
 #include <sys/file.h>
 #include <sys/capsicum.h>
@@ -22,6 +23,36 @@ extern kern_return_t mach_port_get_refs(ipc_space_t, mach_port_name_t,
     mach_port_right_t, mach_port_urefs_t *);
 
 struct observation { int result; int owned; };
+extern int rmx_lifetime_observe(uint32_t, struct observation *);
+extern void rmx_lifetime_clear(void);
+void *rmx_fixture_task(void);
+void *rmx_fixture_control_port(int);
+int rmx_fixture_port_active(void *);
+uint32_t rmx_fixture_send_count(void *);
+void rmx_fixture_port_hold(void *);
+void rmx_fixture_port_drop(void *);
+void rmx_fixture_port_hold(void *port) { ip_reference((ipc_port_t)port); }
+void rmx_fixture_port_drop(void *port) { ip_release((ipc_port_t)port); }
+void *rmx_fixture_task(void) { return (current_task()); }
+void *rmx_fixture_control_port(int thread) {
+	return (thread ? current_thread()->ith_self : current_task()->itk_self);
+}
+int rmx_fixture_port_active(void *pointer) {
+	ipc_port_t port = pointer;
+	int active;
+	ip_lock(port);
+	active = ip_active(port);
+	ip_unlock(port);
+	return (active);
+}
+uint32_t rmx_fixture_send_count(void *pointer) {
+	ipc_port_t port = pointer;
+	uint32_t count;
+	ip_lock(port);
+	count = port->ip_srights;
+	ip_unlock(port);
+	return (count);
+}
 struct identity_observation { uint32_t sender[2]; uint32_t audit[8]; };
 extern int rmx_identity_observe(uint64_t, struct identity_observation *);
 void *rmx_fixture_message_trailer(void *);
@@ -117,6 +148,9 @@ observe_sysctl(SYSCTL_HANDLER_ARGS)
 SYSCTL_PROC(_debug, OID_AUTO, rmx_translate_observe,
     CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, rmx_translate_observe, 0, observe_sysctl,
     "S,observation", "Mach translation lock observation for ATF");
+SYSCTL_PROC(_debug, OID_AUTO, rmx_lifetime_observe,
+    CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, rmx_lifetime_observe, 0,
+    observe_sysctl, "S,observation", "Mach lifetime observation for ATF");
 SYSCTL_PROC(_debug, OID_AUTO, rmx_proc_observe,
     CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, rmx_proc_observe, 0, observe_sysctl,
     "S,observation", "Mach BSD proc observation for ATF");
@@ -163,6 +197,8 @@ SYSCTL_PROC(_debug, OID_AUTO, rmx_identity_observe,
     "S,identity_observation", "Identity in the constructed Mach send trailer");
 static int module_event(module_t mod __unused, int event, void *arg __unused)
 {
+	if (event == MOD_UNLOAD)
+		rmx_lifetime_clear();
 	return (event == MOD_LOAD || event == MOD_UNLOAD ? 0 : EOPNOTSUPP);
 }
 static moduledata_t module = { "rmx_translate_fixture", module_event, NULL };

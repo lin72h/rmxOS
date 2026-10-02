@@ -8,6 +8,45 @@ extern fn rmx_fixture_owned(*anyopaque) c_int;
 extern fn rmx_fixture_unlock(*anyopaque) void;
 extern fn ipc_object_translate(?*anyopaque, u32, u32, *?*anyopaque) c_int;
 const Observation = extern struct { result: c_int, owned: c_int };
+extern fn rmx_fixture_task() *anyopaque;
+extern fn rmx_fixture_control_port(c_int) *anyopaque;
+extern fn rmx_fixture_port_active(*anyopaque) c_int;
+extern fn rmx_fixture_send_count(*anyopaque) u32;
+extern fn ipc_port_alloc_kernel() ?*anyopaque;
+extern fn ipc_port_dealloc_kernel(*anyopaque) void;
+extern fn ipc_port_make_send(*anyopaque) ?*anyopaque;
+extern fn rmx_fixture_port_hold(*anyopaque) void;
+extern fn rmx_fixture_port_drop(*anyopaque) void;
+extern fn task_set_special_port(*anyopaque, c_int, ?*anyopaque) c_int;
+var watched_control: ?*anyopaque = null;
+var watched_bootstrap: ?*anyopaque = null;
+export fn rmx_lifetime_clear() void {
+    if (watched_control) |port| rmx_fixture_port_drop(port);
+    watched_control = null;
+    if (watched_bootstrap) |port| ipc_port_dealloc_kernel(port);
+    watched_bootstrap = null;
+}
+// ATF serializes commands: observe a real control port or bootstrap send count.
+export fn rmx_lifetime_observe(command: u32, out: *Observation) c_int {
+    out.* = .{ .result = 0, .owned = 0 };
+    switch (command) {
+        1 => {
+            watched_bootstrap = ipc_port_alloc_kernel() orelse return 12;
+            out.result = task_set_special_port(rmx_fixture_task(), 4, ipc_port_make_send(watched_bootstrap.?));
+        },
+        2 => out.owned = @intCast(rmx_fixture_send_count(watched_bootstrap orelse return 22)),
+        3, 6 => {
+            if (watched_control != null) return 16;
+            watched_control = rmx_fixture_control_port(if (command == 6) 1 else 0);
+            rmx_fixture_port_hold(watched_control.?);
+            out.owned = rmx_fixture_port_active(watched_control.?);
+        },
+        4 => out.owned = rmx_fixture_port_active(watched_control orelse return 22),
+        5 => rmx_lifetime_clear(),
+        else => return 22,
+    }
+    return 0;
+}
 const Identity = extern struct { sender: [2]u32, audit: [8]u32 };
 const Trailer = extern struct { kind: u32, size: u32, seqno: u32, sender: [2]u32, audit: [8]u32 };
 extern fn ipc_kmsg_get(*anyopaque, u32, *?*anyopaque, ?*anyopaque) c_int;

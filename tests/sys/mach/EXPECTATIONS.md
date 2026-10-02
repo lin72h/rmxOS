@@ -2,6 +2,23 @@
 
 ## Batch 3 (op-426)
 
+Continuation op-427 adds `mach_lifetime_test` before the lifetime fixes:
+
+| Case | Finding | Expected on `ee883a74` | Expected after step 3 |
+| --- | --- | --- | --- |
+| `inherited_rights` | op-389 #4 | FAIL: child exit retains its bootstrap send right | PASS: send count returns to baseline |
+| `shared_fd_exit` | op-389 #11 | FAIL: shared-table child cannot use the parent's Mach name | PASS: both use the name; child exit leaves it intact |
+| `task_control_death` | op-392 F2 | FAIL: exited task's control port is still active | PASS: port is dead |
+| `thread_control_death` | op-392 F2 | FAIL: exited thread's control port is still active | PASS: port dies after the exit gate/reaper |
+| `incarnation` | op-393 N5 prerequisite | FAIL: old task port remains active across later births | PASS: old port stays dead |
+
+The fixture pins actual control ports and observes their Mach activity, or
+observes the send-right count of a private bootstrap port. The shared-table
+case checks Mach urefs, not numeric descriptor assignments. `incarnation`
+holds an old capability through 64 later process lifetimes; it does not claim
+to force a particular UMA slot to be reused. All expectations are
+source-derived; no guest execution is claimed.
+
 `mach_identity_test:live_credentials` covers op-392 F1: expected FAIL on
 `mach-fixes-2` at `ee883a74`, PASS after the send-time credential fix. The
 fixture calls live `ipc_kmsg_get` on the test's private user message and reports
