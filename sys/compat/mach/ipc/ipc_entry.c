@@ -890,9 +890,11 @@ ipc_entry_space_close(ipc_space_t space)
 	ipc_entry_t entry;
 	struct file *fp;
 	mach_port_name_t name;
+	boolean_t current_fds;
 
-	if (space == IS_NULL || space != current_space() || curproc->p_fd == NULL)
+	if (space == IS_NULL)
 		return;
+	current_fds = space == current_space() && curproc->p_fd != NULL;
 	for (;;) {
 		is_read_lock(space);
 		entry = LIST_FIRST(&space->is_entry_list);
@@ -904,7 +906,13 @@ ipc_entry_space_close(ipc_space_t space)
 		name = entry->ie_name;
 		(void)fhold(fp);
 		is_read_unlock(space);
-		fdclose(curthread, fp, name);
+		if (current_fds)
+			fdclose(curthread, fp, name);
+		else {
+			/* Revoke foreign entries without interpreting their names here. */
+			mach_port_fdclose(fp, name, curthread);
+			mach_port_fdpostclose(fp, name, curthread);
+		}
 		fdrop(fp, curthread);
 	}
 }
