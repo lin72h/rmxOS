@@ -1076,6 +1076,10 @@ kern_dup(struct thread *td, u_int mode, int flags, int old, int new)
 	FILEDESC_XLOCK(fdp);
 	if (fget_noref(fdp, old) == NULL)
 		goto unlock;
+	if ((fdp->fd_ofiles[old].fde_file->f_ops->fo_flags & DFLAG_NODUP) != 0) {
+		error = EOPNOTSUPP;
+		goto unlock;
+	}
 	if (mode == FDDUP_FIXED && old == new) {
 		td->td_retval[0] = new;
 		fdp->fd_ofiles[new].fde_flags |= fddup_to_fde_flags(flags);
@@ -4026,6 +4030,10 @@ dupfdopen(struct thread *td, struct filedesc *fdp, int dfd, int mode,
 	if ((fp = fget_noref(fdp, dfd)) == NULL) {
 		FILEDESC_XUNLOCK(fdp);
 		return (EBADF);
+	}
+	if ((fp->f_ops->fo_flags & DFLAG_NODUP) != 0) {
+		FILEDESC_XUNLOCK(fdp);
+		return (EOPNOTSUPP);
 	}
 
 	error = fdalloc(td, 0, &indx);

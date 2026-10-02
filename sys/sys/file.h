@@ -182,6 +182,7 @@ struct fileops {
 #define DFLAG_PASSABLE	0x01	/* may be passed via unix sockets. */
 #define DFLAG_SEEKABLE	0x02	/* seekable / nonsequential */
 #define	DFLAG_FORK	0x04	/* copy on fork */
+#define DFLAG_NODUP	0x08	/* descriptor aliases are not supported */
 #endif /* _KERNEL */
 
 #if defined(_KERNEL) || defined(_WANT_FILE)
