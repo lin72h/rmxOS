@@ -46,4 +46,9 @@ SRCS= aslmanager.c startup_error.c
 LIBADD=	asl notify launch xpc dispatch osxsupport mach thr sys bsm auditd \
 	BlocksRuntime nv sbuf util z
 
+FILESGROUPS+= LAUNCHD
+LAUNCHD= com.rmxos.aslmanager.once.plist
+LAUNCHDDIR= /etc/launchd.d
+LAUNCHDMODE= 0644
+
 .include <bsd.prog.mk>

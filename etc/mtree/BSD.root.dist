@@ -65,6 +65,8 @@
         ..
         kyua            tags=package=kyua
         ..
+        launchd.d       tags=package=runtime
+        ..
         mail            tags=package=runtime
         ..
         mtree           tags=package=mtree
