@@ -2,6 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Enable with asld when opting into ASL store management. -->
+	<key>Disabled</key>
+	<true/>
 	<key>Label</key>
 	<string>com.rmxos.aslmanager.once</string>
 	<key>ProgramArguments</key>
