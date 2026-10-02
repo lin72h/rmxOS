@@ -250,6 +250,8 @@ EVENTHANDLER_DECLARE(process_fini, proc_fini_fn);
 EVENTHANDLER_DECLARE(process_exit, exitlist_fn);
 EVENTHANDLER_DECLARE(process_fork, forklist_fn);
 EVENTHANDLER_DECLARE(process_exec, execlist_fn);
+/* Successful exec, with final credentials installed and no proc lock held. */
+EVENTHANDLER_DECLARE(process_exec_committed, execlist_fn);
 
 /*
  * application dump event

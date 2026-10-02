@@ -105,6 +105,8 @@
 dtrace_execexit_func_t	dtrace_fasttrap_exec;
 #endif
 
+EVENTHANDLER_LIST_DEFINE(process_exec_committed);
+
 SDT_PROVIDER_DECLARE(proc);
 SDT_PROBE_DEFINE1(proc, , , exec, "char *");
 SDT_PROBE_DEFINE1(proc, , , exec__failure, "int");
@@ -1098,6 +1100,10 @@ exec_fail_dealloc:
 
 	if (imgp->object != NULL)
 		vm_object_deallocate(imgp->object);
+
+	/* Final credentials and registers are installed; no proc/vnode lock. */
+	if (error == 0)
+		EVENTHANDLER_DIRECT_INVOKE(process_exec_committed, p, imgp);
 
 	free(imgp->freepath, M_TEMP);
 
