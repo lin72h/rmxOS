@@ -1085,6 +1085,9 @@ mach_task_ctor(void *arg __unused, struct proc *p)
 		ipc_entry_space_bind(task->itk_space, p->p_fd);
 		task->kernel_loaded = TRUE;
 		ipc_task_init(task, TASK_NULL);
+		task->policy = POLICY_TIMESHARE;
+		task->sec_token = KERNEL_SECURITY_TOKEN;
+		task->audit_token = KERNEL_AUDIT_TOKEN;
 		task->itk_binding_state = MACH_BIND_ALIVE;
 		ipc_task_enable(task);
 	}
