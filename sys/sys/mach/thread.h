@@ -73,6 +73,9 @@ struct thread_shuttle {
 	struct exception_action exc_actions[EXC_TYPES_COUNT];
 	int		ref_count;	/* number of references to me */
 	int ith_active;
+	struct mach_task *ith_task_ref;
+	u_int ith_binding_state;
+	boolean_t ith_port_bound;
 
 
 #define	ith_wait_result		wait_result
@@ -615,11 +618,13 @@ extern void		consider_thread_collect(void);
 #define	ith_option		saved.receive.option
 #define ith_scatter_list	saved.receive.scatter_list
 #define ith_scatter_list_size	saved.receive.scatter_list_size
-#define ith_task		ith_td->td_proc->p_machdata
+#define ith_task		ith_task_ref
 #define ith_map			ith_td->td_proc->p_vmspace->vm_map
 #define ith_other		saved.other
 
 #define thread_map(thread) (&(thread)->ith_td->td_proc->p_vmspace->vm_map)
+extern void thread_reference(thread_t);
+extern void thread_deallocate(thread_t);
 
 static __inline thread_t
 current_thread(void)
@@ -636,7 +641,13 @@ current_task(void)
 	return (curthread->td_proc->p_machdata);
 }
 
-#define current_space() current_task()->itk_space
+extern ipc_space_t mach_task_space(task_t);
+extern boolean_t mach_space_is_current(ipc_space_t);
+#define current_space() mach_task_space(current_task())
+extern thread_t mach_thread_prepare(void);
+extern void mach_thread_publish(struct thread *);
+extern void mach_thread_retire(thread_t);
+extern void mach_thread_exit_gate(struct thread *);
 
 #define current_act() current_thread()
 
@@ -651,7 +662,7 @@ current_map(void)
 #define act_lock(act)  mtx_lock(&(act)->ith_lock_data)
 #define act_lock_try(act) mtx_trylock(&(act)->ith_lock_data)
 #define act_unlock(act) mtx_unlock(&act->ith_lock_data)
-#define act_locked_act_reference(act) ((act)->ref_count++)
+#define act_locked_act_reference(act) thread_reference(act)
 
 
 /* wakeup a thread */

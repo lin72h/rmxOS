@@ -146,7 +146,7 @@ ipc_right_lookup(
 		is_write_lock(space);
 	else
 		is_read_lock(space);
-	if (!space->is_active || space != current_space()) {
+	if (!space->is_active || !mach_space_is_current(space)) {
 		if (xlock)
 			is_write_unlock(space);
 		else

@@ -36,6 +36,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/lock.h>
 #include <sys/mutex.h>
 #include <sys/proc.h>
+#include <sys/refcount.h>
 #include <sys/queue.h>
 #include <sys/resource.h>
 #include <sys/resourcevar.h>
@@ -49,6 +50,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/mach/ipc/ipc_kmsg.h>
 #include <sys/mach/thread.h>
+#include <sys/mach/task.h>
 #include <sys/mach/ipc_tt.h>
 #include <sys/mach/thread_switch.h>
 
@@ -201,77 +203,118 @@ thread_will_wait(thread_t thread)
 	thread->timeout = 0;
 }
 
-static void
-mach_thread_create(struct thread *td, thread_t thread)
-{
-
-	thread->ref_count = 1;
-	ipc_thread_init(thread);
-}
-
-
 static uma_zone_t thread_shuttle_zone;
 
-static int
-uma_thread_init(void *_thread, int a, int b)
+void
+thread_reference(thread_t thread)
 {
-	/* allocate thread substructures */
-	return (0);
+	refcount_acquire((u_int *)&thread->ref_count);
+}
+
+void
+thread_deallocate(thread_t thread)
+{
+	if (thread == NULL || !refcount_release((u_int *)&thread->ref_count))
+		return;
+	KASSERT(thread->ith_td == NULL && thread->ith_self == IP_NULL,
+	    ("freeing bound Mach thread"));
+	if (thread->ith_task_ref != TASK_NULL)
+		task_deallocate(thread->ith_task_ref);
+	mtx_destroy(&thread->ith_lock_data);
+	uma_zfree(thread_shuttle_zone, thread);
+}
+
+thread_t
+mach_thread_prepare(void)
+{
+	thread_t thread;
+
+	thread = uma_zalloc(thread_shuttle_zone, M_WAITOK | M_ZERO);
+	mtx_init(&thread->ith_lock_data, "Mach thread", NULL, MTX_DEF);
+	refcount_init((u_int *)&thread->ref_count, 1); /* native attachment */
+	ipc_thread_init(thread);
+	ipc_thr_act_init(thread);
+	return (thread);
+}
+
+void
+mach_thread_publish(struct thread *td)
+{
+	thread_t thread = td->td_machdata;
+	task_t task = td->td_proc->p_machdata;
+
+	/* All storage/ports were prepared by ctor; never allocate or sleep. */
+	if (thread == NULL || task == TASK_NULL)
+		return;
+	KASSERT(thread->ith_task_ref == TASK_NULL, ("Mach thread already published"));
+	task_reference(task);
+	thread->ith_task_ref = task;
+	thread->ith_td = td;
+	atomic_store_rel_int(&thread->ith_binding_state, MACH_BIND_ALIVE);
 }
 
 static void
-uma_thread_fini(void *_thread, int a)
+mach_thread_published(void *arg __unused, struct thread *td)
 {
-	/* deallocate thread substructures */
+	mach_thread_publish(td);
+}
+
+void
+mach_thread_exit_gate(struct thread *td)
+{
+	thread_t thread = td->td_machdata;
+
+	if (thread != NULL)
+		atomic_store_rel_int(&thread->ith_binding_state, MACH_BIND_DYING);
+}
+
+void
+mach_thread_retire(thread_t thread)
+{
+	if (thread == NULL)
+		return;
+	atomic_store_rel_int(&thread->ith_binding_state, MACH_BIND_DYING);
+	ipc_thr_act_terminate(thread);
 }
 
 static void
 mach_thread_init(void *arg __unused, struct thread *td)
 {
-	thread_t thread;
-
-	thread = uma_zalloc(thread_shuttle_zone, M_WAITOK|M_ZERO);
-	mtx_init(&thread->ith_lock_data, "mach_thread lock", NULL, MTX_DEF);
-
-	MPASS(td->td_machdata == NULL);
-	td->td_machdata = thread;
-	thread->ith_td = td;
-	ipc_thr_act_init(thread);
-}
-
-static void
-mach_thread_fini(void *arg __unused, struct thread *td)
-{
-	thread_t thread = td->td_machdata;
-
-	MPASS(thread->ith_kmsg == NULL);
-	MPASS(thread->ith_td == td);
-	ipc_thr_act_terminate(thread);
-	mtx_destroy(&thread->ith_lock_data);
-	uma_zfree(thread_shuttle_zone, thread);
+	td->td_machdata = NULL;
 }
 
 static void
 mach_thread_ctor(void *arg __unused, struct thread *td)
 {
+	td->td_machdata = mach_thread_prepare();
+	if (td == &thread0)
+		mach_thread_publish(td);
+}
+
+static void
+mach_thread_dtor(void *arg __unused, struct thread *td)
+{
 	thread_t thread = td->td_machdata;
 
-	MPASS(thread->ith_td == td);
-	mach_thread_create(td, thread);
-	thread->ith_block_lock_data = NULL;
+	if (thread == NULL)
+		return;
+	mach_thread_retire(thread);
+	ipc_thread_terminate(thread);
+	thread->ith_td = NULL;
+	td->td_machdata = NULL;
+	thread_deallocate(thread);
 }
 
 static void
 thread_sysinit(void *arg __unused)
 {
 	thread_shuttle_zone = uma_zcreate("thread_shuttle_zone",
-									  sizeof(struct thread_shuttle),
-									  NULL, NULL, uma_thread_init,
-									  uma_thread_fini, 1, 0);
-
-	EVENTHANDLER_REGISTER(thread_ctor, mach_thread_ctor, NULL, EVENTHANDLER_PRI_ANY);
+	    sizeof(struct thread_shuttle), NULL, NULL, NULL, NULL, UMA_ALIGN_PTR, 0);
 	EVENTHANDLER_REGISTER(thread_init, mach_thread_init, NULL, EVENTHANDLER_PRI_ANY);
-	EVENTHANDLER_REGISTER(thread_fini, mach_thread_fini, NULL, EVENTHANDLER_PRI_ANY);
+	EVENTHANDLER_REGISTER(thread_ctor, mach_thread_ctor, NULL, EVENTHANDLER_PRI_ANY);
+	EVENTHANDLER_REGISTER(thread_dtor, mach_thread_dtor, NULL, EVENTHANDLER_PRI_ANY);
+	EVENTHANDLER_REGISTER(thread_fini, mach_thread_dtor, NULL, EVENTHANDLER_PRI_ANY);
+	EVENTHANDLER_REGISTER(thread_published, mach_thread_published, NULL, EVENTHANDLER_PRI_ANY);
 }
 
 /* before SI_SUB_INTRINSIC and after SI_SUB_EVENTHANDLER */

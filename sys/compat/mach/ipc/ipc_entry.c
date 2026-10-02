@@ -459,7 +459,7 @@ ipc_entry_lookup(ipc_space_t space, mach_port_name_t name)
 	boolean_t matches;
 
 	rw_assert(&space->is_lock_data, RA_LOCKED);
-	if (!space->is_active || space != current_space() || curproc->p_fd == NULL)
+	if (!space->is_active || !mach_space_is_current(space) || curproc->p_fd == NULL)
 		return (IE_NULL);
 	/* The fd remains an opaque name outside this entry layer. */
 	LIST_FOREACH(entry, &space->is_entry_list, ie_space_link) {
@@ -478,6 +478,7 @@ ipc_entry_lookup(ipc_space_t space, mach_port_name_t name)
 }
 
 struct ipc_file {
+	ipc_space_t space; /* Own the creator namespace through message lifetime. */
 	struct file *fp;
 	struct filecaps caps;
 };
@@ -517,6 +518,8 @@ ipc_entry_file_to_port(ipc_space_t space, mach_port_name_t name, ipc_object_t *o
 	}
 
 	file->fp = fp;
+	file->space = space;
+	is_reference(space);
 	port->ip_context = (mach_vm_address_t)file;
 	port->ip_flags = IP_CONTEXT_FILE;
 	port->ip_receiver = space;
@@ -532,12 +535,10 @@ ipc_entry_file_destroy(ipc_object_t objectp)
 	ipc_port_t port;
 	struct ipc_file *file;
 
-	if (curthread->td_proc->p_fd == NULL)
-		return;
-
 	port = (ipc_port_t)objectp;
 	file = (void *)port->ip_context;
-	ipc_port_dealloc_special(port, current_space());
+	ipc_port_dealloc_special(port, port->ip_receiver);
+	is_release(file->space);
 	filecaps_free(&file->caps);
 	fdrop(file->fp, curthread);
 	free(file, M_MACH_IPC_ENTRY);
@@ -567,6 +568,7 @@ ipc_entry_port_to_file(ipc_space_t space, mach_port_name_t *namep, ipc_object_t 
 		return (error == EMFILE ? KERN_NO_SPACE : KERN_RESOURCE_SHORTAGE);
 	}
 	ipc_port_dealloc_special(port, space);
+	is_release(file->space);
 	filecaps_free(&file->caps);
 	free(file, M_MACH_IPC_ENTRY);
 	fdrop(fp, curthread);
@@ -602,7 +604,7 @@ ipc_entry_get(
 	assert(space->is_active);
 
 	td  = curthread;
-	if (space != current_space())
+	if (!mach_space_is_current(space))
 		return (KERN_INVALID_TASK);
 	if ((free_entry = malloc(sizeof(*free_entry), M_MACH_IPC_ENTRY, M_WAITOK|M_ZERO)) == NULL)
 		return KERN_RESOURCE_SHORTAGE;
@@ -718,7 +720,7 @@ ipc_entry_alloc_name(
 	if (!space->is_active) {
 		return (KERN_INVALID_TASK);
 	}
-	if (space != current_space())
+	if (!mach_space_is_current(space))
 		return (KERN_INVALID_TASK);
 	assert(MACH_PORT_NAME_VALID(name));
 	is_write_lock(space);
@@ -884,6 +886,34 @@ ipc_entry_remove(ipc_space_t space, ipc_entry_t entry)
 	fdrop(fp, curthread);
 }
 
+/*
+ * Keep the table address stable without keeping any descriptor alive.
+ * The caller owns a live table; mirror fdhold/fddrop's storage-only protocol
+ * from kern_descrip.c. filedesc0_zone is supplied by leak-locals.
+ */
+extern uma_zone_t filedesc0_zone;
+
+void
+ipc_entry_space_bind(ipc_space_t space, struct filedesc *fdp)
+{
+	KASSERT(space->is_fdp == NULL, ("Mach space already bound"));
+	if (fdp != NULL)
+		refcount_acquire(&fdp->fd_holdcnt);
+	space->is_fdp = fdp;
+}
+
+void
+ipc_entry_space_unbind(ipc_space_t space)
+{
+	struct filedesc *fdp = space->is_fdp;
+
+	space->is_fdp = NULL;
+	if (fdp == NULL || !refcount_release(&fdp->fd_holdcnt))
+		return;
+	FILEDESC_LOCK_DESTROY(fdp);
+	uma_zfree(filedesc0_zone, fdp);
+}
+
 void
 ipc_entry_space_close(ipc_space_t space)
 {
@@ -894,7 +924,7 @@ ipc_entry_space_close(ipc_space_t space)
 
 	if (space == IS_NULL)
 		return;
-	current_fds = space == current_space() && curproc->p_fd != NULL;
+	current_fds = mach_space_is_current(space) && curproc->p_fd != NULL;
 	for (;;) {
 		is_read_lock(space);
 		entry = LIST_FIRST(&space->is_entry_list);
@@ -917,23 +947,6 @@ ipc_entry_space_close(ipc_space_t space)
 	}
 }
 
-static void
-ipc_entry_list_close(void *arg __unused, struct proc *p)
-{
-	if (p == curproc)
-		ipc_entry_space_close(current_space());
-}
-
-
-static void
-ipc_entry_sysinit(void *arg __unused)
-{
-
-	EVENTHANDLER_REGISTER(process_exit, ipc_entry_list_close, NULL, EVENTHANDLER_PRI_ANY);
-	EVENTHANDLER_REGISTER(process_exec, ipc_entry_list_close, NULL, EVENTHANDLER_PRI_ANY);
-}
-
-SYSINIT(ipc_entry, SI_SUB_KLD, SI_ORDER_ANY, ipc_entry_sysinit, NULL);
 
 
 #define NDFILE		20

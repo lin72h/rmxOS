@@ -37,6 +37,9 @@
 #include <sys/systm.h>
 #include <sys/proc.h>
 #include <sys/mach/task.h>
+#include <sys/mach/ipc/ipc_kmsg.h>
+#include <sys/mach/ipc/ipc_object.h>
+#include <sys/mach/thread.h>
 #include <sys/mach/ipc/ipc_entry.h>
 #include <sys/mach/ipc/ipc_port.h>
 #include <sys/mach/ipc/ipc_space.h>
@@ -286,6 +289,8 @@ mach_module_event_handler(module_t mod, int what, void *arg)
 			printf("mach services failed to load - mach system calls will not be available\n");
 			return (err);
 		}
+		atomic_store_rel_ptr((volatile uintptr_t *)&thread_exit_gate_hook,
+		    (uintptr_t)mach_thread_exit_gate);
 		break;
 	case MOD_UNLOAD:
 		return (EBUSY);

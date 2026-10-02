@@ -99,6 +99,9 @@
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/eventhandler.h>
+#include <sys/imgact.h>
+#include <sys/filedesc.h>
+#include <sys/refcount.h>
 #include <sys/kernel.h>
 #include <sys/mach/vm_types.h>
 
@@ -173,120 +176,49 @@ task_create(
 }
 
 
-static kern_return_t
-task_create_internal(
-	task_t		new_task)
-{
-
-	/* one ref for just being alive; one for our caller */
-	new_task->ref_count = 2;
-	new_task->semaphores_owned = 0;
-
-	ipc_task_create(new_task);
-
-	return (KERN_SUCCESS);
-}
-
-static kern_return_t
-task_init_internal(
-	task_t		parent_task,
-	task_t		new_task)
-{
-#ifdef notyet
-	register processor_set_t	pset;
-#endif
-
-	/* one ref for just being alive; one for our caller */
-	new_task->ref_count = 2;
-	new_task->semaphores_owned = 0;
-
-	ipc_task_init(new_task, parent_task);
-
-	if (parent_task != TASK_NULL) {
-#ifdef notyet		
-		pset = parent_task->processor_set;
-		if (!pset->active)
-			pset = &default_pset;
-#endif
-		set_security_token(new_task);
-		new_task->policy = parent_task->policy;
-	} else {
-		new_task->policy = POLICY_TIMESHARE;
-		new_task->sec_token = KERNEL_SECURITY_TOKEN;
-		new_task->audit_token = KERNEL_AUDIT_TOKEN;
-	}
-	ipc_task_enable(new_task);
-	return(KERN_SUCCESS);
-}
-
-
-
 /*
  *	task_free:
  *
  *	Called by task_deallocate when the task's reference count drops to zero.
- *	Task is locked.
+ *	No native binding or IPC lock is held by the releasing caller.
  */
 void
-task_free( register task_t	task )
+mach_space_drop(ipc_space_t space)
 {
-#if 0
-	register processor_set_t pset;
-#endif
-
-	/* tasks are tied to proc structures so should only be freed if proc goes away */
-	task_unlock(task);
-	return;
-#if 0
-	/*
-	 * Temporarily restore the reference we dropped above, then
-	 * freeze the task so that the task->processor_set field
-	 * cannot change. In the !MACH_HOST case, the logic can be
-	 * simplified, since the default_pset is the only pset.
-	 */
-	++task->ref_count;
-	task_unlock(task);
-	pset = task->processor_set;
-	task_lock(task);
-	if (--task->ref_count > 0) {
-		/*
-		 * A new reference appeared (probably from the pset).
-		 * Back out. Must unfreeze inline since we'already
-		 * dropped our reference.
-		 */
-		task_unlock(task);
+	if (space == IS_NULL)
 		return;
-	}
-	task_unlock(task);
-	is_release(task->itk_space);
+	if (refcount_release(&space->is_owners))
+		ipc_space_destroy(space);
+	is_release(space);
+}
+
+void
+task_free(task_t task)
+{
+	KASSERT(task->itk_p == NULL && task->itk_self == IP_NULL,
+	    ("freeing a bound Mach task"));
+	mach_space_drop(task->itk_space);
+	mach_space_drop(task->itk_exec_space);
+	mtx_destroy(&task->itk_binding_lock);
+	mtx_destroy(&task->itk_lock_data);
+	mtx_destroy(&task->lock);
 	uma_zfree(task_zone, task);
-#endif
-}
-
-
-void
-task_deallocate( task_t task )
-{
-	if (task != TASK_NULL) {
-	    int x;
-	    task_lock(task);
-	    x = --task->ref_count;
-	    if (x == 0)
-		task_free(task);	/* unlocks task */
-	    else
-		task_unlock(task);
-	}
 }
 
 void
-task_reference( register task_t task )
+task_deallocate(task_t task)
 {
-	if (task != TASK_NULL) {
-	    task_lock(task);
-	    task->ref_count++;
-	    task_unlock(task);
-	}
+	if (task != TASK_NULL && refcount_release((u_int *)&task->ref_count))
+		task_free(task);
 }
+
+void
+task_reference(task_t task)
+{
+	if (task != TASK_NULL)
+		refcount_acquire((u_int *)&task->ref_count);
+}
+
 
 /*
  *	task_terminate:
@@ -452,6 +384,11 @@ task_terminate(
 	 *	Shut down IPC.
 	 */
 	ipc_task_terminate(task);
+	if (task->itk_exec_thread != NULL) {
+		mach_thread_retire(task->itk_exec_thread);
+		thread_deallocate(task->itk_exec_thread);
+		task->itk_exec_thread = NULL;
+	}
 
 	/*
 	 *	Deallocate the task's reference to itself.
@@ -1089,76 +1026,211 @@ task_synchronizer_destroy_all(task_t task)
 	}
 }
 
-static long task_uniqueid;
+static volatile u_long task_uniqueid;
 
-static void
-mach_task_release_inherited(void *arg __unused, struct proc *p)
+boolean_t
+mach_space_is_current(ipc_space_t space)
 {
-	task_t task = p->p_machdata;
+	task_t task = current_task();
+	return (task != TASK_NULL && space == task->itk_space &&
+	    space->is_fdp == curproc->p_fd);
+}
 
-	if (task != TASK_NULL)
-		ipc_task_release_special_ports(task);
+/* Allocate outside the binding mutex; recheck before publishing. */
+ipc_space_t
+mach_task_space(task_t task)
+{
+	ipc_space_t space, fresh = IS_NULL, old = IS_NULL;
+	struct filedesc *fdp;
+
+	if (task == TASK_NULL)
+		return (IS_NULL);
+retry:
+	mtx_lock(&task->itk_binding_lock);
+	fdp = curproc->p_fd;
+	space = task->itk_space;
+	if (task != current_task() || space->is_fdp == fdp ||
+	    task->itk_binding_state != MACH_BIND_ALIVE) {
+		mtx_unlock(&task->itk_binding_lock);
+		mach_space_drop(fresh);
+		return (space);
+	}
+	if (fresh == IS_NULL) {
+		mtx_unlock(&task->itk_binding_lock);
+		if (ipc_space_create(&ipc_table_entries[0], &fresh) != KERN_SUCCESS)
+			panic("Mach space allocation failed");
+		refcount_init(&fresh->is_owners, 1);
+		goto retry;
+	}
+	ipc_entry_space_bind(fresh, fdp);
+	old = space;
+	task->itk_space = fresh;
+	mtx_unlock(&task->itk_binding_lock);
+	mach_space_drop(old);
+	return (fresh);
 }
 
 static void
 mach_task_init(void *arg __unused, struct proc *p)
 {
+	p->p_machdata = NULL;
+}
+
+static void
+mach_task_ctor(void *arg __unused, struct proc *p)
+{
 	task_t task;
 
-	p->p_machdata = task = uma_zalloc(task_zone, M_WAITOK|M_ZERO);
-	task->itk_p = p;
-
-	mach_mutex_init(&task->lock, "ETAP_THREAD_TASK_NEW");
-	mach_mutex_init(&task->itk_lock_data, "ETAP_THREAD_TASK_ITK");
+	task = uma_zalloc(task_zone, M_WAITOK | M_ZERO);
+	refcount_init((u_int *)&task->ref_count, 1); /* proc attachment */
+	mach_mutex_init(&task->lock, "Mach task");
+	mach_mutex_init(&task->itk_lock_data, "Mach task IPC");
+	mtx_init(&task->itk_binding_lock, "Mach native binding", NULL, MTX_DEF);
 	queue_init(&task->semaphore_list);
-
+	ipc_task_create(task);
+	p->p_machdata = task;
 	if (p == &proc0) {
 		kernel_task = task;
-		task_create_internal(task);
-		task_init_internal(TASK_NULL, task);
-	} else {
-		task_create_internal(task);
+		task->itk_p = p;
+		ipc_entry_space_bind(task->itk_space, p->p_fd);
+		task->kernel_loaded = TRUE;
+		ipc_task_init(task, TASK_NULL);
+		task->itk_binding_state = MACH_BIND_ALIVE;
+		ipc_task_enable(task);
 	}
 }
 
 static void
-mach_task_fork(void *arg __unused, struct proc *p1, struct proc *p2, int flags __unused)
+mach_task_fork(void *arg __unused, struct proc *p1, struct proc *p2,
+    int flags __unused)
 {
-	task_t task = p2->p_machdata;
-	task_t parent_task = p1->p_machdata;
+	task_t parent = p1->p_machdata, task = p2->p_machdata;
+	ipc_space_t private;
 
-	atomic_add_long(&task_uniqueid, 1);
-	task->itk_uniqueid = task_uniqueid;
-	task->itk_puniqueid = parent_task->itk_uniqueid;
-	task_init_internal(parent_task, task);
-}
-
-static int
-uma_task_init(void *_thread, int a, int b)
-{
-	/* allocate task substructures */
-	return (0);
+	(void)mach_task_space(parent);
+	task->itk_p = p2;
+	task->itk_uniqueid = atomic_fetchadd_long(&task_uniqueid, 1) + 1;
+	task->itk_puniqueid = parent->itk_uniqueid;
+	if (p1->p_fd == p2->p_fd) {
+		mtx_lock(&parent->itk_binding_lock);
+		private = task->itk_space;
+		task->itk_space = parent->itk_space;
+		is_reference(task->itk_space);
+		refcount_acquire(&task->itk_space->is_owners);
+		mtx_unlock(&parent->itk_binding_lock);
+		mach_space_drop(private);
+	} else {
+		ipc_entry_space_bind(task->itk_space, p2->p_fd);
+	}
+	ipc_task_init(task, parent);
+	set_security_token(task);
+	task->policy = parent->policy;
+	atomic_store_rel_int(&task->itk_binding_state, MACH_BIND_ALIVE);
+	ipc_task_enable(task);
+	mach_thread_publish(FIRST_THREAD_IN_PROC(p2));
 }
 
 static void
-uma_task_fini(void *_thread, int a)
+mach_task_exit(void *arg __unused, struct proc *p)
 {
-	/* deallocate task substructures */
+	task_t task = p->p_machdata;
+
+	if (task == TASK_NULL)
+		return;
+	mtx_lock(&task->itk_binding_lock);
+	atomic_store_rel_int(&task->itk_binding_state, MACH_BIND_DYING);
+	task->itk_p = NULL;
+	mtx_unlock(&task->itk_binding_lock);
+	ipc_task_disable(task);
+	ipc_task_terminate(task);
+	if (task->itk_exec_thread != NULL) {
+		mach_thread_retire(task->itk_exec_thread);
+		ipc_thread_terminate(task->itk_exec_thread);
+		thread_deallocate(task->itk_exec_thread);
+		task->itk_exec_thread = NULL;
+	}
+	/* Native exit has already stopped other threads. */
+	mach_thread_retire(FIRST_THREAD_IN_PROC(p)->td_machdata);
 }
 
+static void
+mach_task_dtor(void *arg __unused, struct proc *p)
+{
+	task_t task = p->p_machdata;
+
+	if (task == TASK_NULL)
+		return;
+	/* Also unwind objects prepared for unsuccessful process creation. */
+	mach_task_exit(NULL, p);
+	p->p_machdata = NULL;
+	task_deallocate(task);
+}
+
+static void
+mach_task_exec(void *arg __unused, struct proc *p,
+    struct image_params *imgp __unused)
+{
+	task_t task = p->p_machdata;
+	ipc_space_t space;
+
+	if (task == TASK_NULL)
+		return;
+	if (ipc_space_create(&ipc_table_entries[0], &space) != KERN_SUCCESS)
+		panic("Mach exec space allocation failed");
+	refcount_init(&space->is_owners, 1);
+	task->itk_exec_thread = mach_thread_prepare();
+	mtx_lock(&task->itk_binding_lock);
+	task->itk_exec_space = space;
+	atomic_store_rel_int(&task->itk_binding_state, MACH_BIND_EXECING);
+	mtx_unlock(&task->itk_binding_lock);
+}
+
+static void
+mach_task_exec_committed(void *arg __unused, struct proc *p,
+    struct image_params *imgp)
+{
+	task_t task = p->p_machdata;
+	ipc_space_t old, fresh;
+	thread_t retired;
+
+	if (task == TASK_NULL)
+		return;
+	old = task->itk_space;
+	/* Only the executing process's unshared table may be drained. */
+	if (old->is_fdp == p->p_fd)
+		ipc_entry_space_close(old);
+	mtx_lock(&task->itk_binding_lock);
+	fresh = task->itk_exec_space;
+	ipc_entry_space_bind(fresh, p->p_fd);
+	task->itk_space = fresh;
+	task->itk_exec_space = IS_NULL;
+	retired = curthread->td_machdata;
+	curthread->td_machdata = task->itk_exec_thread;
+	task->itk_exec_thread = NULL;
+	mtx_unlock(&task->itk_binding_lock);
+	mach_thread_retire(retired);
+	ipc_thread_terminate(retired);
+	retired->ith_td = NULL;
+	thread_deallocate(retired); /* old native attachment */
+	if (imgp->credential_setid)
+		ipc_task_reset_control(task);
+	mach_thread_publish(curthread);
+	mach_space_drop(old);
+	atomic_store_rel_int(&task->itk_binding_state, MACH_BIND_ALIVE);
+}
 
 static void
 task_sysinit(void *arg __unused)
 {
-	task_zone = uma_zcreate("mach_task_zone",
-							sizeof(struct mach_task),
-							NULL, NULL, uma_task_init,
-							uma_task_fini, 1, 0);
-
+	task_zone = uma_zcreate("mach_task_zone", sizeof(struct mach_task),
+	    NULL, NULL, NULL, NULL, UMA_ALIGN_PTR, 0);
 	EVENTHANDLER_REGISTER(process_init, mach_task_init, NULL, EVENTHANDLER_PRI_ANY);
+	EVENTHANDLER_REGISTER(process_ctor, mach_task_ctor, NULL, EVENTHANDLER_PRI_ANY);
+	EVENTHANDLER_REGISTER(process_dtor, mach_task_dtor, NULL, EVENTHANDLER_PRI_ANY);
 	EVENTHANDLER_REGISTER(process_fork, mach_task_fork, NULL, EVENTHANDLER_PRI_ANY);
-	EVENTHANDLER_REGISTER(process_exit, mach_task_release_inherited, NULL,
-	    EVENTHANDLER_PRI_ANY);
+	EVENTHANDLER_REGISTER(process_exit, mach_task_exit, NULL, EVENTHANDLER_PRI_ANY);
+	EVENTHANDLER_REGISTER(process_exec, mach_task_exec, NULL, EVENTHANDLER_PRI_ANY);
+	EVENTHANDLER_REGISTER(process_exec_committed, mach_task_exec_committed, NULL, EVENTHANDLER_PRI_ANY);
 }
 
 /* before SI_SUB_INTRINSIC and after SI_SUB_EVENTHANDLER */

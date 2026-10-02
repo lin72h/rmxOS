@@ -167,7 +167,7 @@ ipc_task_create(
 	task->itk_self = kport;
 	task->itk_sself = ipc_port_make_send(kport);
 	task->itk_space = space;
-	space->is_task = task;
+	space->is_owners = 1;
 }
 
 void
@@ -222,47 +222,32 @@ ipc_task_init(
  */
 
 void
-ipc_task_enable(
-	task_t		task)
+ipc_task_enable(task_t task)
 {
-	ipc_port_t kport;
-
 	itk_lock(task);
-	kport = task->itk_self;
-	if (kport != IP_NULL)
-		ipc_kobject_set(kport, (ipc_kobject_t) task, IKOT_TASK);
+	if (task->itk_self != IP_NULL && !task->itk_port_bound) {
+		task_reference(task); /* active kobject binding */
+		task->itk_port_bound = TRUE;
+		ipc_kobject_set(task->itk_self, (ipc_kobject_t)task, IKOT_TASK);
+	}
 	itk_unlock(task);
 }
-
-/*
- *	Routine:	ipc_task_disable
- *	Purpose:
- *		Disable IPC access to a task.
- *	Conditions:
- *		Nothing locked.
- */
 
 void
-ipc_task_disable(
-	task_t		task)
+ipc_task_disable(task_t task)
 {
-	ipc_port_t kport;
+	boolean_t bound;
 
 	itk_lock(task);
-	kport = task->itk_self;
-	if (kport != IP_NULL)
-		ipc_kobject_set(kport, IKO_NULL, IKOT_NONE);
+	bound = task->itk_port_bound;
+	if (bound) {
+		ipc_kobject_set(task->itk_self, IKO_NULL, IKOT_NONE);
+		task->itk_port_bound = FALSE;
+	}
 	itk_unlock(task);
+	if (bound)
+		task_deallocate(task);
 }
-
-/*
- *	Routine:	ipc_task_terminate
- *	Purpose:
- *		Clean up and destroy a task's IPC state.
- *	Conditions:
- *		Nothing locked.  The task must be suspended.
- *		(Or the current thread must be in the task.)
- */
 
 void
 ipc_task_release_special_ports(task_t task)
@@ -270,7 +255,6 @@ ipc_task_release_special_ports(task_t task)
 	ipc_port_t ports[EXC_TYPES_COUNT + TASK_PORT_REGISTER_MAX + 7];
 	unsigned int count = 0, i;
 
-	/* Transfer ownership under the task IPC lock; destroy outside it. */
 	itk_lock(task);
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
 		ports[count++] = task->exc_actions[i].port;
@@ -298,49 +282,47 @@ ipc_task_release_special_ports(task_t task)
 }
 
 void
-ipc_task_terminate(
-	task_t		task)
+ipc_task_terminate(task_t task)
 {
-	ipc_port_t kport;
-	int i;
+	ipc_port_t self, send, resume;
 
+	ipc_task_disable(task);
 	itk_lock(task);
-	kport = task->itk_self;
-
-	if (kport == IP_NULL) {
-		/* the task is already terminated (can this happen?) */
-		itk_unlock(task);
-		return;
-	}
-
-	task->itk_self = IP_NULL;
+	self = task->itk_self;
+	send = task->itk_sself;
+	resume = task->itk_resume;
+	task->itk_self = task->itk_sself = task->itk_resume = IP_NULL;
 	itk_unlock(task);
+	ipc_task_release_special_ports(task);
+	if (IP_VALID(send))
+		ipc_port_release_send(send);
+	if (IP_VALID(self))
+		ipc_port_dealloc_kernel(self);
+	if (IP_VALID(resume))
+		ipc_port_dealloc_kernel(resume);
+	/* Namespace ownership stays pinned until the native attachment is gone. */
+}
 
-	/* release the naked send rights */
+void
+ipc_task_reset_control(task_t task)
+{
+	ipc_port_t old, send, fresh;
 
-	if (IP_VALID(task->itk_sself))
-		ipc_port_release_send(task->itk_sself);
-
-	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
-		if (IP_VALID(task->exc_actions[i].port)) {
-			ipc_port_release_send(task->exc_actions[i].port);
-		}
-	}/* for */
-	if (IP_VALID(task->itk_bootstrap))
-		ipc_port_release_send(task->itk_bootstrap);
-
-	for (i = 0; i < TASK_PORT_REGISTER_MAX; i++)
-		if (IP_VALID(task->itk_registered[i]))
-			ipc_port_release_send(task->itk_registered[i]);
-
-	/* destroy the space, leaving just a reference for it */
-
-	if (!task->kernel_loaded)
-		ipc_space_destroy(task->itk_space);
-
-	/* destroy the kernel port */
-
-	ipc_port_dealloc_kernel(kport);
+	fresh = ipc_port_alloc_kernel();
+	if (fresh == IP_NULL)
+		panic("Mach task control allocation failed");
+	ipc_task_disable(task);
+	itk_lock(task);
+	old = task->itk_self;
+	send = task->itk_sself;
+	task->itk_self = fresh;
+	task->itk_sself = ipc_port_make_send(fresh);
+	itk_unlock(task);
+	ipc_task_enable(task);
+	if (IP_VALID(send))
+		ipc_port_release_send(send);
+	if (IP_VALID(old))
+		ipc_port_dealloc_kernel(old);
 }
 
 /*
@@ -407,6 +389,8 @@ ipc_thr_act_init(thread_act_t thr_act)
 	thr_act->exc_actions[EXC_MACH_SYSCALL].port =
 					ipc_port_make_send(realhost.host_self);
 
+	thread_reference(thr_act); /* active kobject binding */
+	thr_act->ith_port_bound = TRUE;
 	ipc_kobject_set(kport, (ipc_kobject_t) thr_act, IKOT_ACT);
 }
 
@@ -441,35 +425,35 @@ ipc_thr_act_disable_act_locked(thread_act_t thr_act)
 #endif
 
 void
-ipc_thr_act_terminate(thread_act_t thr_act)
+ipc_thr_act_terminate(thread_act_t thread)
 {
-	ipc_port_t kport; int i;
+	ipc_port_t self, send, exceptions[EXC_TYPES_COUNT];
+	boolean_t bound;
+	int i;
 
-	act_lock(thr_act);
-	kport = thr_act->ith_self;
-
-	if (kport == IP_NULL) {
-		/* the thread is already terminated (can this happen?) */
-		act_unlock(thr_act);
-		return;
-	}
-
-	thr_act->ith_self = IP_NULL;
-	act_unlock(thr_act);
-
-	/* release the naked send rights */
-
-	if (IP_VALID(thr_act->ith_sself))
-		ipc_port_release_send(thr_act->ith_sself);
+	act_lock(thread);
+	self = thread->ith_self;
+	send = thread->ith_sself;
+	bound = thread->ith_port_bound;
+	if (bound)
+		ipc_kobject_set(self, IKO_NULL, IKOT_NONE);
+	thread->ith_port_bound = FALSE;
+	thread->ith_self = thread->ith_sself = IP_NULL;
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
-	    if (IP_VALID(thr_act->exc_actions[i].port))
-		ipc_port_release_send(thr_act->exc_actions[i].port);
+		exceptions[i] = thread->exc_actions[i].port;
+		thread->exc_actions[i].port = IP_NULL;
 	}
-
-	/* destroy the kernel port */
-	ipc_port_dealloc_kernel(kport);
+	act_unlock(thread);
+	if (IP_VALID(send))
+		ipc_port_release_send(send);
+	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++)
+		if (IP_VALID(exceptions[i]))
+			ipc_port_release_send(exceptions[i]);
+	if (IP_VALID(self))
+		ipc_port_dealloc_kernel(self);
+	if (bound)
+		thread_deallocate(thread);
 }
-
 
 /*
  *	Routine:	retrieve_task_self_fast
@@ -608,7 +592,7 @@ mach_reply_port(void)
 	mach_port_name_t name;
 	kern_return_t kr;
 
-	kr = ipc_port_alloc(current_task()->itk_space, &name, &port);
+	kr = ipc_port_alloc(current_space(), &name, &port);
 	if (kr == KERN_SUCCESS)
 		ip_unlock(port);
 	else
@@ -642,6 +626,11 @@ task_get_special_port(
 	if (task == TASK_NULL)
 		return KERN_INVALID_ARGUMENT;
 
+	itk_lock(task);
+	if (task->itk_self == IP_NULL) {
+		itk_unlock(task);
+		return KERN_FAILURE;
+	}
 	switch (which) {
 	case TASK_KERNEL_PORT:
 		port = ipc_port_copy_send(task->itk_sself);
@@ -671,9 +660,11 @@ task_get_special_port(
 		port = ipc_port_copy_send(task->itk_debug_control);
 		break;
 	    default:
+		itk_unlock(task);
 		return KERN_INVALID_ARGUMENT;
 	}
 
+	itk_unlock(task);
 	*portp = port;
 	return KERN_SUCCESS;
 }
@@ -732,12 +723,12 @@ task_set_special_port(
 		return KERN_INVALID_ARGUMENT;
 	}/* switch */
 
+	itk_lock(task);
 	if ((TASK_SEATBELT_PORT == which  || TASK_ACCESS_PORT == which) 
 		&& IP_VALID(*whichp)) {
 			itk_unlock(task);
 			return KERN_NO_ACCESS;
 	}
-	itk_lock(task);
 	if (task->itk_self == IP_NULL) {
 		itk_unlock(task);
 		return KERN_FAILURE;
@@ -907,8 +898,12 @@ convert_port_to_task(
 	boolean_t r;
 	task_t task = TASK_NULL;
 
-	/* currently only handle current task */
-	return (current_task());
+	/* D2 still defers task-call dispatch; preserve caller-task semantics. */
+	task = current_task();
+	if (task == TASK_NULL || atomic_load_acq_int(&task->itk_binding_state) != MACH_BIND_ALIVE)
+		return (TASK_NULL);
+	task_reference(task);
+	return (task);
 
 	r = FALSE;
 	while (!r && IP_VALID(port)) {
@@ -936,12 +931,10 @@ ref_task_port_locked( ipc_port_t port, task_t *ptask )
 		 * Allow out-of-order locking here, inlining
 		 * task_reference() to accomodate it.
 		 */
-		if (!task_lock_try(task)) {
-			ip_unlock(port);
-			return (FALSE);
-		}
-		task->ref_count++;
-		task_unlock(task);
+		if (atomic_load_acq_int(&task->itk_binding_state) != MACH_BIND_ALIVE)
+			task = TASK_NULL;
+		else
+			task_reference(task);
 	}
 	*ptask = task;
 	ip_unlock(port);
@@ -977,27 +970,23 @@ convert_port_to_space(
 boolean_t
 ref_space_port_locked( ipc_port_t port, ipc_space_t *pspace )
 {
-	ipc_space_t space;
+	ipc_space_t space = IS_NULL;
+	task_t task;
 
-	space = IS_NULL;
-	if (ip_active(port) &&
-		(ip_kotype(port) == IKOT_TASK)) {
-		space = ((task_t) port->ip_kobject)->itk_space;
-
-		/*
-		 * Normal lock ordering puts ipc_space lock before
-		 * ip_lock(). Allow out-of-order locking here, inlining
-		 * is_reference() to accomodate it.
-		 */
-		if (!mtx_trylock(&space->is_ref_lock_data)) {
-			ip_unlock(port);
-			return (FALSE);
+	/* Pin under the port lock, then leave it before the binding lock. */
+	(void)ref_task_port_locked(port, &task); /* unlocks port */
+	if (task != TASK_NULL) {
+		if (task == current_task())
+			(void)mach_task_space(task);
+		mtx_lock(&task->itk_binding_lock);
+		if (task->itk_binding_state == MACH_BIND_ALIVE) {
+			space = task->itk_space;
+			is_reference(space);
 		}
-		space->is_references++;
-		mtx_unlock(&space->is_ref_lock_data);
+		mtx_unlock(&task->itk_binding_lock);
+		task_deallocate(task);
 	}
 	*pspace = space;
-	ip_unlock(port);
 	return (TRUE);
 }
 
@@ -1044,12 +1033,10 @@ ref_act_port_locked( ipc_port_t port, thread_act_t *pthr_act )
 		 * Allow out-of-order locking here, using
 		 * act_reference_act_locked() to accomodate it.
 		 */
-		if (!act_lock_try(thr_act)) {
-			ip_unlock(port);
-			return (FALSE);
-		}
-		act_locked_act_reference(thr_act);
-		act_unlock(thr_act);
+		if (atomic_load_acq_int(&thr_act->ith_binding_state) != MACH_BIND_ALIVE)
+			thr_act = THR_ACT_NULL;
+		else
+			thread_reference(thr_act);
 	}
 	*pthr_act = thr_act;
 	ip_unlock(port);

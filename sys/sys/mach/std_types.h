@@ -157,7 +157,8 @@ extern int mach_debug_enable;
 #define ds_notify(map) 0
 #define ds_master_notify(map) 0
 #define vm_map_copy_steal_pages(copy)
-#define thread_deallocate(thread)
+struct thread_shuttle;
+extern void thread_deallocate(struct thread_shuttle *);
 #define task_name_deallocate(task)
 #define assert_wait(a, b)
 #define cpu_number() curcpu

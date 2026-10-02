@@ -238,7 +238,7 @@ ipc_space_create_special(
 
 	is_lock_init(space);
 	space->is_active = FALSE;
-	space->is_task = current_task();
+	space->is_task = TASK_NULL;
 	LIST_INIT(&space->is_entry_list);
 
 	*spacep = space;
@@ -292,6 +292,7 @@ ipc_space_destroy(
 
 	table = space->is_table;
 	ipc_entry_space_close(space);
+	ipc_entry_space_unbind(space);
 
 	it_entries_free(space->is_table_next-1, table);
 

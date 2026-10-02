@@ -201,6 +201,9 @@ void ipc_entry_reference(ipc_entry_t);
 void ipc_entry_put(ipc_entry_t);
 /* Remove the entry's proxy; consumes the space write lock. */
 void ipc_entry_remove(ipc_space_t, ipc_entry_t);
+struct filedesc;
+void ipc_entry_space_bind(ipc_space_t, struct filedesc *);
+void ipc_entry_space_unbind(ipc_space_t);
 void ipc_entry_space_close(ipc_space_t);
 
 /* release a reference to an entry */

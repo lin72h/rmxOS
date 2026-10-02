@@ -286,6 +286,17 @@ typedef struct mach_task {
 	int		semaphores_owned;	/* number of semaphores owned */
 
 	int		messages_received;
+	/* Native attachment gate; independent of Mach IPC and space locks. */
+	struct mtx itk_binding_lock;
+	u_int itk_binding_state;
+	boolean_t itk_port_bound;
+	struct ipc_space *itk_exec_space;
+	struct thread_shuttle *itk_exec_thread;
+
+#define MACH_BIND_UNPUBLISHED 0
+#define MACH_BIND_ALIVE 1
+#define MACH_BIND_EXECING 2
+#define MACH_BIND_DYING 3
 	
 #ifdef notyet	/* Active activations in this task */
 	queue_head_t	thr_acts;	/* list of thread_activations */
