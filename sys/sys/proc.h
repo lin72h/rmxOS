@@ -192,6 +192,8 @@ struct sleepqueue;
 struct socket;
 struct td_sched;
 struct thread;
+/* Nonblocking exit notification; installed hooks must remain resident. */
+extern void (*thread_exit_gate_hook)(struct thread *);
 struct twq_proc;
 struct twq_thread;
 struct trapframe;

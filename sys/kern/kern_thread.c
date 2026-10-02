@@ -177,6 +177,8 @@ EVENTHANDLER_LIST_DEFINE(thread_init);
 EVENTHANDLER_LIST_DEFINE(thread_fini);
 EVENTHANDLER_LIST_DEFINE(thread_published);
 
+void (*thread_exit_gate_hook)(struct thread *);
+
 static bool
 thread_count_inc_try(void)
 {
@@ -935,6 +937,7 @@ thread_cow_synced(struct thread *td)
 void
 thread_exit(void)
 {
+	void (*exit_gate)(struct thread *);
 	uint64_t runtime, new_switchtime;
 	struct thread *td;
 	struct thread *td2;
@@ -947,6 +950,10 @@ thread_exit(void)
 	mtx_assert(&Giant, MA_NOTOWNED);
 
 	PROC_LOCK_ASSERT(p, MA_OWNED);
+	exit_gate = (void (*)(struct thread *))atomic_load_acq_ptr(
+	    (volatile uintptr_t *)&thread_exit_gate_hook);
+	if (exit_gate != NULL)
+		exit_gate(td);
 	KASSERT(p != NULL, ("thread exiting without a process"));
 	CTR3(KTR_PROC, "thread_exit: thread %p (pid %ld, %s)", td,
 	    (long)p->p_pid, td->td_name);
