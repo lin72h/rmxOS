@@ -207,7 +207,11 @@ ipc_right_reverse(
 
 		entry = ipc_entry_lookup(space, name);
 
-		KASSERT(entry != IE_NULL, ("no entry found for port: %p name: %d space: %p", port, name, space));
+		/* Native removal or attenuated fd rights may deny name admission. */
+		if (entry == IE_NULL) {
+			ip_unlock(port);
+			return (FALSE);
+		}
 		assert(entry->ie_bits & MACH_PORT_TYPE_RECEIVE);
 		assert(port == (ipc_port_t) entry->ie_object);
 
