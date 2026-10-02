@@ -620,8 +620,9 @@ filt_machport(struct knote *kn, long hint)
 		return (1);
 	} else if (hint == 0) {
 
-		kr = ipc_object_translate(current_space(), name, MACH_PORT_RIGHT_PORT_SET,
-								  (ipc_object_t *)&pset);
+		kr = ipc_object_translate_known(current_space(), name,
+		    MACH_PORT_RIGHT_PORT_SET, (ipc_object_t)entry->ie_object,
+		    (ipc_object_t *)&pset);
 		if (kr != KERN_SUCCESS || !ips_active(pset)) {
 			if (mach_debug_enable) {
 				kdb_backtrace();
