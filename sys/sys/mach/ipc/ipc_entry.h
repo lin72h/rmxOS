@@ -128,6 +128,12 @@ typedef struct ipc_entry {
 		mach_port_index_t table;
 		struct ipc_tree_entry *tree;
 	} hash;
+	volatile u_int ie_references; /* storage pins, independent of urefs */
+	boolean_t ie_published;       /* space list owns one storage pin */
+	boolean_t ie_revoked;         /* descriptor removal, under space lock */
+	ipc_entry_bits_t ie_close_bits;
+	ipc_object_t ie_close_object; /* revoked right awaiting unlocked release */
+	ipc_table_index_t ie_close_request;
 } *ipc_entry_t;
 
 #define	IE_NULL		((ipc_entry_t) 0)
@@ -185,16 +191,23 @@ extern uma_zone_t ipc_tree_entry_zone;
  * Exported interfaces
  */
 
-/* Search for entry in a space by name */
+/* Search under the space lock; the result cannot outlive that transaction. */
 extern ipc_entry_t ipc_entry_lookup(
 	ipc_space_t	space,
 	mach_port_name_t	name);
+
+/* Storage pins; neither operation changes Mach user references. */
+void ipc_entry_reference(ipc_entry_t);
+void ipc_entry_put(ipc_entry_t);
+/* Remove the entry's proxy; consumes the space write lock. */
+void ipc_entry_remove(ipc_space_t, ipc_entry_t);
+void ipc_entry_space_close(ipc_space_t);
 
 /* release a reference to an entry */
 void ipc_entry_release(
 	ipc_entry_t entry);
 
-/* Allocate an entry in a space */
+/* Allocate an entry; success returns with the space write lock held. */
 extern kern_return_t ipc_entry_get(
 	ipc_space_t	space,
 	boolean_t	is_send_once,

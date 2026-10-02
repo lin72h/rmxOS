@@ -128,6 +128,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/filedesc.h>
 #include <sys/fcntl.h>
 #include <sys/kernel.h>
+#include <sys/refcount.h>
 #include <sys/syscallsubr.h>
 #include <sys/stat.h>
 #include <sys/syslog.h>
@@ -147,6 +148,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/mach/ipc/ipc_table.h>
 #include <sys/mach/ipc/ipc_port.h>
 #include <sys/mach/ipc/ipc_pset.h>
+#include <sys/mach/ipc/ipc_right.h>
+#include <sys/mach/ipc/ipc_notify.h>
 #include <sys/mach/thread.h>
 
 #include <security/audit/audit.h>
@@ -154,8 +157,6 @@ __FBSDID("$FreeBSD$");
 static void fdunused(struct filedesc *fdp, int fd);
 static int kern_fdalloc(struct thread *td, int minfd, int *result);
 static void kern_fddealloc(struct thread *td, int fd);
-static inline void kern_fdfree(struct filedesc *fdp, int fd,
-    struct filecaps *fcaps);
 static int kern_finstall(struct thread *td, struct file *fp, int *fd, int flags,
 			 struct filecaps *fcaps);
 
@@ -217,6 +218,10 @@ ipc_entry_hash_delete(
 }
 
 static fo_close_t mach_port_close;
+static fo_fdclose_t mach_port_fdclose;
+static fo_fdclose_t mach_port_fdpostclose;
+static void ipc_entry_destroy_object(ipc_entry_t, mach_port_type_t,
+    ipc_object_t);
 static fo_stat_t mach_port_stat;
 static fo_poll_t mach_port_poll;
 #if MODERN
@@ -231,6 +236,8 @@ struct fileops mach_fileops  = {
 	.fo_poll = mach_port_poll,
 	.fo_kqfilter = invfo_kqfilter,
 	.fo_close = mach_port_close,
+	.fo_fdclose = mach_port_fdclose,
+	.fo_fdpostclose = mach_port_fdpostclose,
 	.fo_stat = mach_port_stat,
 	.fo_chmod = invfo_chmod,
 	.fo_chown = invfo_chown,
@@ -239,7 +246,7 @@ struct fileops mach_fileops  = {
 #if MODERN
 	.fo_fill_kinfo = mach_port_fill_kinfo,
 #endif
-	.fo_flags = 0,
+	.fo_flags = DFLAG_NODUP,
 };
 
 static int
@@ -250,48 +257,131 @@ mach_port_poll(struct file *fp __unused, int events __unused,
 	return (POLLNVAL);
 }
 
+void
+ipc_entry_reference(ipc_entry_t entry)
+{
+	refcount_acquire(&entry->ie_references);
+}
+
+void
+ipc_entry_put(ipc_entry_t entry)
+{
+	if (refcount_release(&entry->ie_references)) {
+		is_release(entry->ie_space);
+		free(entry, M_MACH_IPC_ENTRY);
+	}
+}
+
+/* Native descriptor removal precedes the final file reference drop. */
+static void
+mach_port_fdclose(struct file *fp, int fd __unused, struct thread *td __unused)
+{
+	ipc_entry_t entry = fp->f_data;
+	ipc_space_t space;
+
+	if (entry == IE_NULL)
+		return;
+	space = entry->ie_space;
+	is_write_lock(space);
+	if (!entry->ie_revoked) {
+		ipc_entry_hash_delete(space, entry);
+		entry->ie_close_bits = entry->ie_bits;
+		entry->ie_close_object = entry->ie_object;
+		entry->ie_close_request = entry->ie_request;
+		entry->ie_request = 0;
+		entry->ie_object = IO_NULL;
+		entry->ie_bits &= IE_BITS_GEN_MASK;
+		entry->ie_revoked = TRUE;
+		if (entry->ie_published) {
+			LIST_REMOVE(entry, ie_space_link);
+			entry->ie_published = FALSE;
+			ipc_entry_put(entry); /* space publication pin */
+		}
+	}
+	is_write_unlock(space);
+}
+
+static void
+mach_port_fdpostclose(struct file *fp, int fd __unused,
+    struct thread *td __unused)
+{
+	ipc_entry_t entry = fp->f_data;
+	ipc_object_t object;
+	mach_port_type_t type;
+
+	if (entry == IE_NULL)
+		return;
+	is_write_lock(entry->ie_space);
+	object = entry->ie_close_object;
+	type = IE_BITS_TYPE(entry->ie_close_bits);
+	entry->ie_close_object = IO_NULL;
+	is_write_unlock(entry->ie_space);
+	if (object != IO_NULL)
+		ipc_entry_destroy_object(entry, type, object);
+}
+
+static void
+ipc_entry_destroy_object(ipc_entry_t entry, mach_port_type_t type,
+    ipc_object_t object)
+{
+	ipc_pset_t pset;
+	ipc_port_t port;
+	ipc_port_t dnrequest, nsrequest = IP_NULL;
+	mach_port_mscount_t mscount = 0;
+	struct ipc_entry snapshot = { 0 };
+
+	if (type & MACH_PORT_TYPE_PORT_SET) {
+		pset = (ipc_pset_t)object;
+		ips_lock(pset);
+		ipc_pset_destroy(pset);
+		return;
+	}
+	port = (ipc_port_t)object;
+	ip_lock(port);
+	if (!ip_active(port)) {
+		ip_unlock(port);
+		ip_release(port);
+		return;
+	}
+	snapshot.ie_request = entry->ie_close_request;
+	snapshot.ie_object = object;
+	dnrequest = ipc_right_dncancel_macro(entry->ie_space, port,
+	    entry->ie_name, &snapshot);
+	if (type & MACH_PORT_TYPE_SEND) {
+		if (--port->ip_srights == 0) {
+			nsrequest = port->ip_nsrequest;
+			port->ip_nsrequest = IP_NULL;
+			mscount = port->ip_mscount;
+		}
+	}
+	if (type & MACH_PORT_TYPE_RECEIVE) {
+		ipc_port_clear_receiver(port);
+		ipc_port_destroy(port);
+	} else if (type & MACH_PORT_TYPE_SEND_ONCE) {
+		ip_unlock(port);
+		ipc_notify_send_once(port);
+	} else {
+		ip_unlock(port);
+		ip_release(port);
+	}
+	if (nsrequest != IP_NULL)
+		ipc_notify_no_senders(nsrequest, mscount);
+	if (dnrequest != IP_NULL)
+		ipc_notify_port_deleted(dnrequest, entry->ie_name);
+}
+
 static int
 mach_port_close(struct file *fp, struct thread *td)
 {
-	ipc_entry_t entry;
-	ipc_object_t object;
-	mach_port_type_t type;
-	ipc_pset_t pset;
-	ipc_port_t port;
+	ipc_entry_t entry = fp->f_data;
 
-	MACH_VERIFY(fp->f_data != NULL, ("expected fp->f_data != NULL - got NULL\n"));
-	if ((entry = fp->f_data) == NULL)
+	if (entry == IE_NULL)
 		return (0);
-	if ((entry->ie_bits & MACH_PORT_TYPE_PORT_SET)  == 0)
-		ipc_entry_hash_delete(entry->ie_space, entry);
-	MPASS(entry->ie_link == NULL);
-	PROC_LOCK(td->td_proc);
-	LIST_REMOVE(entry, ie_space_link);
-	PROC_UNLOCK(td->td_proc);
-	type = IE_BITS_TYPE(entry->ie_bits);
-	if ((object = entry->ie_object) != NULL) {
-		if (entry->ie_bits & MACH_PORT_TYPE_PORT_SET) {
-			pset = (ipc_pset_t)object;
-			ips_lock(pset);
-			ipc_pset_destroy(pset);
-		} else {
-			port = (ipc_port_t)object;
-			if (type == MACH_PORT_TYPE_SEND) {
-				ipc_object_destroy(object, MACH_MSG_TYPE_PORT_SEND);
-			} else if (type == MACH_PORT_TYPE_SEND_ONCE) {
-				ipc_object_destroy(object, MACH_MSG_TYPE_PORT_SEND_ONCE);
-			} else if (port->ip_receiver == current_space()) {
-				ip_lock(port);
-				ipc_port_clear_receiver(port);
-				ipc_port_destroy(port);
-			} else {
-				ip_release(port);
-			}
-		}
-		entry->ie_object = NULL;
-	}
-	free(entry, M_MACH_IPC_ENTRY);
+	/* Uninstalled files and final fd-table teardown also revoke here. */
+	mach_port_fdclose(fp, entry->ie_name, td);
+	mach_port_fdpostclose(fp, entry->ie_name, td);
 	fp->f_data = NULL;
+	ipc_entry_put(entry); /* fd proxy storage pin */
 
 	return (0);
 }
@@ -363,31 +453,17 @@ extern void kdb_backtrace(void);
 ipc_entry_t
 ipc_entry_lookup(ipc_space_t space, mach_port_name_t name)
 {
-	struct file *fp;
 	ipc_entry_t entry;
-	cap_rights_t rights;
 
-	assert(space->is_active);
-
-	if (curthread->td_proc->p_fd == NULL)
-		return (NULL);
-
-	if (fget(curthread, name, cap_rights_init(&rights, CAP_KQUEUE_EVENT|CAP_KQUEUE_CHANGE), &fp) != 0) {
-		if (mach_debug_enable)
-			log(LOG_DEBUG, "%s:%d entry for port name: %d not found\n", curproc->p_comm, curproc->p_pid, name);
-		return (NULL);
+	rw_assert(&space->is_lock_data, RA_LOCKED);
+	if (!space->is_active || space != current_space())
+		return (IE_NULL);
+	/* The fd remains an opaque name outside this entry layer. */
+	LIST_FOREACH(entry, &space->is_entry_list, ie_space_link) {
+		if (entry->ie_name == name && !entry->ie_revoked)
+			return (entry);
 	}
-	if (fp->f_type != DTYPE_MACH_IPC) {
-		if (mach_debug_enable) {
-			kdb_backtrace();
-			log(LOG_DEBUG, "%s:%d port name: %d is not MACH\n", curproc->p_comm, curproc->p_pid, name);
-		}
-		fdrop(fp, curthread);
-		return (NULL);
-	}
-	entry = fp->f_data;
-	fdrop(fp, curthread);
-	return (entry);
+	return (IE_NULL);
 }
 
 struct ipc_file {
@@ -494,7 +570,7 @@ ipc_entry_port_to_file(ipc_space_t space, mach_port_name_t *namep, ipc_object_t 
  *		Tries to allocate an entry out of the space.
  *	Conditions:
  *		The space is active throughout.
- *		An object may be locked.  Will try to allocate memory.
+ *		Nothing locked. Success returns with the space write lock held.
  *	Returns:
  *		KERN_SUCCESS		A free entry was found.
  *		KERN_NO_SPACE		No entry allocated.
@@ -515,18 +591,29 @@ ipc_entry_get(
 	assert(space->is_active);
 
 	td  = curthread;
+	if (space != current_space())
+		return (KERN_INVALID_TASK);
 	if ((free_entry = malloc(sizeof(*free_entry), M_MACH_IPC_ENTRY, M_WAITOK|M_ZERO)) == NULL)
 		return KERN_RESOURCE_SHORTAGE;
 
 	if (kern_fdalloc(td, 16, &fd)) {
+		free(free_entry, M_MACH_IPC_ENTRY);
 		log(LOG_WARNING, "%s:%d failed to allocate fd\n", __FILE__, __LINE__);
 		return (KERN_RESOURCE_SHORTAGE);
 	}
 	if (falloc_noinstall(td, &fp)) {
 		kern_fddealloc(td, fd);
+		free(free_entry, M_MACH_IPC_ENTRY);
 		log(LOG_WARNING, "%s:%d failed to allocate fp\n", __FILE__, __LINE__);
 		return (KERN_RESOURCE_SHORTAGE);
 	}
+	free_entry->ie_name = fd;
+	free_entry->ie_fp = fp;
+	free_entry->ie_index = UINT_MAX;
+	free_entry->ie_space = space;
+	refcount_init(&free_entry->ie_references, 1);
+	is_reference(space);
+	finit(fp, 0, DTYPE_MACH_IPC, free_entry, &mach_fileops);
 	if (kern_finstall(td, fp, &fd, FNOFDALLOC, NULL)) {
 		log(LOG_WARNING, "%s:%d failed to allocate fp:%p at fd:%d \n", __FILE__, __LINE__, fp, fd);
 		kern_fddealloc(td, fd);
@@ -541,12 +628,17 @@ ipc_entry_get(
 	free_entry->ie_index = UINT_MAX;
 	free_entry->ie_link = NULL;
 	free_entry->ie_space = space;
-	PROC_LOCK(curproc);
+	is_write_lock(space);
+	if (free_entry->ie_revoked || !space->is_active) {
+		is_write_unlock(space);
+		fdclose(td, fp, fd);
+		fdrop(fp, td);
+		return (KERN_INVALID_NAME);
+	}
+	ipc_entry_reference(free_entry);
+	free_entry->ie_published = TRUE;
 	LIST_INSERT_HEAD(&space->is_entry_list, free_entry, ie_space_link);
-	PROC_UNLOCK(curproc);
-	finit(fp, 0, DTYPE_MACH_IPC, free_entry, &mach_fileops);
 	fdrop(fp, td);
-	assert(fp->f_count == 1);
 	*namep = fd;
 	*entryp = free_entry;
 
@@ -583,7 +675,6 @@ ipc_entry_alloc(
 	if ((kr = ipc_entry_get(space, is_send_once, namep, entryp)) != KERN_SUCCESS)
 		return (kr);
 
-	is_write_lock(space);
 	return (0);
 }
 
@@ -616,6 +707,8 @@ ipc_entry_alloc_name(
 	if (!space->is_active) {
 		return (KERN_INVALID_TASK);
 	}
+	if (space != current_space())
+		return (KERN_INVALID_TASK);
 	assert(MACH_PORT_NAME_VALID(name));
 	is_write_lock(space);
 	if ((*entryp = ipc_entry_lookup(space, name)) != NULL)
@@ -643,8 +736,14 @@ ipc_entry_alloc_name(
 		kern_fddealloc(td, newname);
 		return (KERN_RESOURCE_SHORTAGE);
 	}
+	free_entry->ie_name = name;
+	free_entry->ie_fp = fp;
+	free_entry->ie_index = UINT_MAX;
+	free_entry->ie_space = space;
+	refcount_init(&free_entry->ie_references, 1);
+	is_reference(space);
+	finit(fp, 0, DTYPE_MACH_IPC, free_entry, &mach_fileops);
 	if (kern_finstall(td, fp, &name, FNOFDALLOC, NULL)) {
-		free(free_entry, M_MACH_IPC_ENTRY);
 		kern_fddealloc(td, newname);
 		fdrop(fp, td);
 		return (KERN_RESOURCE_SHORTAGE);
@@ -657,15 +756,18 @@ ipc_entry_alloc_name(
 	free_entry->ie_index = UINT_MAX;
 	free_entry->ie_link = NULL;
 	free_entry->ie_space = space;
-	PROC_LOCK(curproc);
-	LIST_INSERT_HEAD(&space->is_entry_list, free_entry, ie_space_link);
-	PROC_UNLOCK(curproc);
-	finit(fp, 0, DTYPE_MACH_IPC, free_entry, &mach_fileops);
-	fdrop(fp, td);
-	assert(fp->f_count == 1);
-	*entryp = free_entry;
-
 	is_write_lock(space);
+	if (free_entry->ie_revoked || !space->is_active) {
+		is_write_unlock(space);
+		fdclose(td, fp, name);
+		fdrop(fp, td);
+		return (KERN_INVALID_NAME);
+	}
+	ipc_entry_reference(free_entry);
+	free_entry->ie_published = TRUE;
+	LIST_INSERT_HEAD(&space->is_entry_list, free_entry, ie_space_link);
+	fdrop(fp, td);
+	*entryp = free_entry;
 	return (KERN_SUCCESS);
 }
 
@@ -674,27 +776,20 @@ ipc_entry_close(
 	ipc_space_t space,
 	mach_port_name_t fd)
 {
-	struct filedesc *fdp;
 	struct file *fp;
-	struct filecaps fcaps;
-	struct thread *td;
+	ipc_entry_t entry;
 
-	td = curthread;
-	fdp = td->td_proc->p_fd;
-
-	FILEDESC_XLOCK(fdp);
-	if ((fp = fget_noref(fdp, fd)) == NULL) {
-		FILEDESC_XUNLOCK(fdp);
+	is_read_lock(space);
+	entry = ipc_entry_lookup(space, fd);
+	if (entry == IE_NULL || !fhold(entry->ie_fp)) {
+		is_read_unlock(space);
 		return;
 	}
-	AUDIT_SYSCLOSE(td, fd, fp);
-	/* we deliberately skip closing the knote so that it will
-	 * have the last reference to the fp
-	 */
-	kern_fdfree(fdp, fd, &fcaps);
-	FILEDESC_XUNLOCK(fdp);
-	filecaps_free(&fcaps);
-	fdrop(fp, td);
+	fp = entry->ie_fp;
+	is_read_unlock(space);
+	/* Expected-file comparison prevents closing a reused descriptor. */
+	fdclose(curthread, fp, fd);
+	fdrop(fp, curthread);
 }
 
 int
@@ -752,125 +847,62 @@ ipc_entry_dealloc(
 	assert(entry->ie_object == IO_NULL);
 	assert(entry->ie_request == 0);
 
-	if (space != entry->ie_space) {
-		is_write_unlock(space);
-		is_write_lock(entry->ie_space);
-	}
+	KASSERT(space == entry->ie_space, ("foreign Mach entry"));
 	ipc_entry_hash_delete(space, entry);
-	if (space != entry->ie_space) {
-		is_write_unlock(entry->ie_space);
-	} else {
-		is_write_unlock(space);
-	}
 	MPASS(entry->ie_link == NULL);
-	/*
-	 * ipc_entry_close() intentionally leaves the knote holding the final
-	 * file reference, so the entry can remain on is_entry_list until the
-	 * deferred fo_close runs.  Clear the logical right bits now so the
-	 * entry is no longer visible as live state during that deferred close
-	 * window.
-	 */
 	entry->ie_bits &= IE_BITS_GEN_MASK;
-
-	ipc_entry_close(space, name);
+	ipc_entry_remove(space, entry);
 }
 
-static void
-kern_last_close(struct thread *td, struct file *fp, struct filedesc *fdp, int fd)
+void
+ipc_entry_remove(ipc_space_t space, ipc_entry_t entry)
 {
-	struct filecaps fcaps;
+	struct file *fp;
+	mach_port_name_t name;
 
-	FILEDESC_XLOCK(fdp);
-	knote_fdclose(td, fd);
-	kern_fdfree(fdp, fd, &fcaps);
-	FILEDESC_XUNLOCK(fdp);
-	filecaps_free(&fcaps);
-	fdrop(fp, td);
+	rw_assert(&space->is_lock_data, RA_WLOCKED);
+	if (entry->ie_revoked) {
+		is_write_unlock(space);
+		return;
+	}
+	fp = entry->ie_fp;
+	name = entry->ie_name;
+	(void)fhold(fp);
+	is_write_unlock(space);
+	fdclose(curthread, fp, name);
+	fdrop(fp, curthread);
+}
+
+void
+ipc_entry_space_close(ipc_space_t space)
+{
+	ipc_entry_t entry;
+	struct file *fp;
+	mach_port_name_t name;
+
+	if (space == IS_NULL || space != current_space() || curproc->p_fd == NULL)
+		return;
+	for (;;) {
+		is_read_lock(space);
+		entry = LIST_FIRST(&space->is_entry_list);
+		if (entry == IE_NULL) {
+			is_read_unlock(space);
+			break;
+		}
+		fp = entry->ie_fp;
+		name = entry->ie_name;
+		(void)fhold(fp);
+		is_read_unlock(space);
+		fdclose(curthread, fp, name);
+		fdrop(fp, curthread);
+	}
 }
 
 static void
 ipc_entry_list_close(void *arg __unused, struct proc *p)
 {
-	struct filedesc *fdp;
-	struct filedescent *fde;
-	struct file *fp;
-	struct thread *td;
-#if 0
-	ipc_port_t port;
-	ipc_pset_t pset;
-	ipc_entry_t entry_tmp;
-#endif
-	ipc_entry_t entry;
-	ipc_space_t space;
-	int i;
-
-	fdp = p->p_fd;
-	td = curthread;
-	space = current_space();
-
-	/* do we want to just return if the refcount is > 1 or should we
-	 * bar this from happening in the first place?
-	 **/
-	KASSERT(fdp->fd_refcnt == 1, ("the fdtable should not be shared"));
-
-	for (i = 0; i <= fdlastfile_single(fdp); i++) {
-		fde = &fdp->fd_ofiles[i];
-		fp = fde->fde_file;
-		if (fp == NULL || (fp->f_type != DTYPE_MACH_IPC))
-			continue;
-		MPASS(fp->f_count > 0);
-
-		if (fp->f_data == NULL) {
-			log(LOG_WARNING, "%s:%d fd: %d has NULL f_data\n", p->p_comm, p->p_pid, i);
-			kern_last_close(td, fp, fdp, i);
-			continue;
-		}
-		entry = fp->f_data;
-		MPASS(entry->ie_bits != 0xdeadc0de);
-		if ((entry->ie_bits & MACH_PORT_TYPE_PORT_SET) == 0)
-			continue;
-		kern_last_close(td, fp, fdp, i);
-	}
-
-	for (i = 0; i <= fdlastfile_single(fdp); i++) {
-
-		fde = &fdp->fd_ofiles[i];
-		fp = fde->fde_file;
-		if (fp == NULL || (fp->f_type != DTYPE_MACH_IPC))
-			continue;
-		MPASS(fp->f_count > 0);
-
-		entry = fp->f_data;
-#if 0
-		if (fp->f_count > 1) {
-			int ispset = (entry->ie_bits & MACH_PORT_TYPE_PORT_SET);
-			log(LOG_WARNING, "%s:%d fd: %d %s refcount: %d\n", p->p_comm, p->p_pid, i,
-				ispset ? "pset" : "port", fp->f_count);
-		}
-#endif
-		kern_last_close(td, fp, fdp, i);
-	}
-
-#ifdef INVARIANTS
-	for (i = 0; i <= fdlastfile_single(fdp); i++) {
-		fde = &fdp->fd_ofiles[i];
-		fp = fde->fde_file;
-		if (fp != NULL)
-			MPASS(fp->f_type != DTYPE_MACH_IPC);
-	}
-#endif
-	/* free unreferenced ipc_entrys */
-	i = 0;
-	while(!LIST_EMPTY(&space->is_entry_list)) {
-		entry = LIST_FIRST(&space->is_entry_list);
-		/* mach_port_close removes the entry */
-		fp = entry->ie_fp;
-		MPASS(fp->f_count > 0);
-		fp->f_count = 1;
-		fdrop(fp, td);
-		/* ensure no infinite loop */
-		MPASS(i++ < 10000);
-	}
+	if (p == curproc)
+		ipc_entry_space_close(current_space());
 }
 
 
@@ -967,24 +999,6 @@ kern_fddealloc(struct thread *td, int fd)
 	FILEDESC_XLOCK(fdp);
 	fdunused(fdp, fd);
 	FILEDESC_XUNLOCK(fdp);
-}
-
-static inline void
-kern_fdfree(struct filedesc *fdp, int fd, struct filecaps *fcaps)
-{
-	struct filedescent *fde;
-
-	fde = &fdp->fd_ofiles[fd];
-#ifdef CAPABILITIES
-	seqc_write_begin(&fde->fde_seqc);
-#endif
-	fde->fde_file = NULL;
-	*fcaps = fde->fde_caps;
-	bzero(&fde->fde_caps, sizeof(*fcaps));
-	fdunused(fdp, fd);
-#ifdef CAPABILITIES
-	seqc_write_end(&fde->fde_seqc);
-#endif
 }
 
 /*

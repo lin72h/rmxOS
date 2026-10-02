@@ -126,20 +126,27 @@ ipc_object_translate_internal(
 	ipc_entry_t entry;
 	ipc_object_t object;
 
-	if ((entry = ipc_entry_lookup(space, name)) == NULL)
+	is_read_lock(space);
+	if ((entry = ipc_entry_lookup(space, name)) == NULL) {
+		is_read_unlock(space);
 		return KERN_INVALID_NAME;
+	}
 
 	if ((entry->ie_bits & MACH_PORT_TYPE(right)) == (mach_port_right_t) 0) {
+		is_read_unlock(space);
 		return KERN_INVALID_RIGHT;
 	}
 
 	object = entry->ie_object;
-	if (object == IO_NULL)
+	if (object == IO_NULL) {
+		is_read_unlock(space);
 		return (KERN_TERMINATED);
+	}
 
 	/* Only the explicit filter entry point may suppress this lock. */
 	if (known != object)
 		io_lock(object);
+	is_read_unlock(space);
 
 	*objectp = object;
 	return KERN_SUCCESS;
@@ -675,8 +682,6 @@ ipc_object_copyout(
 
 	assert(IE_BITS_TYPE(entry->ie_bits) == MACH_PORT_TYPE_NONE);
 	assert(entry->ie_object == IO_NULL);
-
-	is_write_lock(space);
 	io_lock(object);
 	if (!io_active(object)) {
 		io_unlock(object);

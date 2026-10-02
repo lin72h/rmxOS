@@ -105,6 +105,7 @@
 #include <sys/cdefs.h>
 #include <sys/types.h>
 #include <sys/event.h>
+#include <sys/malloc.h>
 
 
 
@@ -543,31 +544,36 @@ struct filterops machport_filtops = {
 	.f_event = filt_machport,
 };
 
+struct machport_note {
+	ipc_entry_t entry;
+	ipc_pset_t pset;
+};
+
 static int
 filt_machportattach(struct knote *kn)
 {
-	mach_port_name_t	name = (mach_port_name_t)kn->kn_kevent.ident;
-	ipc_pset_t			pset = IPS_NULL;
-	ipc_entry_t			entry;
-	kern_return_t		kr;
-	struct knlist		*note;
+	ipc_space_t space = current_space();
+	ipc_entry_t entry;
+	struct machport_note *note;
 
-	kr = ipc_object_translate_known(current_space(), name, MACH_PORT_RIGHT_PORT_SET,
-                                  (ipc_object_t)pset,
-							  (ipc_object_t *)&pset);
-
-	if (kr != KERN_SUCCESS)
-		return (kr == KERN_INVALID_NAME ? ENOENT : ENOTSUP);
-	note = &pset->ips_note;
-	ips_unlock(pset);
-
-	/* need the actual entry for knote */
-	if ((entry = ipc_entry_lookup(current_space(), name)) == NULL)
+	if (kn->kn_fp->f_type != DTYPE_MACH_IPC)
+		return (ENOTSUP);
+	note = malloc(sizeof(*note), M_MACH_IPC_ENTRY, M_WAITOK | M_ZERO);
+	is_read_lock(space);
+	entry = ipc_entry_lookup(space, (mach_port_name_t)kn->kn_kevent.ident);
+	if (entry == IE_NULL || entry->ie_fp != kn->kn_fp ||
+	    (entry->ie_bits & MACH_PORT_TYPE_PORT_SET) == 0) {
+		is_read_unlock(space);
+		free(note, M_MACH_IPC_ENTRY);
 		return (ENOENT);
-	KASSERT(entry->ie_object == (ipc_object_t)pset, ("entry->ie_object == pset"));
-
-	kn->kn_fp = entry->ie_fp;
-	knlist_add(note, kn, 0);
+	}
+	note->entry = entry;
+	note->pset = (ipc_pset_t)entry->ie_object;
+	ipc_entry_reference(entry);
+	ips_reference(note->pset);
+	is_read_unlock(space);
+	kn->kn_hook = note;
+	knlist_add(&note->pset->ips_note, kn, 0);
 	return (0);
 }
 
@@ -576,29 +582,13 @@ extern void kdb_backtrace(void);
 static void
 filt_machportdetach(struct knote *kn)
 {
-	mach_port_name_t	name = (mach_port_name_t)kn->kn_kevent.ident;
-	ipc_pset_t		pset = IPS_NULL;
-	ipc_entry_t entry = NULL;;
+	struct machport_note *note = kn->kn_hook;
 
-
-
-	if (kn->kn_fp->f_type != DTYPE_MACH_IPC)
-		goto fail;
-
-	entry = kn->kn_fp->f_data;
-	if ((entry->ie_bits & MACH_PORT_TYPE_PORT_SET) == 0)
-		goto fail;
-	if ((pset = (ipc_pset_t)entry->ie_object) == NULL)
-		goto fail;
-
-
-	knlist_remove(&pset->ips_note, kn, 0);
-	return;
-fail:
-	if (mach_debug_enable) {
-		kdb_backtrace();
-		printf("kqdetach fail for: %d pset: %p entry: %p\n", name, pset, entry);
-	}
+	knlist_remove(&note->pset->ips_note, kn, 0);
+	ips_release(note->pset);
+	ipc_entry_put(note->entry);
+	free(note, M_MACH_IPC_ENTRY);
+	kn->kn_hook = NULL;
 }
 
 
@@ -607,8 +597,8 @@ filt_machport(struct knote *kn, long hint)
 {
 
 	mach_port_name_t        name = (mach_port_name_t)kn->kn_kevent.ident;
-	ipc_entry_t				entry = kn->kn_fp->f_data;
-	ipc_pset_t              pset = (ipc_pset_t) entry->ie_object;
+	struct machport_note *note = kn->kn_hook;
+	ipc_pset_t              pset = note->pset;
 	thread_t				self = current_thread();
 	kern_return_t           kr;
 	mach_msg_option_t	option;
@@ -620,13 +610,12 @@ filt_machport(struct knote *kn, long hint)
 		return (1);
 	} else if (hint == 0) {
 
-		kr = ipc_object_translate_known(current_space(), name,
-		    MACH_PORT_RIGHT_PORT_SET, (ipc_object_t)entry->ie_object,
-		    (ipc_object_t *)&pset);
-		if (kr != KERN_SUCCESS || !ips_active(pset)) {
+		ips_lock(pset);
+		if (!ips_active(pset)) {
+			ips_unlock(pset);
 			if (mach_debug_enable) {
 				kdb_backtrace();
-				printf("%s: filt_machport kr=%d ips_active=%d name=%d\n", curproc->p_comm, kr, !!ips_active(pset), name);
+				printf("%s: filt_machport inactive name=%d\n", curproc->p_comm, name);
 			}
 			kn->kn_data = 0;
 			kn->kn_flags |= (EV_EOF | EV_ONESHOT);
@@ -634,9 +623,7 @@ filt_machport(struct knote *kn, long hint)
 		}
 
 		ips_reference(pset);
-
-		if (pset != (ipc_pset_t)entry->ie_object)
-			ips_unlock(pset);
+		ips_unlock(pset);
 
 	} else
 		panic("invalid hint %ld\n", hint);
@@ -667,7 +654,8 @@ filt_machport(struct knote *kn, long hint)
 
 	ips_lock(pset);
 	kr = ipc_mqueue_pset_receive(MACH_PORT_TYPE_PORT_SET, option, size,
-							0/* immediate timeout */, self);
+					0/* immediate timeout */, self);
+	(void)kr;
 
 	ips_unlock(pset);
 	assert(kr == THREAD_NOT_WAITING);

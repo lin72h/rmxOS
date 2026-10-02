@@ -106,6 +106,7 @@
 #include <sys/mach/ipc/ipc_table.h>
 
 #include <sys/mach/task.h>
+#include <sys/mach/thread.h>
 
 #ifdef INVARIANTS
 #define OBJECT_CLEAR(entry, name) do {									\
@@ -141,15 +142,24 @@ ipc_right_lookup(
 	assert(space != IS_NULL);
 
 
-	if (!space->is_active)
-		return KERN_INVALID_TASK;
-	if ((entry = ipc_entry_lookup(space, name)) == IE_NULL)
-		return KERN_INVALID_NAME;
-
 	if (xlock)
 		is_write_lock(space);
 	else
 		is_read_lock(space);
+	if (!space->is_active || space != current_space()) {
+		if (xlock)
+			is_write_unlock(space);
+		else
+			is_read_unlock(space);
+		return (KERN_INVALID_TASK);
+	}
+	if ((entry = ipc_entry_lookup(space, name)) == IE_NULL) {
+		if (xlock)
+			is_write_unlock(space);
+		else
+			is_read_unlock(space);
+		return (KERN_INVALID_NAME);
+	}
 	*entryp = entry;
 	return KERN_SUCCESS;
 }
@@ -614,19 +624,9 @@ ipc_right_destroy(
 		break;
 
 	    case MACH_PORT_TYPE_PORT_SET: {
-		ipc_pset_t pset = (ipc_pset_t) entry->ie_object;
-
 		assert(entry->ie_request == 0);
-		assert(pset != IPS_NULL);
-
-
-		is_write_unlock(space);
-
-		assert(ips_active(pset));
-		sx_slock(&pset->ips_note_lock);
-		KNOTE(&pset->ips_note, EV_EOF, KNF_LISTLOCKED);
-		sx_sunlock(&pset->ips_note_lock);
-		ipc_entry_close(space, name);
+		assert(entry->ie_object != IO_NULL);
+		ipc_entry_remove(space, entry);
 
 		break;
 	    }
@@ -931,8 +931,6 @@ ipc_right_delta(
 
 	switch (right) {
 	    case MACH_PORT_RIGHT_PORT_SET: {
-		ipc_pset_t pset;
-
 		if ((bits & MACH_PORT_TYPE_PORT_SET) == 0)
 			goto invalid_right;
 
@@ -946,18 +944,8 @@ ipc_right_delta(
 		if (delta != -1)
 			goto invalid_value;
 
-		pset = (ipc_pset_t) entry->ie_object;
-		assert(pset != IPS_NULL);
-		assert(ips_active(pset));
-
-		/* space must be unlocked when calling KNOTE & close */
-		is_write_unlock(space);
-
-		sx_slock(&pset->ips_note_lock);
-		KNOTE(&pset->ips_note, EV_EOF, KNF_LISTLOCKED);
-		sx_sunlock(&pset->ips_note_lock);
-
-		ipc_entry_close(space, name);
+		assert(entry->ie_object != IO_NULL);
+		ipc_entry_remove(space, entry);
 
 		break;
 	    }

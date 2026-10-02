@@ -88,9 +88,6 @@ sysctl_mach_current_task_space_stats(SYSCTL_HANDLER_ARGS)
 	tree_total = space->is_tree_total;
 	if (space->is_table_next != NULL)
 		table_next = space->is_table_next->its_size;
-	is_read_unlock(space);
-
-	PROC_LOCK(p);
 	LIST_FOREACH(entry, &space->is_entry_list, ie_space_link) {
 		ipc_entry_bits_t bits;
 		mach_port_type_t type;
@@ -112,7 +109,7 @@ sysctl_mach_current_task_space_stats(SYSCTL_HANDLER_ARGS)
 		if (type & MACH_PORT_TYPE_DEAD_NAME)
 			dead++;
 	}
-	PROC_UNLOCK(p);
+	is_read_unlock(space);
 
 	snprintf(buf, sizeof(buf),
 	    "status=ok table=%u next=%u tree=%u inuse=%u recv=%u send=%u send_once=%u pset=%u dead=%u",
@@ -154,8 +151,10 @@ sysctl_mach_current_task_port_status(SYSCTL_HANDLER_ARGS)
 		return (sysctl_handle_string(oidp, buf, sizeof(buf), req));
 	}
 
+	is_read_lock(space);
 	entry = ipc_entry_lookup(space, name);
 	if (entry == IE_NULL) {
+		is_read_unlock(space);
 		snprintf(buf, sizeof(buf),
 		    "status=unavailable reason=lookup_failed name=%u",
 		    name);
@@ -166,6 +165,7 @@ sysctl_mach_current_task_port_status(SYSCTL_HANDLER_ARGS)
 	entry_refs = ipc_entry_refs(entry);
 	object = entry->ie_object;
 	if (object == IO_NULL || io_otype(object) != IOT_PORT) {
+		is_read_unlock(space);
 		snprintf(buf, sizeof(buf),
 		    "status=unavailable reason=not_port name=%u type=0x%x entry_refs=%u",
 		    name, type, entry_refs);
@@ -184,6 +184,7 @@ sysctl_mach_current_task_port_status(SYSCTL_HANDLER_ARGS)
 	receiver_current = port->ip_receiver == space;
 	receiver_name = port->ip_receiver_name;
 	ip_unlock(port);
+	is_read_unlock(space);
 
 	snprintf(buf, sizeof(buf),
 	    "status=ok name=%u type=0x%x entry_refs=%u active=%u refs=%u srights=%u sorights=%u mscount=%u msgcount=%u nsrequest=%u receiver_current=%u receiver_name=%u",

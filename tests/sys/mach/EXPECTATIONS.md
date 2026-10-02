@@ -8,6 +8,22 @@ holds one extra native file reference while calling `mach_port_get_refs` on a
 new dead name. The expected Mach count is one; the unchanged backend reports
 two. These are source-derived expectations, not guest observations.
 
+`mach_entry_lock_test:close_lookup` covers op-389 #2 and op-392 S2's
+entry cause: expected FAIL on `903c8fc2`, PASS after locked lookup and
+descriptor revocation. A fixture holds the space read lock during lookup;
+a second thread closes the name. It records whether close finished before
+the transaction unlocked, without dereferencing a potentially freed entry.
+
+`mach_entry_knote_test:destroy_detaches` covers op-392 S4: expected FAIL
+on `903c8fc2`, PASS after normal descriptor removal detaches the knote.
+It registers an empty port set, destroys the Mach name, then checks that
+the kqueue has no remaining event from that destroyed set.
+
+`mach_entry_dup_test:reject_aliases` expects FAIL on `903c8fc2` and PASS
+after descriptor aliases are rejected with EOPNOTSUPP. Native pipe duplication
+is a positive control, and the Mach receive right remains destroyable after
+both rejected operations.
+
 These are expected results, not guest observations. The Gatekeeper runs the
 same test artifacts on unchanged alpha2 and the fixed image. No expected-failure
 annotations hide alpha2 failures.

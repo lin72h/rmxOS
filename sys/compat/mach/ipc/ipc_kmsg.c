@@ -1201,8 +1201,7 @@ ipc_kmsg_copyin_header(
 			/* the entry might need to be deallocated */
 
 			if (IE_BITS_TYPE(entry->ie_bits) == MACH_PORT_TYPE_NONE) {
-				is_write_unlock(space);
-				ipc_entry_close(space, name);
+				ipc_entry_dealloc(space, name, entry);
 				is_write_lock(space);
 			}
 			reply_port = dest_port;
@@ -1230,8 +1229,7 @@ ipc_kmsg_copyin_header(
 			/* the entry might need to be deallocated */
 
 			if (IE_BITS_TYPE(entry->ie_bits) == MACH_PORT_TYPE_NONE) {
-				is_write_unlock(space);
-				ipc_entry_close(space, name);
+				ipc_entry_dealloc(space, name, entry);
 				is_write_lock(space);
 			}
 			/*
@@ -1276,8 +1274,7 @@ ipc_kmsg_copyin_header(
 		/* the entry might need to be deallocated */
 
 		if (IE_BITS_TYPE(entry->ie_bits) == MACH_PORT_TYPE_NONE) {
-			is_write_unlock(space);
-			ipc_entry_close(space, dest_name);
+			ipc_entry_dealloc(space, dest_name, entry);
 			is_write_lock(space);
 		}
 
@@ -1413,17 +1410,19 @@ ipc_kmsg_copyin_header(
 		}
 
 		/* the entries might need to be deallocated */
-
+		ipc_entry_reference(reply_entry);
+		ipc_entry_reference(dest_entry);
 		if (IE_BITS_TYPE(reply_entry->ie_bits) == MACH_PORT_TYPE_NONE) {
-			is_write_unlock(space);
-			ipc_entry_close(space, reply_name);
+			ipc_entry_dealloc(space, reply_name, reply_entry);
 			is_write_lock(space);
 		}
-		if (IE_BITS_TYPE(dest_entry->ie_bits) == MACH_PORT_TYPE_NONE) {
-			is_write_unlock(space);
-			ipc_entry_close(space, dest_name);
+		if (!dest_entry->ie_revoked &&
+		    IE_BITS_TYPE(dest_entry->ie_bits) == MACH_PORT_TYPE_NONE) {
+			ipc_entry_dealloc(space, dest_name, dest_entry);
 			is_write_lock(space);
 		}
+		ipc_entry_put(reply_entry);
+		ipc_entry_put(dest_entry);
 		if (saved_reply != IP_NULL)
 			ipc_port_release(saved_reply);
 	}
@@ -2211,7 +2210,6 @@ ipc_kmsg_copyout_header(
 			assert(IE_BITS_TYPE(entry->ie_bits)
 						== MACH_PORT_TYPE_NONE);
 			assert(entry->ie_object == IO_NULL);
-			is_write_lock(space);
 			ip_lock(reply);
 			if (notify_port == IP_NULL) {
 				ip_reference(reply);	/* hold onto the reply port */
@@ -2222,9 +2220,8 @@ ipc_kmsg_copyout_header(
 			kr = ipc_port_dnrequest(reply, reply_name,
 						notify_port, &request);
 			if (kr != KERN_SUCCESS) {
-				is_write_unlock(space);
-
-				ipc_entry_close(space, reply_name);
+				ip_unlock(reply);
+				ipc_entry_dealloc(space, reply_name, entry);
 
 				ip_lock(reply);
 				if (!ip_active(reply)) {
@@ -2244,8 +2241,6 @@ ipc_kmsg_copyout_header(
 				is_write_lock(space);
 				continue;
 			}
-			is_write_lock(space);
-			ip_lock(reply);
 			ip_reference(reply);	/* hold onto the reply port */
 			entry->ie_object = (ipc_object_t) reply;
 			entry->ie_request = request;

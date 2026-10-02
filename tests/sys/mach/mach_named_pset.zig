@@ -27,7 +27,8 @@ fn body(_: [*c]const c.atf_tc_t) callconv(.c) void {
     defer _ = c.close(@intCast(reply));
     if (c.syscall(c.SYS__kernelrpc_mach_port_allocate_trap, @as(c_uint, 0), @as(c_uint, 1), &member) != 0) c.atf_tc_fail("member port setup failed");
     defer _ = c.close(@intCast(member));
-    const vacant = c.dup(@intCast(reply));
+    // Reserve an unused name without creating an alias of a Mach right.
+    const vacant = c.open("/dev/null", c.O_RDONLY);
     if (vacant < 0) c.atf_tc_fail("name setup failed");
     if (c.close(vacant) != 0) c.atf_tc_fail("name release failed");
     var storage: [128]u8 align(8) = [_]u8{0} ** 128;

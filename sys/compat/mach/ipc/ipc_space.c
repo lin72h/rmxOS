@@ -259,8 +259,6 @@ ipc_space_destroy(
 	ipc_space_t	space)
 {
 	ipc_entry_t *table;
-	ipc_entry_num_t size;
-	mach_port_index_t index;
 	boolean_t active;
 
 	assert(space != IS_NULL);
@@ -293,21 +291,7 @@ ipc_space_destroy(
 	 */
 
 	table = space->is_table;
-	size = space->is_table_size;
-
-	for (index = 0; index < size; index++) {
-		ipc_entry_t entry = table[index];
-
-		if (entry == NULL)
-			continue;
-		while (entry != NULL) {
-			mach_port_type_t type = IE_BITS_TYPE(entry->ie_bits);
-
-			if (type != MACH_PORT_TYPE_NONE)
-				ipc_right_clean(space, entry->ie_name, entry);
-			entry = entry->ie_link;
-		}
-	}
+	ipc_entry_space_close(space);
 
 	it_entries_free(space->is_table_next-1, table);
 
