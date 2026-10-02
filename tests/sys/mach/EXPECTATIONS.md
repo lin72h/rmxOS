@@ -35,6 +35,13 @@ The poll error is POLLNVAL; the fcntl errors are ENOTTY; chmod, chown and native
 read/write filter registration return EINVAL. The kevent cases require an
 EV_ERROR receipt, not merely any event.
 
+The fd_exhaustion assertion remains MACH_RCV_BODY_ERROR|MACH_MSG_IPC_SPACE
+(0x1000600c). EMFILE means no room in the receiver's descriptor name space,
+not a kernel allocation shortage. XNU ipc_kmsg.c:3640-3643,3669-3672 maps
+KERN_RESOURCE_SHORTAGE to IPC_KERNEL and other copyout failures to IPC_SPACE;
+ipc_object.c:847 names KERN_NO_SPACE for a full receiver space. The fix maps
+EMFILE to KERN_NO_SPACE. PANIC/PASS expectations are unchanged.
+
 Fix 6 uses a freestanding Zig test module in the disposable guest. Its C adapter
 only projects kernel ABI fields and routes module/sysctl calls; all observation
 logic is Zig. The output pointer starts equal to the valid object pointer, so

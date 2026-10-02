@@ -460,6 +460,7 @@ ipc_entry_port_to_file(ipc_space_t space, mach_port_name_t *namep, ipc_object_t 
 	ipc_port_t port;
 	struct ipc_file *file;
 	struct file *fp;
+	int error;
 
 	port = (ipc_port_t)object;
 	MPASS(object != NULL);
@@ -470,10 +471,11 @@ ipc_entry_port_to_file(ipc_space_t space, mach_port_name_t *namep, ipc_object_t 
 	port->ip_receiver = space;
 
 	/* Are sent file O_CLOEXEC? */
-	if (kern_finstall(curthread, fp, namep, 0, &file->caps) != 0) {
+	error = kern_finstall(curthread, fp, namep, 0, &file->caps);
+	if (error != 0) {
 		if (mach_debug_enable)
 			printf("finstall failed\n");
-		return (KERN_RESOURCE_SHORTAGE);
+		return (error == EMFILE ? KERN_NO_SPACE : KERN_RESOURCE_SHORTAGE);
 	}
 	ipc_port_dealloc_special(port, space);
 	filecaps_free(&file->caps);
