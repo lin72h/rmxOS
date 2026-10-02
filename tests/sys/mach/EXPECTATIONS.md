@@ -10,6 +10,8 @@ Continuation op-427 adds `mach_lifetime_test` before the lifetime fixes:
 | `shared_fd_exit` | op-389 #11 | FAIL: shared-table child cannot use the parent's Mach name | PASS: both use the name; child exit leaves it intact |
 | `task_control_death` | op-392 F2 | FAIL: exited task's control port is still active | PASS: port is dead |
 | `thread_control_death` | op-392 F2 | FAIL: exited thread's control port is still active | PASS: port dies after the exit gate/reaper |
+| `rfork_unshare` | op-430 in-place RFFDG | FAIL: old binding remains attached | PASS: fresh names; bootstrap retained |
+| `rfork_clean_table` | op-430 in-place RFCFDG | FAIL: old binding remains attached | PASS: fresh names; bootstrap retained |
 | `incarnation` | op-393 N5 prerequisite | FAIL: old task port remains active across later births | PASS: old port stays dead |
 
 The fixture pins actual control ports and observes their Mach activity, or

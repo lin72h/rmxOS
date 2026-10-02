@@ -134,6 +134,10 @@ fn divorce(t: [*c]const c.atf_tc_t, flags: c_int) void {
         if (c.syscall(c.SYS__kernelrpc_mach_port_allocate_trap, @as(c_uint, 0), @as(c_uint, 4), &old) != 0) c._exit(2);
         _ = observe(8);
         if (c.rfork(flags) != 0) c._exit(2);
+        // Two clean-table changes must not make the old table address current.
+        if (flags == c.RFCFDG and c.rfork(flags) != 0) c._exit(2);
+        // Enter Mach without allocating a name that could reuse the old name.
+        _ = c.syscall(c.SYS__kernelrpc_mach_port_destroy_trap, @as(c_uint, 0), @as(c_uint, 0));
         const space = observe(9);
         const previous = nameRefs(old);
         var new: u32 = 0;

@@ -19,6 +19,9 @@
 #include <sys/capsicum.h>
 #include <sys/rwlock.h>
 #include <sys/time.h>
+/* Observe the attachment ABI common to both images, without a new symbol. */
+#undef current_space
+#define current_space() current_task()->itk_space
 extern kern_return_t mach_port_get_refs(ipc_space_t, mach_port_name_t,
     mach_port_right_t, mach_port_urefs_t *);
 
