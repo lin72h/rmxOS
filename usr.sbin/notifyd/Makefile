@@ -49,4 +49,9 @@ SRCS=notify_proc.c notifyd.c service.c timer.c n2_markers.c notify_ipcServer.c
 
 CLEANFILES+= *Server.c *User.c job.h helper.h job_reply.h job_forward.h notify.h \
 	internal.h mach_exc.h *Server.h *~ cscope.*
+FILESGROUPS+= LAUNCHD
+LAUNCHD= com.apple.notifyd.plist
+LAUNCHDDIR= /etc/launchd.d
+LAUNCHDMODE= 0644
+
 .include <bsd.prog.mk>

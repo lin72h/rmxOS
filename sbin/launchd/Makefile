@@ -86,4 +86,9 @@ launchd.1:
 
 CLEANFILES+= *Server.c *User.c job.h helper.h job_reply.h job_forward.h notify.h \
 	internal.h mach_exc.h *Server.h *~ cscope.*
+FILESGROUPS+= LAUNCHD
+LAUNCHD= com.rmxos.console-getty.plist
+LAUNCHDDIR= /etc/launchd.d
+LAUNCHDMODE= 0644
+
 .include <bsd.prog.mk>

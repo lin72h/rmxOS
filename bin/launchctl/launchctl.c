@@ -41,6 +41,7 @@
 #include <sys/wait.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/mount.h>
 #include <sys/un.h>
 #include <netinet/in.h>
 #include <netdb.h>
@@ -695,73 +696,37 @@ setctty(const char *name, int flags)
 	}
 }
 
-static void
+/* FreeBSD rc owns filesystem checks, the root remount and base services. */
+static int
 runcom(void)
 {
-#define PATH_RUNCOM	"/etc/rc"
-	bool runcom_fsck = true;
-	bool runcom_safe = false;
-	bool runcom_netboot = false;
-	struct termios term;
-	int vdisable;
-	pid_t runcom_pid;
+	struct statfs root;
+	pid_t child, waited;
+	int status;
 
-	if ((runcom_pid = fork()) == -1) {
-		syslog(LOG_ERR | LOG_CONSOLE, "can't fork for %s on %s: %m", _PATH_BSHELL, PATH_RUNCOM);
-		sleep(STALL_TIMEOUT);
-		return;
-	} else if (runcom_pid > 0) {
-		(void)waitpid(runcom_pid, NULL, 0);
-		return;
-	} else {
-		// Run the rc script
-		syslog(LOG_ERR, "setctty()\n");
+	child = fork();
+	if (child == -1) {
+		warn("fork /etc/rc");
+		return (-1);
+	}
+	if (child == 0) {
 		setctty(_PATH_CONSOLE, 0);
-		
-		syslog(LOG_ERR, "fpathconf()\n");
-		sleep(1);
-		if ((vdisable = fpathconf(STDIN_FILENO, _PC_VDISABLE)) == -1) {
-			syslog(LOG_ERR, "fpathconf(\"%s\") %m", _PATH_CONSOLE);
-		} else if (tcgetattr(STDIN_FILENO, &term) == -1) {
-			syslog(LOG_ERR, "tcgetattr(\"%s\") %m", _PATH_CONSOLE);
-		} else {
-			term.c_cc[VINTR] = vdisable;
-			term.c_cc[VKILL] = vdisable;
-			term.c_cc[VQUIT] = vdisable;
-			term.c_cc[VSUSP] = vdisable;
-			term.c_cc[VSTART] = vdisable;
-			term.c_cc[VSTOP] = vdisable;
-			term.c_cc[VDSUSP] = vdisable;
-			sleep(1);
-			syslog(LOG_ERR, "tcsetattr(STDIN_FILENO) ...");
-			if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &term) == -1)
-				syslog(LOG_WARNING, "tcsetattr(\"%s\") %m", _PATH_CONSOLE);
-			syslog(LOG_ERR, "done\n");
-		}
-		sleep(1);
-		syslog(LOG_ERR, "setenv\n");
-		setenv("SafeBoot", runcom_safe ? "-x" : "", 1);
-		setenv("FsckSlash", runcom_fsck ? "-F" : "", 1);
-		setenv("NetBoot", runcom_netboot ? "-N" : "", 1);
-		syslog(LOG_ERR, "execv\n");
-		execl(_PATH_BSHELL, "sh", PATH_RUNCOM, NULL);
-		syslog(LOG_ERR | LOG_CONSOLE, "execv errno=%m");
-		sleep(2);
-		stall("can't exec %s for %s: %m", _PATH_BSHELL, PATH_RUNCOM);
+		execl(_PATH_BSHELL, "sh", "/etc/rc", "autoboot", NULL);
+		warn("exec /etc/rc");
 		_exit(EXIT_FAILURE);
 	}
-	return;
-}
-
-static void
-system_specific_bootstrap(bool sflag)
-{
-#define PATH_BOOTSTRAP	"/etc/bootstrap"
-	
-	// Go into single-user mode if requested
-	do_single_user_mode(sflag);
-	// Apple does a lot in the code, but we'll just call /etc/bootstrap for now
-	system(PATH_BOOTSTRAP);
+	do {
+		waited = waitpid(child, &status, 0);
+	} while (waited == -1 && errno == EINTR);
+	if (waited != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+		warnx("/etc/rc did not complete successfully");
+		return (-1);
+	}
+	if (statfs("/", &root) == -1 || (root.f_flags & MNT_RDONLY) != 0) {
+		warnx("root remains read-only after /etc/rc");
+		return (-1);
+	}
+	return (0);
 }
 
 static launch_data_t
@@ -813,11 +778,19 @@ read_job_file(const char *filename, bool materialize_sockets)
 static int
 load_job(const char *filename)
 {
-	launch_data_t job;
+	launch_data_t job, disabled;
 
-	job = read_job_file(filename, true);
+	job = read_job_file(filename, false);
 	if (job == NULL)
 		return (-1);
+	/* Disabled jobs must not bind sockets or register Mach services. */
+	disabled = launch_data_dict_lookup(job, LAUNCH_JOBKEY_DISABLED);
+	if (disabled != NULL && launch_data_get_type(disabled) == LAUNCH_DATA_BOOL &&
+	    launch_data_get_bool(disabled)) {
+		launch_data_free(job);
+		return (0);
+	}
+	materialize_job_sockets(job);
 	return (submit_job(job));
 }
 
@@ -898,9 +871,11 @@ cmd_bootstrap(int argc, char * const argv[])
 		return 1;
 	}
 
-	if (strcasecmp(session, "System") == 0 || strcasecmp(session, "Background") == 0) {
-		system_specific_bootstrap(sflag);
-		// Perhaps this should go in system_specific_bootstrap
+	if (strcasecmp(session, "System") == 0) {
+		do_single_user_mode(sflag);
+		if (runcom() != 0)
+			return (1);
+		/* Only the System bootstrap loads the system job definitions. */
 		for (i = 0; i < N(bootstrap_paths); i++) {
 			n = scandir(bootstrap_paths[i], &files, NULL, alphasort);
 			if (n < 0)
@@ -930,10 +905,7 @@ cmd_bootstrap(int argc, char * const argv[])
 				free(files[j]);
 			free(files);
 		}
-		// give jobs time to start
-		sleep(2);
-		// Then run the rc script(s)
-		runcom();
+
 	}
 	return (0);
 }

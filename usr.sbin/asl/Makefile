@@ -52,4 +52,9 @@ SRCS= asl_ipcServer.c asl_action.c bsd_in.c bsd_out.c daemon.c dbserver.c klog_i
 LIBADD=	asl notify launch xpc dispatch osxsupport mach thr sys bsm auditd \
 	BlocksRuntime nv sbuf util
 
+FILESGROUPS+= LAUNCHD
+LAUNCHD= com.apple.syslogd.plist
+LAUNCHDDIR= /etc/launchd.d
+LAUNCHDMODE= 0644
+
 .include <bsd.prog.mk>
