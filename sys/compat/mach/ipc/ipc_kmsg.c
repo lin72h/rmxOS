@@ -800,7 +800,7 @@ ipc_kmsg_get(
 	mach_msg_max_trailer_t 	*trailer;
 	mach_msg_legacy_base_t	    legacy_base;
 	mach_msg_size_t		len_copied;
-	task_t task;
+	struct ucred *cred;
 	caddr_t msg_addr = (caddr_t)msg;
 
 	legacy_base.body.msgh_descriptor_count = 0;
@@ -845,11 +845,22 @@ ipc_kmsg_get(
 	 * the cases where no implicit data is requested.
 	 */
 	trailer = (mach_msg_max_trailer_t *) (((caddr_t)(kmsg->ikm_header)) + size);
-	task = current_task();
+	/* Pin the sending thread's current credentials, not the fork snapshot. */
+	cred = crhold(curthread->td_ucred);
 	trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
 	trailer->msgh_trailer_size = MACH_MSG_TRAILER_MINIMUM_SIZE;
-	trailer->msgh_sender = task->sec_token;
-	trailer->msgh_audit = task->audit_token;
+	trailer->msgh_sender.val[0] = cred->cr_uid;
+	trailer->msgh_sender.val[1] = cred->cr_gid;
+	trailer->msgh_audit.val[0] = cred->cr_audit.ai_auid;
+	trailer->msgh_audit.val[1] = cred->cr_uid;
+	trailer->msgh_audit.val[2] = cred->cr_gid;
+	trailer->msgh_audit.val[3] = cred->cr_ruid;
+	trailer->msgh_audit.val[4] = cred->cr_rgid;
+	trailer->msgh_audit.val[5] = curproc->p_pid;
+	trailer->msgh_audit.val[6] = cred->cr_audit.ai_asid;
+	/* Task identity tokens are not implemented by this ABI. */
+	trailer->msgh_audit.val[7] = 0;
+	crfree(cred);
 	*kmsgp = kmsg;
 	return MACH_MSG_SUCCESS;
 }

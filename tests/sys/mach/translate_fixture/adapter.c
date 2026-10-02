@@ -22,6 +22,13 @@ extern kern_return_t mach_port_get_refs(ipc_space_t, mach_port_name_t,
     mach_port_right_t, mach_port_urefs_t *);
 
 struct observation { int result; int owned; };
+struct identity_observation { uint32_t sender[2]; uint32_t audit[8]; };
+extern int rmx_identity_observe(uint64_t, struct identity_observation *);
+void *rmx_fixture_message_trailer(void *);
+void *rmx_fixture_message_trailer(void *message) {
+	ipc_kmsg_t kmsg = message;
+	return ((char *)kmsg->ikm_header + kmsg->ikm_header->msgh_size);
+}
 void *rmx_fixture_malloc_type(void);
 void *rmx_fixture_malloc_type(void) { return (M_TEMP); }
 extern int rmx_translate_observe(uint32_t, struct observation *);
@@ -136,6 +143,24 @@ entry_lock_sysctl(SYSCTL_HANDLER_ARGS)
 SYSCTL_PROC(_debug, OID_AUTO, rmx_entry_lock_observe,
     CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0, entry_lock_sysctl,
     "S,observation", "Descriptor removal while an entry lookup holds its space");
+static int
+identity_sysctl(SYSCTL_HANDLER_ARGS)
+{
+	uint64_t address;
+	struct identity_observation observed;
+	int error;
+
+	error = SYSCTL_IN(req, &address, sizeof(address));
+	if (error == 0)
+		error = rmx_identity_observe(address, &observed);
+	if (error != 0)
+		return (error);
+	return (SYSCTL_OUT(req, &observed, sizeof(observed)));
+}
+SYSCTL_PROC(_debug, OID_AUTO, rmx_identity_observe,
+    CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE | CTLFLAG_ANYBODY,
+    NULL, 0, identity_sysctl,
+    "S,identity_observation", "Identity in the constructed Mach send trailer");
 static int module_event(module_t mod __unused, int event, void *arg __unused)
 {
 	return (event == MOD_LOAD || event == MOD_UNLOAD ? 0 : EOPNOTSUPP);

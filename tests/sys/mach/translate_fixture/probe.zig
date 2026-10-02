@@ -8,6 +8,22 @@ extern fn rmx_fixture_owned(*anyopaque) c_int;
 extern fn rmx_fixture_unlock(*anyopaque) void;
 extern fn ipc_object_translate(?*anyopaque, u32, u32, *?*anyopaque) c_int;
 const Observation = extern struct { result: c_int, owned: c_int };
+const Identity = extern struct { sender: [2]u32, audit: [8]u32 };
+const Trailer = extern struct { kind: u32, size: u32, seqno: u32, sender: [2]u32, audit: [8]u32 };
+extern fn ipc_kmsg_get(*anyopaque, u32, *?*anyopaque, ?*anyopaque) c_int;
+extern fn ipc_kmsg_free(*anyopaque) void;
+extern fn rmx_fixture_message_trailer(*anyopaque) *anyopaque;
+export fn rmx_identity_observe(address: u64, out: *Identity) c_int {
+    var message: ?*anyopaque = null;
+    const result = ipc_kmsg_get(@ptrFromInt(address), 24, &message, rmx_fixture_space());
+    if (result != 0) return 22;
+    const kmsg = message orelse return 12;
+    defer ipc_kmsg_free(kmsg);
+    const trailer: *const Trailer = @ptrCast(@alignCast(rmx_fixture_message_trailer(kmsg)));
+    out.sender = trailer.sender;
+    out.audit = trailer.audit;
+    return 0;
+}
 const EntryControl = extern struct { name: u32, flags: u64 };
 extern fn rmx_fixture_space_lock(*anyopaque) void;
 extern fn rmx_fixture_space_unlock(*anyopaque) void;

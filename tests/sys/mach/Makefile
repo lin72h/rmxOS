@@ -2,6 +2,7 @@ TESTSDIR= ${TESTSBASE}/sys/mach
 KYUAFILE= yes
 SCRIPTS+= mach_fileops_test mach_swtch_test mach_short_kevent_test mach_dead_name_test mach_named_pset_test mach_translate_test mach_file_lifetime_test mach_passable_test mach_proc_info_test mach_filecaps_test mach_timeout_test mach_clock_test mach_timebase_test
 SCRIPTSDIR= ${TESTSDIR}
+SCRIPTS+= mach_identity_test
 SCRIPTS+= mach_entry_test
 SCRIPTS+= mach_entry_lock_test
 SCRIPTS+= mach_entry_knote_test
@@ -18,5 +19,10 @@ mach_${_test}_test: ${.CURDIR}/mach_${_test}.zig ${.CURDIR}/file_message.zig
 .endfor
 
 SUBDIR+= translate_fixture
+
+mach_identity_test: ${.CURDIR}/mach_identity.zig ${.CURDIR}/file_message.zig
+	${ZIG} build-exe ${.CURDIR}/mach_identity.zig -target x86_64-freebsd -lc \
+	    --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf \
+	    -I${SRCTOP}/sys ${ATF_C_ARCHIVE} -femit-bin=${.TARGET}
 
 .include <bsd.test.mk>

@@ -1,5 +1,15 @@
 # Mach fix regressions
 
+## Batch 3 (op-426)
+
+`mach_identity_test:live_credentials` covers op-392 F1: expected FAIL on
+`mach-fixes-2` at `ee883a74`, PASS after the send-time credential fix. The
+fixture calls live `ipc_kmsg_get` on the test's private user message and reports
+its constructed trailer after effective uid/gid change. It never queues a
+message or edits task credentials. This isolates the sender identity from the
+separate receive-trailer/model work deferred to step 4. It is a source-derived
+expectation; no guest result is claimed.
+
 ## Batch 2 (op-420)
 
 `mach_entry_test:native_hold` expects FAIL on `mach-fixes-1` at `903c8fc2`
