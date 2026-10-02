@@ -302,3 +302,4 @@ static moduledata_t mach_moduledata = {
 };
 
 DECLARE_MODULE(mach, mach_moduledata, SI_SUB_KLD, SI_ORDER_ANY);
+MODULE_VERSION(mach, 1);
