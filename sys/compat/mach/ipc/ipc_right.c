@@ -462,7 +462,7 @@ ipc_right_check(
 
 	if (entry->ie_request != 0) {
 		entry->ie_request = 0;
-		ipc_entry_hold(entry); /* increment urefs */
+		bits++; /* dead-name notification adds one user reference */
 	}
 
 	entry->ie_bits = bits;
@@ -1010,7 +1010,7 @@ ipc_right_delta(
 
 			if (entry->ie_request != 0) {
 				entry->ie_request = 0;
-				ipc_entry_hold(entry); /* increment urefs */
+				bits++; /* dead-name notification adds one user reference */
 			}
 
 				entry->ie_bits = bits;
@@ -1106,6 +1106,10 @@ ipc_right_delta(
 		urefs = ipc_entry_refs(entry);
 		if (MACH_PORT_UREFS_UNDERFLOW(urefs, delta))
 			goto invalid_value;
+		if (MACH_PORT_UREFS_OVERFLOW(urefs, delta)) {
+			is_write_unlock(space);
+			return (KERN_UREFS_OVERFLOW);
+		}
 
 		if ((urefs + delta) == 0) {
 			/* drops the space lock */
@@ -1145,6 +1149,12 @@ ipc_right_delta(
 			ip_unlock(port);
 			goto invalid_value;
 		}
+		if (MACH_PORT_UREFS_OVERFLOW(urefs, delta) ||
+		    (int64_t)urefs + delta >= MACH_PORT_UREFS_MAX) {
+			ip_unlock(port);
+			is_write_unlock(space);
+			return (KERN_UREFS_OVERFLOW);
+		}
 
 		if ((urefs + delta) == 0) {
 			if (--port->ip_srights == 0
@@ -1183,9 +1193,9 @@ ipc_right_delta(
 				ipc_entry_dealloc(space, name, entry);
 			}
 		} else {
+			ipc_entry_add_refs(entry, delta);
 			is_write_unlock(space);
 			ip_unlock(port);
-			ipc_entry_add_refs(entry, delta);
 		}
 		/* even if dropped a ref, port is active */
 
@@ -1892,7 +1902,7 @@ ipc_right_copyout(
 		/* transfer send-once right and ref to entry */
 		ip_unlock(port);
 
-		entry->ie_bits = bits | (MACH_PORT_TYPE_SEND_ONCE);
+		entry->ie_bits = bits | MACH_PORT_TYPE_SEND_ONCE | 1;
 		break;
 
 	    case MACH_MSG_TYPE_PORT_SEND:
@@ -1924,7 +1934,7 @@ ipc_right_copyout(
 					name, entry);
 		}
 		ipc_entry_hold(entry);
-		entry->ie_bits = (bits | MACH_PORT_TYPE_SEND);
+		entry->ie_bits |= MACH_PORT_TYPE_SEND;
 		break;
 
 	    case MACH_MSG_TYPE_PORT_RECEIVE: {

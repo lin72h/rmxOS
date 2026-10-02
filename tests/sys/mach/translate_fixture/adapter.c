@@ -14,6 +14,10 @@
 #include <sys/mach/ipc/ipc_port.h>
 #include <sys/mach/thread.h>
 #include <sys/proc_info.h>
+#include <sys/file.h>
+#include <sys/capsicum.h>
+extern kern_return_t mach_port_get_refs(ipc_space_t, mach_port_name_t,
+    mach_port_right_t, mach_port_urefs_t *);
 
 struct observation { int result; int owned; };
 void *rmx_fixture_malloc_type(void);
@@ -21,6 +25,20 @@ void *rmx_fixture_malloc_type(void) { return (M_TEMP); }
 extern int rmx_translate_observe(uint32_t, struct observation *);
 extern int rmx_proc_observe(uint32_t, struct observation *);
 extern int rmx_timeout_observe(uint32_t, struct observation *);
+extern int rmx_urefs_observe(uint32_t, struct observation *);
+int rmx_fixture_file_hold(uint32_t, void **);
+void rmx_fixture_file_drop(void *);
+int rmx_fixture_get_urefs(uint32_t, uint32_t *);
+int rmx_fixture_file_hold(uint32_t name, void **out) {
+	cap_rights_t rights;
+	return (fget(curthread, name, cap_rights_init(&rights),
+	    (struct file **)out));
+}
+void rmx_fixture_file_drop(void *fp) { fdrop(fp, curthread); }
+int rmx_fixture_get_urefs(uint32_t name, uint32_t *out) {
+	return (mach_port_get_refs(current_space(), name,
+	    MACH_PORT_RIGHT_DEAD_NAME, out));
+}
 void *rmx_fixture_thread(void);
 uint32_t rmx_fixture_timeout(void *);
 void rmx_fixture_set_timeout(void *, uint32_t);
@@ -75,6 +93,9 @@ SYSCTL_PROC(_debug, OID_AUTO, rmx_proc_observe,
 SYSCTL_PROC(_debug, OID_AUTO, rmx_timeout_observe,
     CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, rmx_timeout_observe, 0, observe_sysctl,
     "S,observation", "Mach timeout tick observation for ATF");
+SYSCTL_PROC(_debug, OID_AUTO, rmx_urefs_observe,
+    CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, rmx_urefs_observe, 0, observe_sysctl,
+    "S,observation", "Mach urefs with a transient native file hold");
 static int module_event(module_t mod __unused, int event, void *arg __unused)
 {
 	return (event == MOD_LOAD || event == MOD_UNLOAD ? 0 : EOPNOTSUPP);

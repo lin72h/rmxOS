@@ -346,7 +346,9 @@ void
 ipc_entry_release(ipc_entry_t entry)
 {
 
-	fdrop(entry->ie_fp, curthread);
+	rw_assert(&entry->ie_space->is_lock_data, RA_WLOCKED);
+	KASSERT(IE_BITS_UREFS(entry->ie_bits) != 0, ("no Mach urefs"));
+	entry->ie_bits--;
 }
 
 /*
@@ -700,20 +702,14 @@ ipc_entry_refs(
 	ipc_entry_t entry)
 {
 
-	return (entry->ie_fp->f_count);
+	return (IE_BITS_UREFS(entry->ie_bits));
 }
 
 mach_port_urefs_t
 ipc_entry_mach_urefs(
 	ipc_entry_t entry)
 {
-	int refs;
-
-	if (IE_BITS_TYPE(entry->ie_bits) == MACH_PORT_TYPE_DEAD_NAME)
-		return (ipc_entry_refs(entry));
-
-	refs = ipc_entry_refs(entry);
-	return (refs > 0 ? refs - 1 : 0);
+	return (IE_BITS_UREFS(entry->ie_bits));
 }
 
 void
@@ -722,14 +718,18 @@ ipc_entry_add_refs(
 	int delta)
 {
 
-	atomic_add_acq_int(&entry->ie_fp->f_count, delta);
+	rw_assert(&entry->ie_space->is_lock_data, RA_WLOCKED);
+	KASSERT((int)IE_BITS_UREFS(entry->ie_bits) + delta >= 0 &&
+	    (int)IE_BITS_UREFS(entry->ie_bits) + delta <= MACH_PORT_UREFS_MAX,
+	    ("Mach uref adjustment out of range"));
+	entry->ie_bits += delta;
 }
 
 void
 ipc_entry_hold(ipc_entry_t entry)
 {
 
-	(void)fhold(entry->ie_fp);
+	ipc_entry_add_refs(entry, 1);
 }
 
 /*

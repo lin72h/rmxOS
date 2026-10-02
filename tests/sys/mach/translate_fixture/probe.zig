@@ -7,6 +7,20 @@ extern fn rmx_fixture_owned(*anyopaque) c_int;
 extern fn rmx_fixture_unlock(*anyopaque) void;
 extern fn ipc_object_translate(?*anyopaque, u32, u32, *?*anyopaque) c_int;
 const Observation = extern struct { result: c_int, owned: c_int };
+extern fn rmx_fixture_file_hold(u32, *?*anyopaque) c_int;
+extern fn rmx_fixture_file_drop(*anyopaque) void;
+extern fn rmx_fixture_get_urefs(u32, *u32) c_int;
+export fn rmx_urefs_observe(name: u32, out: *Observation) c_int {
+    var file: ?*anyopaque = null;
+    const result = rmx_fixture_file_hold(name, &file);
+    if (result != 0) return result;
+    const held = file orelse return 9;
+    defer rmx_fixture_file_drop(held);
+    var urefs: u32 = 0;
+    out.result = rmx_fixture_get_urefs(name, &urefs);
+    out.owned = @intCast(urefs);
+    return 0;
+}
 extern fn rmx_fixture_malloc_type() *anyopaque;
 extern fn malloc(usize, *anyopaque, c_int) ?*anyopaque;
 extern fn free(*anyopaque, *anyopaque) void;

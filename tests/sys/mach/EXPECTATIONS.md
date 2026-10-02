@@ -1,5 +1,13 @@
 # Mach fix regressions
 
+## Batch 2 (op-420)
+
+`mach_entry_test:native_hold` expects FAIL on `mach-fixes-1` at `903c8fc2`
+and PASS after separating Mach urefs from native file references. The fixture
+holds one extra native file reference while calling `mach_port_get_refs` on a
+new dead name. The expected Mach count is one; the unchanged backend reports
+two. These are source-derived expectations, not guest observations.
+
 These are expected results, not guest observations. The Gatekeeper runs the
 same test artifacts on unchanged alpha2 and the fixed image. No expected-failure
 annotations hide alpha2 failures.

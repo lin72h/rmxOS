@@ -287,7 +287,9 @@ ipc_object_alloc(
 	}
 	/* space is write-locked */
 
-	entry->ie_bits |= type;;
+	entry->ie_bits |= type;
+	if (type & MACH_PORT_TYPE_SEND_RIGHTS)
+		entry->ie_bits |= 1;
 	entry->ie_object = object;
 
 	io_lock(object);
@@ -352,6 +354,8 @@ ipc_object_alloc_name(
 	}
 
 	entry->ie_bits |= type;
+	if (type & MACH_PORT_TYPE_SEND_RIGHTS)
+		entry->ie_bits |= 1;
 	entry->ie_object = object;
 
 	io_lock(object);
