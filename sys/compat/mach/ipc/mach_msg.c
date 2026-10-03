@@ -439,7 +439,7 @@ mach_msg_receive(
 		if ((mr &~ MACH_MSG_MASK) == MACH_RCV_BODY_ERROR
 		    ) {
 			if (ipc_kmsg_put(msg, kmsg, MIN(kmsg->ikm_header->msgh_size +
-			   trailer->msgh_trailer_size, rcv_size + RECEIVE_HEADER_DELTA)) == MACH_RCV_INVALID_DATA)
+			   trailer->msgh_trailer_size, (uint64_t)rcv_size + RECEIVE_HEADER_DELTA)) == MACH_RCV_INVALID_DATA)
 				mr = MACH_RCV_INVALID_DATA;
 		}
 		else {
