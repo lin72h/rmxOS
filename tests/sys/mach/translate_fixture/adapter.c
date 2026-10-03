@@ -267,6 +267,6 @@ void rmx_fixture_file_revoke(void *pointer) {
  * macro, while batch 3 provides a real function in resident mach.ko. */
 void *rmx_fixture_thread_release_function(void);
 void *rmx_fixture_thread_release_function(void) {
-	return (linker_file_lookup_symbol(__this_linker_file,
+	return (linker_file_lookup_symbol((linker_file_t)&__this_linker_file,
 	    "thread_deallocate", 1));
 }
