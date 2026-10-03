@@ -541,8 +541,14 @@ msg_receive_error_bounded(
 {
 	mach_vm_address_t context;
 	mach_msg_max_trailer_t *trailer;
+	security_token_t sender;
+	audit_token_t audit;
 
-	context = kmsg->ikm_header->msgh_remote_port->ip_context;
+	context = current_thread()->ith_receive_context;
+	trailer = (mach_msg_max_trailer_t *)((vm_offset_t)kmsg->ikm_header +
+	    round_msg(kmsg->ikm_header->msgh_size));
+	sender = trailer->msgh_sender;
+	audit = trailer->msgh_audit;
 	/*
 	 * Copy out the destination port in the message.
  	 * Destroy all other rights and memory in the message.
@@ -558,6 +564,8 @@ msg_receive_error_bounded(
 	kmsg->ikm_header->msgh_size = sizeof(mach_msg_header_t);
 	bzero(trailer, sizeof(*trailer));
 	bcopy(&trailer_template, trailer, sizeof(trailer_template));
+	trailer->msgh_sender = sender;
+	trailer->msgh_audit = audit;
 	if (option & MACH_RCV_TRAILER_MASK) {
 		trailer->msgh_seqno = seqno;
 		trailer->msgh_context = context;
