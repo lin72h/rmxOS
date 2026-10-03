@@ -87,6 +87,10 @@ fn boundaryBody(t: [*c]const c.atf_tc_t) callconv(.c) void {
     }
     _ = c.printf("receive_large expected_result=0x10004004 observed_result=0x%x expected_size=%u observed_size=%u expected_canary=1 observed_canary=%d trailer=%u\n", short, @as(c_uint, @sizeOf(Message)), header.size, @as(c_int, @intFromBool(canary)), trailer);
     if (short != 0x10004004 or header.size != @sizeOf(Message) or !canary) c.atf_tc_fail("LARGE size or receive boundary differs");
+    if (!audit and !context) {
+        const fault = c.syscall(c.SYS_mach_msg_trap, @as(*anyopaque, @ptrFromInt(1)), options, @as(c_uint, 0), @as(c_uint, 8), receive, @as(c_uint, 0), @as(c_uint, 0));
+        if (fault != 0x10004008) c.atf_tc_fail("LARGE size copyout fault did not return INVALID_DATA");
+    }
     wire = [_]u8{0xa5} ** 192;
     const exact = c.syscall(c.SYS_mach_msg_trap, &wire, options, @as(c_uint, 0), @as(c_uint, @sizeOf(Message)) + trailer, receive, @as(c_uint, 0), @as(c_uint, 0));
     if (exact != 0 or header.id != 44702) c.atf_tc_fail("LARGE retry did not receive the retained message");
@@ -152,4 +156,60 @@ fn waitBody(_: [*c]const c.atf_tc_t) callconv(.c) void {
     if (wait_result != 0x10004004 or header.size != 88) c.atf_tc_fail("waiting LARGE did not report retained body");
     const retry = c.syscall(c.SYS_mach_msg_trap, &wait_wire, @as(c_uint, 0x102), @as(c_uint, 0), @as(c_uint, wait_wire.len), wait_port, @as(c_uint, 0), @as(c_uint, 0));
     if (retry != 0 or header.id != 44703) c.atf_tc_fail("waiting receive consumed the LARGE message");
+    waitControls();
+}
+fn nowMillis() i64 {
+    var ts: c.struct_timespec = undefined;
+    if (c.clock_gettime(c.CLOCK_MONOTONIC, &ts) != 0) c.atf_tc_fail("monotonic clock failed");
+    return ts.tv_sec * 1000 + @divTrunc(ts.tv_nsec, 1000000);
+}
+var normal_name: u32 = 0;
+var normal_timeout: u32 = 1000;
+var normal_result: c_long = 0;
+fn normalReceive(_: ?*anyopaque) callconv(.c) ?*anyopaque {
+    var wire: [128]u32 = [_]u32{0} ** 128;
+    normal_result = c.syscall(c.SYS_mach_msg_trap, &wire, @as(c_uint, 0x102), @as(c_uint, 0), @as(c_uint, @sizeOf(@TypeOf(wire))), normal_name, normal_timeout, @as(c_uint, 0));
+    return null;
+}
+fn receiveSignal(_: c_int) callconv(.c) void {}
+fn waitControls() void {
+    _ = c.signal(c.SIGUSR2, &receiveSignal);
+    for (0..4) |mode| {
+        var port: u32 = 0;
+        var pset: u32 = 0;
+        if (c.syscall(c.SYS__kernelrpc_mach_port_allocate_trap, @as(c_uint, 0), @as(c_uint, 1), &port) != 0) c.atf_tc_fail("wait control setup failed");
+        normal_name = port;
+        normal_timeout = if (mode == 0) 80 else 1000;
+        const begin = nowMillis();
+        var thread: c.pthread_t = undefined;
+        if (c.pthread_create(&thread, null, &normalReceive, null) != 0) c.atf_tc_fail("wait control thread failed");
+        if (mode != 0) {
+            _ = c.usleep(100000);
+            switch (mode) {
+                1 => {
+                    if (c.pthread_kill(thread, c.SIGUSR2) != 0) c.atf_tc_fail("receiver signal failed");
+                },
+                2 => {
+                    if (c.syscall(c.SYS__kernelrpc_mach_port_destroy_trap, @as(c_uint, 0), port) != 0) c.atf_tc_fail("receiver destruction failed");
+                },
+                3 => {
+                    if (c.syscall(c.SYS__kernelrpc_mach_port_allocate_trap, @as(c_uint, 0), @as(c_uint, 3), &pset) != 0 or c.syscall(c.SYS__kernelrpc_mach_port_move_member_trap, @as(c_uint, 0), port, pset) != 0) c.atf_tc_fail("receiver membership change failed");
+                },
+                else => unreachable,
+            }
+        }
+        if (c.pthread_join(thread, null) != 0) c.atf_tc_fail("wait control join failed");
+        const elapsed = nowMillis() - begin;
+        const expected: u32 = switch (mode) {
+            0 => 0x10004003,
+            1 => 0x10004005,
+            2 => 0x10004009,
+            3 => 0x10004006,
+            else => unreachable,
+        };
+        _ = c.printf("receive_wait mode=%u expected_result=0x%x observed_result=0x%x elapsed_ms=%lld\n", @as(c_uint, @intCast(mode)), expected, normal_result, @as(c_longlong, elapsed));
+        if (normal_result != expected or elapsed > 800 or (mode == 0 and elapsed < 50)) c.atf_tc_fail("receive wait lost cancellation or monotonic timeout");
+        if (mode != 2) _ = c.syscall(c.SYS__kernelrpc_mach_port_destroy_trap, @as(c_uint, 0), port);
+        if (pset != 0) _ = c.syscall(c.SYS__kernelrpc_mach_port_destroy_trap, @as(c_uint, 0), pset);
+    }
 }

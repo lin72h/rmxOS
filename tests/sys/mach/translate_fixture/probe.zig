@@ -259,6 +259,12 @@ extern fn rmx_fixture_note_unlock(*anyopaque) void;
 extern fn rmx_fixture_note_waiter(*anyopaque) c_int;
 extern fn rmx_fixture_pset_refs(*anyopaque) u32;
 extern fn rmx_fixture_pause() void;
+extern fn rmx_fixture_receive_hold(u32) ?*anyopaque;
+extern fn rmx_fixture_object_lock(*anyopaque) void;
+extern fn rmx_fixture_object_drop(*anyopaque) void;
+extern fn rmx_fixture_retire_waiter(*anyopaque, *anyopaque) c_int;
+extern fn rmx_fixture_object_refs(*anyopaque) u32;
+var pin_port: ?*anyopaque = null;
 var pin_pset: ?*anyopaque = null;
 var pin_release: u32 = 0;
 var pin_locked: u32 = 0;
@@ -290,6 +296,26 @@ export fn rmx_pset_pin_observe(command: u64, out: *Observation) c_int {
             pin_pset = null;
         },
         6 => out.result = @intCast(@atomicLoad(u32, &pin_locked, .acquire)),
+        7 => {
+            pin_port = rmx_fixture_receive_hold(@truncate(command)) orelse return 22;
+        },
+        8 => {
+            const p = pin_port orelse return 22;
+            rmx_fixture_object_lock(p);
+            @atomicStore(u32, &pin_locked, 1, .release);
+            const begin = rmx_fixture_uptime();
+            while (@atomicLoad(u32, &pin_release, .acquire) == 0 and rmx_fixture_uptime() - begin < 10 * 4294967296) rmx_fixture_pause();
+            rmx_fixture_unlock(p);
+        },
+        9 => {
+            out.result = rmx_fixture_retire_waiter(pin_pset orelse return 22, pin_port orelse return 22);
+            out.owned = @intCast(rmx_fixture_object_refs(pin_port.?));
+        },
+        10 => {
+            rmx_fixture_object_drop(pin_port orelse return 22);
+            pin_port = null;
+        },
+
         else => return 22,
     }
     return 0;

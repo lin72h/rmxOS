@@ -14,7 +14,7 @@ const c = @cImport({
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 var tc: c.atf_tc_t = undefined;
-var pin_cases: [2]c.atf_tc_t = undefined;
+var pin_cases: [3]c.atf_tc_t = undefined;
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "descr", "%s", "Destroying a Mach port set removes its registered knote");
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "10");
@@ -40,8 +40,8 @@ fn addTests(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     if (c.atf_is_error(err)) return err;
     const added = c.atf_tp_add_tc(tp, &tc);
     if (c.atf_is_error(added)) return added;
-    for ([_][*:0]const u8{ "send_pin", "move_pin" }, 0..) |name, i| {
-        const e = c.atf_tc_init(&pin_cases[i], name, &pinHead, if (i == 0) &sendPin else &movePin, &pinCleanup, c.atf_tp_get_config(tp));
+    for ([_][*:0]const u8{ "send_pin", "move_pin", "retire_pin" }, 0..) |name, i| {
+        const e = c.atf_tc_init(&pin_cases[i], name, &pinHead, if (i == 0) &sendPin else if (i == 1) &movePin else &retirePin, &pinCleanup, c.atf_tp_get_config(tp));
         if (c.atf_is_error(e)) return e;
         const a = c.atf_tp_add_tc(tp, &pin_cases[i]);
         if (c.atf_is_error(a)) return a;
@@ -122,4 +122,39 @@ fn sendPin(t: [*c]const c.atf_tc_t) callconv(.c) void {
 }
 fn movePin(t: [*c]const c.atf_tc_t) callconv(.c) void {
     pinCase(t, true);
+}
+fn holdPort(_: ?*anyopaque) callconv(.c) ?*anyopaque {
+    _ = pin(8, 0);
+    return null;
+}
+fn destroySet(_: ?*anyopaque) callconv(.c) ?*anyopaque {
+    return if (c.syscall(c.SYS__kernelrpc_mach_port_destroy_trap, @as(c_uint, 0), selected_set) == 0) null else @ptrFromInt(1);
+}
+fn retirePin(t: [*c]const c.atf_tc_t) callconv(.c) void {
+    var path: [4096]u8 = undefined;
+    _ = c.snprintf(&path, path.len, "%s/rmx_translate_fixture.ko", c.atf_tc_get_config_var(t, "srcdir"));
+    if (c.kldload(&path) < 0) c.atf_tc_fail("fixture load failed");
+    if (c.syscall(c.SYS__kernelrpc_mach_port_allocate_trap, @as(c_uint, 0), @as(c_uint, 1), &selected_port) != 0 or c.syscall(c.SYS__kernelrpc_mach_port_allocate_trap, @as(c_uint, 0), @as(c_uint, 3), &selected_set) != 0 or c.syscall(c.SYS__kernelrpc_mach_port_move_member_trap, @as(c_uint, 0), selected_port, selected_set) != 0) c.atf_tc_fail("retirement membership failed");
+    _ = pin(1, selected_set);
+    _ = pin(7, selected_port);
+    var holder: c.pthread_t = undefined;
+    var destroyer: c.pthread_t = undefined;
+    if (c.pthread_create(&holder, null, &holdPort, null) != 0) c.atf_tc_fail("port holder failed");
+    var tries: usize = 0;
+    while (pin(6, 0).result != 1 and tries < 1000) : (tries += 1) _ = c.usleep(1000);
+    if (c.pthread_create(&destroyer, null, &destroySet, null) != 0) c.atf_tc_fail("set destroyer failed");
+    tries = 0;
+    var observed = pin(9, 0);
+    while (observed.result != 1 and tries < 1000) : (tries += 1) {
+        _ = c.usleep(1000);
+        observed = pin(9, 0);
+    }
+    _ = pin(4, 0);
+    var result: ?*anyopaque = null;
+    const joined = c.pthread_join(holder, null) == 0 and c.pthread_join(destroyer, &result) == 0 and result == null;
+    _ = pin(10, 0);
+    _ = pin(5, 0);
+    _ = c.printf("pset_retire_pin expected_waiter=1 observed_waiter=%d expected_refs=3 observed_refs=%d\n", observed.result, observed.owned);
+    if (observed.result != 1 or !joined) c.atf_tc_fail("controlled retirement interlock failed");
+    if (observed.owned != 3) c.atf_tc_fail("retiring set lost its member storage pin while dropping its lock");
 }

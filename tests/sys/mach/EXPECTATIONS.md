@@ -189,3 +189,8 @@ first copyouts overlap their unlocked allocation interval. Fixed: PASS, both
 copyouts return the same Mach name. The fixture creates a private kernel
 port and starts two real copyouts together for 200 rounds; this is stress,
 not a guaranteed allocation interleaving, and a base PASS is not a proof.
+
+`mach_entry_knote_test:retire_pin` checks #15: while set retirement blocks
+on a deliberately held member mutex, the member has an extra storage pin.
+Base FAIL (two pins); fixed PASS (three pins). The mutex contested bit and
+inactive set establish the controlled lock-drop interval.

@@ -314,3 +314,21 @@ static int copyout_sysctl(SYSCTL_HANDLER_ARGS) {
 SYSCTL_PROC(_debug, OID_AUTO, rmx_copyout_observe,
  CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0, copyout_sysctl,
  "S,observation", "Concurrent first send-right copyouts");
+void *rmx_fixture_receive_hold(uint32_t);
+void rmx_fixture_object_lock(void *);
+void rmx_fixture_object_drop(void *);
+int rmx_fixture_retire_waiter(void *, void *);
+uint32_t rmx_fixture_object_refs(void *);
+void *rmx_fixture_receive_hold(uint32_t name) {
+ ipc_object_t object;
+ if (ipc_object_translate(current_space(), name, MACH_PORT_RIGHT_RECEIVE,
+     &object) != KERN_SUCCESS) return (NULL);
+ io_reference(object); io_unlock(object); return (object);
+}
+void rmx_fixture_object_lock(void *p) { io_lock((ipc_object_t)p); }
+void rmx_fixture_object_drop(void *p) { io_release((ipc_object_t)p); }
+int rmx_fixture_retire_waiter(void *set, void *port) {
+ return (!io_active((ipc_object_t)set) &&
+     (atomic_load_acq_ptr(&((ipc_port_t)port)->port_comm.rcd_io_lock_data.mtx_lock) & MTX_CONTESTED) != 0);
+}
+uint32_t rmx_fixture_object_refs(void *p) { return (atomic_load_acq_int(&((ipc_object_t)p)->io_references)); }
