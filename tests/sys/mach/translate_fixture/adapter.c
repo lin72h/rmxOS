@@ -263,3 +263,42 @@ void rmx_fixture_file_revoke(void *pointer) {
 	fp->f_ops->fo_fdpostclose(fp, 0, curthread);
 }
 
+/* Native ABI projections for the controlled pset notification interlock. */
+#include <sys/mach/ipc/ipc_pset.h>
+#include <sys/mach/ipc/ipc_right.h>
+#include <sys/sx.h>
+void *rmx_fixture_pset_hold(uint32_t);
+void rmx_fixture_pset_drop(void *);
+void rmx_fixture_note_lock(void *);
+void rmx_fixture_note_unlock(void *);
+int rmx_fixture_note_waiter(void *);
+uint32_t rmx_fixture_pset_refs(void *);
+void rmx_fixture_pause(void);
+void *rmx_fixture_pset_hold(uint32_t name) {
+ ipc_object_t object;
+ if (ipc_object_translate(current_space(), name, MACH_PORT_RIGHT_PORT_SET,
+     &object) != KERN_SUCCESS) return (NULL);
+ io_reference(object); io_unlock(object); return (object);
+}
+void rmx_fixture_pset_drop(void *p) { ips_release((ipc_pset_t)p); }
+void rmx_fixture_note_lock(void *p) { sx_xlock(&((ipc_pset_t)p)->ips_note_lock); }
+void rmx_fixture_note_unlock(void *p) { sx_xunlock(&((ipc_pset_t)p)->ips_note_lock); }
+int rmx_fixture_note_waiter(void *p) {
+ return ((atomic_load_acq_ptr(&((ipc_pset_t)p)->ips_note_lock.sx_lock) &
+     SX_LOCK_SHARED_WAITERS) != 0);
+}
+uint32_t rmx_fixture_pset_refs(void *p) {
+ return (atomic_load_acq_int(&((ipc_pset_t)p)->ips_object.io_references));
+}
+void rmx_fixture_pause(void) { pause("rmxfixture", 1); }
+extern int rmx_pset_pin_observe(uint64_t, struct observation *);
+static int pset_pin_sysctl(SYSCTL_HANDLER_ARGS) {
+ uint64_t command; struct observation observed; int error;
+ error = SYSCTL_IN(req, &command, sizeof(command));
+ if (error == 0) error = rmx_pset_pin_observe(command, &observed);
+ if (error != 0) return (error);
+ return (SYSCTL_OUT(req, &observed, sizeof(observed)));
+}
+SYSCTL_PROC(_debug, OID_AUTO, rmx_pset_pin_observe,
+ CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0, pset_pin_sysctl,
+ "S,observation", "Pset notification pin at its native sx interlock");

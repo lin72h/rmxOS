@@ -252,3 +252,45 @@ export fn rmx_lifetime_refs(name: u32, out: *Observation) c_int {
     out.owned = @intCast(count);
     return 0;
 }
+extern fn rmx_fixture_pset_hold(u32) ?*anyopaque;
+extern fn rmx_fixture_pset_drop(*anyopaque) void;
+extern fn rmx_fixture_note_lock(*anyopaque) void;
+extern fn rmx_fixture_note_unlock(*anyopaque) void;
+extern fn rmx_fixture_note_waiter(*anyopaque) c_int;
+extern fn rmx_fixture_pset_refs(*anyopaque) u32;
+extern fn rmx_fixture_pause() void;
+var pin_pset: ?*anyopaque = null;
+var pin_release: u32 = 0;
+var pin_locked: u32 = 0;
+export fn rmx_pset_pin_observe(command: u64, out: *Observation) c_int {
+    out.* = .{ .result = 0, .owned = 0 };
+    switch (command >> 32) {
+        1 => {
+            if (pin_pset != null) return 16;
+            pin_pset = rmx_fixture_pset_hold(@truncate(command)) orelse return 22;
+            @atomicStore(u32, &pin_release, 0, .release);
+            @atomicStore(u32, &pin_locked, 0, .release);
+        },
+        2 => {
+            const p = pin_pset orelse return 22;
+            rmx_fixture_note_lock(p);
+            @atomicStore(u32, &pin_locked, 1, .release);
+            const begin = rmx_fixture_uptime();
+            while (@atomicLoad(u32, &pin_release, .acquire) == 0 and rmx_fixture_uptime() - begin < 10 * 4294967296) rmx_fixture_pause();
+            rmx_fixture_note_unlock(p);
+        },
+        3 => {
+            const p = pin_pset orelse return 22;
+            out.result = rmx_fixture_note_waiter(p);
+            out.owned = @intCast(rmx_fixture_pset_refs(p));
+        },
+        4 => @atomicStore(u32, &pin_release, 1, .release),
+        5 => {
+            rmx_fixture_pset_drop(pin_pset orelse return 22);
+            pin_pset = null;
+        },
+        6 => out.result = @intCast(@atomicLoad(u32, &pin_locked, .acquire)),
+        else => return 22,
+    }
+    return 0;
+}

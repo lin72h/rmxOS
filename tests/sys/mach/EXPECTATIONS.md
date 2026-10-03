@@ -160,3 +160,12 @@ and eventually 0 fixed. Validator3's source review covers the dying gate.
 Fixture command 13 and its run-time linker_file_lookup_symbol are removed.
 No product code changes. The self-check runs both images and repeats this case
 20 times on fixed; Gatekeeper proof remains separate acceptance.
+
+## op-447 step 4 part 1
+
+`mach_entry_knote_test:send_pin` and `:move_pin`: base FAIL with two storage
+references after membership removal; fixed PASS with three, including the
+notifier pin. The fixture holds the native note sx lock and observes its
+shared waiter flag before removing membership, so these are controlled
+interleavings, not stress. The entry and fixture holds remain on both builds;
+the live producer must supply the third hold. No numeric fd result is asserted.
