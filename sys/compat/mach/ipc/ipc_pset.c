@@ -401,10 +401,15 @@ ipc_pset_move(
 		ips_release(oset);
 	}
 
+	/* Retain notification storage independently of port membership. */
+	if (knotify == TRUE)
+		ips_reference(nset);
 	ip_unlock(port);
 
-	if (knotify == TRUE)
+	if (knotify == TRUE) {
 		ipc_pset_signal(nset);
+		ips_release(nset);
+	}
 	return (((nset == IPS_NULL) && (oset == IPS_NULL)) ?
 		KERN_NOT_IN_SET : KERN_SUCCESS);
 }
@@ -470,9 +475,22 @@ ipc_pset_destroy(
 		port = TAILQ_FIRST(&pset->ips_ports);
 		MPASS(port->ip_pset == pset);
 		if (ip_lock_try(port) == 0) {
+			/* Keep this member alive while following port-before-set order. */
+			ip_reference(port);
 			ips_unlock(pset);
 			ip_lock(port);
 			ips_lock(pset);
+			if (!ip_active(port) || port->ip_pset != pset) {
+				ip_unlock(port);
+				ip_release(port);
+				continue;
+			}
+			TAILQ_REMOVE(&pset->ips_ports, port, ip_next);
+			port->ip_pset = IPS_NULL;
+			ip_unlock(port);
+			ip_release(port);
+			ips_release(pset);
+			continue;
 		}
 		TAILQ_REMOVE(&pset->ips_ports, port, ip_next);
 		port->ip_pset = NULL;

@@ -461,10 +461,15 @@ ipc_mqueue_deliver(
 	assert(port->ip_msgcount >= 0);
 	ipc_kmsg_enqueue_macro(&mqueue->imq_messages, kmsg);
 	port->ip_msgcount++;
+	/* Membership may disappear as soon as the port is unlocked. */
+	if (pset)
+		ips_reference(pset);
 	ip_unlock(port);
 
-	if (pset)
+	if (pset) {
 		ipc_pset_signal(pset);
+		ips_release(pset);
+	}
 
 	TR_IPC_MQEX("exit: wakeup 0x%x", receiver);
 	return MACH_MSG_SUCCESS;
