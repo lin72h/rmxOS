@@ -309,6 +309,9 @@ ipc_pset_remove(
 	assert(port->ip_pset == pset);
 
 	port->ip_pset = IPS_NULL;
+	port->ip_receive_epoch++;
+	wakeup(port);
+	wakeup(pset);
 	TAILQ_REMOVE(&pset->ips_ports, port, ip_next);
 }
 
@@ -431,6 +434,8 @@ ipc_pset_changed(
 {
 	ipc_thread_t th;
 
+	pset->ips_receive_epoch++;
+	wakeup(pset);
 	while ((th = thread_pool_get_act((ipc_object_t)pset, 0)) != ITH_NULL) {
 		th->ith_state = mr;
 		thread_go(th);
@@ -444,6 +449,8 @@ ipc_pset_port_changed(
 {
 	ipc_thread_t th;
 
+	port->ip_receive_epoch++;
+	wakeup(port);
 	while ((th = thread_pool_get_act((ipc_object_t)port, 0)) != ITH_NULL) {
 		th->ith_state = mr;
 		thread_go(th);
@@ -671,6 +678,7 @@ filt_machport(struct knote *kn, long hint)
 
 
 	ips_lock(pset);
+	self->ith_receive_epoch = pset->ips_receive_epoch;
 	kr = ipc_mqueue_pset_receive(MACH_PORT_TYPE_PORT_SET, option, size,
 					0/* immediate timeout */, self);
 	(void)kr;

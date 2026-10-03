@@ -339,13 +339,14 @@ mach_msg_receive(
 	mach_msg_body_t *slist;
 	mach_msg_max_trailer_t *trailer;
 	ipc_entry_bits_t bits;
+	ipc_entry_t admitted_entry;
 
 	/* Scatter/overwrite and unknown trailer formats are not implemented. */
 	if ((option & MACH_RCV_OVERWRITE) != 0 ||
 	    (option & MACH_RCV_TRAILER_MASK & 0xf0000000) != 0 ||
 	    GET_RCV_ELEMENTS(option) > MACH_RCV_TRAILER_CTX)
 		return MACH_RCV_INVALID_TYPE;
-	mr = ipc_mqueue_copyin(space, rcv_name, &bits, &object);
+	mr = ipc_mqueue_copyin(space, rcv_name, &bits, &object, &admitted_entry);
 	if (mr != MACH_MSG_SUCCESS) {
 		return mr;
 	}
@@ -357,6 +358,7 @@ mach_msg_receive(
 	if (option & MACH_RCV_OVERWRITE) {
 		if (slist_size < sizeof(mach_msg_base_t)) {
 			ipc_object_release(object);
+	ipc_entry_put(admitted_entry);
 			return MACH_RCV_SCATTER_SMALL;
 		} else {
 			slist_size -= sizeof(mach_msg_header_t);
@@ -365,6 +367,7 @@ mach_msg_receive(
 			    copyin((char *) (msg + 1), (char *)slist,
 					slist_size)) {
 				ipc_object_release(object);
+	ipc_entry_put(admitted_entry);
 				return MACH_RCV_INVALID_DATA;
 			}
 			if ((slist->msgh_descriptor_count*
@@ -372,6 +375,7 @@ mach_msg_receive(
 			     + sizeof(mach_msg_size_t)) > slist_size) {
 				FREE_SCATTER_LIST(slist, slist_size, slist_rt);
 				ipc_object_release(object);
+	ipc_entry_put(admitted_entry);
 				return MACH_RCV_INVALID_TYPE;
 			}
 		}
@@ -388,6 +392,7 @@ mach_msg_receive(
 							timeout, &kmsg, &seqno, self);
 	/* mqueue is unlocked */
 	ipc_object_release(object);
+	ipc_entry_put(admitted_entry);
 
 	if (mr != MACH_MSG_SUCCESS) {
         if (mr == MACH_RCV_TOO_LARGE && (option & MACH_RCV_LARGE)) {

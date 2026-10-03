@@ -2064,6 +2064,8 @@ ipc_right_rename(
 		assert(port->ip_receiver == space);
 
 		port->ip_receiver_name = nname;
+		port->ip_receive_epoch++;
+		wakeup(port);
 		ip_unlock(port);
 		break;
 	    }
@@ -2079,6 +2081,8 @@ ipc_right_rename(
 		assert(pset->ips_local_name == oname);
 
 		pset->ips_local_name = nname;
+		pset->ips_receive_epoch++;
+		wakeup(pset);
 		ips_unlock(pset);
 		break;
 	    }

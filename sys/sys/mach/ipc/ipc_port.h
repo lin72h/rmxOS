@@ -250,6 +250,7 @@ struct ipc_port {
 		ip_strict_guard:1,
 		ip_pad:26;
 	mach_vm_address_t ip_context;
+	uint64_t ip_receive_epoch;
 };
 
 

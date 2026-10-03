@@ -110,6 +110,7 @@ typedef struct ipc_pset {
 	struct knlist			ips_note;
 	struct sx				ips_note_lock;
 	TAILQ_HEAD(_ips_ports, ipc_port) ips_ports;
+	uint64_t ips_receive_epoch;
 } *ipc_pset_t;
 
 #define ips_object		pset_comm.rcd_comm.icd_object

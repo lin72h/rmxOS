@@ -95,6 +95,7 @@
 #include <sys/mach/ipc/ipc_thread.h>
 #include <sys/mach/ipc/ipc_object.h>
 #include <sys/mach/ipc/ipc_types.h>
+#include <sys/mach/ipc/ipc_entry.h>
 #define TRACE_BUFFER 0
 #define TR_DECL(x)
 
@@ -150,7 +151,8 @@ extern mach_msg_return_t ipc_mqueue_copyin(
 	ipc_space_t	space,
 	mach_port_name_t	name,
 	natural_t *bitsp,
-	ipc_object_t	*objectp);
+	ipc_object_t		*objectp,
+	ipc_entry_t *entryp);
 
 /* Receive a message from a message queue */
 extern mach_msg_return_t ipc_mqueue_receive(
