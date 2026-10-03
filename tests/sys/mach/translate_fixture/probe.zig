@@ -50,6 +50,7 @@ export fn rmx_lifetime_observe(command: u32, out: *Observation) c_int {
         4 => out.owned = rmx_fixture_port_active(watched_control orelse return 22),
         5 => rmx_lifetime_clear(),
         10 => return observeEmptyProc(out),
+        11 => return observeParkedReply(out),
         8 => {
             watched_space = rmx_fixture_space();
             ipc_space_reference(watched_space.?);
@@ -188,5 +189,42 @@ fn observeEmptyProc(out: *Observation) c_int {
     out.result = rmx_fixture_proc_attached(snapshot);
     rmx_fixture_proc_dtor(snapshot);
     out.owned = rmx_fixture_proc_attached(snapshot);
+    return 0;
+}
+
+extern fn rmx_fixture_mach_thread_size() usize;
+extern fn rmx_fixture_parked(*anyopaque) ?*anyopaque;
+extern fn rmx_fixture_set_parked(*anyopaque, ?*anyopaque) void;
+extern fn rmx_fixture_kmsg_header(*anyopaque) *anyopaque;
+extern fn rmx_fixture_kmsg_header_size() usize;
+extern fn ipc_thread_init(*anyopaque) void;
+extern fn ipc_thread_terminate(*anyopaque) void;
+extern fn ipc_kmsg_alloc(u32) ?*anyopaque;
+extern fn ipc_kmsg_destroy(*anyopaque) void;
+const KernelHeader = extern struct { bits: u32, size: u32, remote: ?*anyopaque, local: ?*anyopaque, voucher: u32, id: i32 };
+fn observeParkedReply(out: *Observation) c_int {
+    if (rmx_fixture_kmsg_header_size() != @sizeOf(KernelHeader)) return 22;
+    const allocator = rmx_fixture_malloc_type();
+    const thread = malloc(rmx_fixture_mach_thread_size(), allocator, 0x102) orelse return 12;
+    defer free(thread, allocator);
+    ipc_thread_init(thread);
+    const port = rmx_fixture_control_port(0);
+    rmx_fixture_port_hold(port);
+    defer rmx_fixture_port_drop(port);
+    const before = rmx_fixture_send_count(port);
+    const message = ipc_kmsg_alloc(@sizeOf(KernelHeader) + 128) orelse return 12;
+    const header: *KernelHeader = @ptrCast(@alignCast(rmx_fixture_kmsg_header(message)));
+    header.* = .{ .bits = 17, .size = @sizeOf(KernelHeader), .remote = ipc_port_make_send(port), .local = null, .voucher = 0, .id = 437 };
+    rmx_fixture_set_parked(thread, message);
+    // Both native retirement and committed exec use this common cleanup.
+    ipc_thread_terminate(thread);
+    ipc_thread_terminate(thread);
+    out.result = @intFromBool(rmx_fixture_parked(thread) == null);
+    out.owned = @intCast(rmx_fixture_send_count(port) - before);
+    // Clean up the negative control's retained message without concealing it.
+    if (rmx_fixture_parked(thread)) |retained| {
+        rmx_fixture_set_parked(thread, null);
+        ipc_kmsg_destroy(retained);
+    }
     return 0;
 }

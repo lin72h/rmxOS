@@ -15,7 +15,7 @@ const c = @cImport({
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 const Observation = extern struct { result: c_int = 0, owned: c_int = 0 };
-var cases: [8]c.atf_tc_t = undefined;
+var cases: [9]c.atf_tc_t = undefined;
 fn observe(command_value: u32) Observation {
     var command = command_value;
     var result: Observation = .{};
@@ -174,9 +174,15 @@ fn failedCreation(t: [*c]const c.atf_tc_t) callconv(.c) void {
     // Batch 2 has no per-proc ctor; batch 3 must unwind its prepared task.
     if (result.owned != 0) c.atf_tc_fail("failed process creation retained a Mach task attachment");
 }
+fn parkedReply(t: [*c]const c.atf_tc_t) callconv(.c) void {
+    load(t);
+    const result = observe(11);
+    _ = c.printf("parked_reply expected_cleared=1 observed_cleared=%d expected_extra_send_rights=0 observed_extra_send_rights=%d\n", result.result, result.owned);
+    if (result.result != 1 or result.owned != 0) c.atf_tc_fail("thread IPC retirement retained a parked reply or its task control send right");
+}
 fn addTests(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "inherited_rights", "task_control_death", "incarnation", "thread_control_death", "shared_fd_exit", "rfork_unshare", "rfork_clean_table", "failed_creation" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &inherited, &taskDeath, &reuse, &threadDeath, &shared, &unshare, &cleanTable, &failedCreation };
+    const names = [_][*:0]const u8{ "inherited_rights", "task_control_death", "incarnation", "thread_control_death", "shared_fd_exit", "rfork_unshare", "rfork_clean_table", "failed_creation", "parked_reply" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &inherited, &taskDeath, &reuse, &threadDeath, &shared, &unshare, &cleanTable, &failedCreation, &parkedReply };
     for (names, bodies, 0..) |name, body, i| {
         const err = c.atf_tc_init(&cases[i], name, &head, body, &cleanup, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;

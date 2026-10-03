@@ -225,3 +225,14 @@ void rmx_fixture_proc_empty(void *p) { TAILQ_INIT(&((struct proc *)p)->p_threads
 void rmx_fixture_proc_ctor(void *p) { EVENTHANDLER_DIRECT_INVOKE(process_ctor, p); }
 void rmx_fixture_proc_dtor(void *p) { EVENTHANDLER_DIRECT_INVOKE(process_dtor, p); }
 int rmx_fixture_proc_attached(void *p) { return (((struct proc *)p)->p_machdata != NULL); }
+
+size_t rmx_fixture_mach_thread_size(void);
+void *rmx_fixture_parked(void *);
+void rmx_fixture_set_parked(void *, void *);
+void *rmx_fixture_kmsg_header(void *);
+size_t rmx_fixture_kmsg_header_size(void);
+size_t rmx_fixture_mach_thread_size(void) { return (sizeof(*((thread_t)NULL))); }
+void *rmx_fixture_parked(void *t) { return (((thread_t)t)->ith_kmsg); }
+void rmx_fixture_set_parked(void *t, void *m) { ((thread_t)t)->ith_kmsg = m; }
+void *rmx_fixture_kmsg_header(void *m) { return (((ipc_kmsg_t)m)->ikm_header); }
+size_t rmx_fixture_kmsg_header_size(void) { return (sizeof(mach_msg_header_t)); }

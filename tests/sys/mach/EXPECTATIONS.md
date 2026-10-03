@@ -120,3 +120,11 @@ space. Only Mach registers these two events in this source tree. Expected on
 attachment cleared). On batch-2 `ee883a74`: PASS, constructed=0, since that
 branch has no per-process constructor and does not contain this regression.
 The observation includes applicability; no allocation failure is claimed.
+
+`mach_lifetime_test:parked_reply` prepares a private thread IPC state and parks
+a kernel-format message holding a real task control-port send right. It calls
+the common `ipc_thread_terminate` twice and reports the slot and send-right
+delta before cleaning up a negative-control leak. Expected on `ee883a74` and
+`db592723`: FAIL (slot retained, extra send right=1); fixed: PASS (slot NULL,
+extra send rights=0). This fixture isolates cleanup used by native thread dtor
+and committed exec; it does not claim a live MIG/exec round-trip or heap census.
