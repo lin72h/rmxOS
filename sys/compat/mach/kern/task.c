@@ -1127,6 +1127,7 @@ static void
 mach_task_exit(void *arg __unused, struct proc *p)
 {
 	task_t task = p->p_machdata;
+	struct thread *td;
 
 	if (task == TASK_NULL)
 		return;
@@ -1142,8 +1143,10 @@ mach_task_exit(void *arg __unused, struct proc *p)
 		thread_deallocate(task->itk_exec_thread);
 		task->itk_exec_thread = NULL;
 	}
-	/* Native exit has already stopped other threads. */
-	mach_thread_retire(FIRST_THREAD_IN_PROC(p)->td_machdata);
+	/* Failed process creation can precede the first native thread. */
+	td = FIRST_THREAD_IN_PROC(p);
+	if (td != NULL)
+		mach_thread_retire(td->td_machdata);
 }
 
 static void
