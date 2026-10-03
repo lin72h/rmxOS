@@ -658,6 +658,7 @@ ipc_object_copyout(
 	if (port->ip_flags & IP_CONTEXT_FILE)
 		return (ipc_entry_port_to_file(space, namep, (ipc_object_t) port));
 
+retry:
 	is_write_lock(space);
 	if (!space->is_active) {
 		is_write_unlock(space);
@@ -680,7 +681,21 @@ ipc_object_copyout(
 		return (kr);
 	}
 
+	/* Allocation dropped the space lock. Another copyout may have won. */
+	if (msgt_name != MACH_MSG_TYPE_PORT_SEND_ONCE) {
+		mach_port_name_t existing_name;
+		ipc_entry_t existing_entry;
+
+		if (ipc_right_reverse(space, object, &existing_name, &existing_entry)) {
+			io_unlock(object);
+			/* Roll back the empty candidate before retrying the winner. */
+			ipc_entry_dealloc(space, name, entry);
+			goto retry;
+		}
+	}
+
 	assert(IE_BITS_TYPE(entry->ie_bits) == MACH_PORT_TYPE_NONE);
+
 	assert(entry->ie_object == IO_NULL);
 	io_lock(object);
 	if (!io_active(object)) {
