@@ -304,7 +304,7 @@ export fn rmx_pset_pin_observe(command: u64, out: *Observation) c_int {
             rmx_fixture_object_lock(p);
             @atomicStore(u32, &pin_locked, 1, .release);
             const begin = rmx_fixture_uptime();
-            while (@atomicLoad(u32, &pin_release, .acquire) == 0 and rmx_fixture_uptime() - begin < 10 * 4294967296) rmx_fixture_pause();
+            while (@atomicLoad(u32, &pin_release, .acquire) == 0 and rmx_fixture_uptime() - begin < 10 * 4294967296) @import("std").atomic.spinLoopHint();
             rmx_fixture_unlock(p);
         },
         9 => {
