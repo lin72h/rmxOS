@@ -178,3 +178,8 @@ requested trailer and unchanged canaries). Existing destructive short test stays
 `mach_short_kevent_test:reply_route`: base FAIL (parked MIG reply follows
 the sending thread to an unrelated port); fixed PASS (unrelated receive
 times out; another thread receives two distinct MIG_BAD_ID replies on a set).
+
+`mach_short_kevent_test:wait_large` expects FAIL on batch 3: a direct
+handoff consumes the message despite LARGE. Fixed: PASS, required size and
+a subsequent full receive of the same message. The admission ordering uses
+a scheduling pause, so this case is stress, not a controlled interleaving.

@@ -8,12 +8,14 @@ const c = @cImport({
     @cInclude("stdio.h");
     @cInclude("string.h");
     @cInclude("pthread.h");
+    @cInclude("time.h");
+    @cInclude("signal.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 const Header = extern struct { bits: u32, size: u32, remote: u32, local: u32, voucher: u32, id: i32 };
 const Message = extern struct { header: Header, payload: [64]u8 };
 var tc: c.atf_tc_t = undefined;
-var boundary: [5]c.atf_tc_t = undefined;
+var boundary: [6]c.atf_tc_t = undefined;
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "descr", "%s", "Direct kevent short receive cleans up the saved message");
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "10");
@@ -46,8 +48,8 @@ fn addTests(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     if (c.atf_is_error(err)) return err;
     const add = c.atf_tp_add_tc(tp, &tc);
     if (c.atf_is_error(add)) return add;
-    for ([_][*:0]const u8{ "large_port", "large_set", "audit_boundary", "context_boundary", "reply_route" }, 0..) |name, i| {
-        const e = c.atf_tc_init(&boundary[i], name, &head, if (i == 4) &replyBody else &boundaryBody, null, c.atf_tp_get_config(tp));
+    for ([_][*:0]const u8{ "large_port", "large_set", "audit_boundary", "context_boundary", "reply_route", "wait_large" }, 0..) |name, i| {
+        const e = c.atf_tc_init(&boundary[i], name, &head, if (i == 4) &replyBody else if (i == 5) &waitBody else &boundaryBody, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(e)) return e;
         const a = c.atf_tp_add_tc(tp, &boundary[i]);
         if (c.atf_is_error(a)) return a;
@@ -128,4 +130,26 @@ fn replyBody(_: [*c]const c.atf_tc_t) callconv(.c) void {
     var result: ?*anyopaque = null;
     if (c.pthread_create(&thread, null, &replyReceive, null) != 0 or c.pthread_join(thread, &result) != 0 or result != null) c.atf_tc_fail("another thread did not receive both distinct replies");
     if (c.syscall(c.SYS__kernelrpc_mach_port_destroy_trap, @as(c_uint, 0), reply_port) != 0) c.atf_tc_fail("reply destination cleanup failed");
+}
+var wait_port: u32 = 0;
+var wait_result: c_long = 0;
+var wait_wire: [192]u8 align(8) = undefined;
+fn waitingReceive(_: ?*anyopaque) callconv(.c) ?*anyopaque {
+    wait_wire = [_]u8{0xa5} ** 192;
+    wait_result = c.syscall(c.SYS_mach_msg_trap, &wait_wire, @as(c_uint, 0x106), @as(c_uint, 0), @as(c_uint, 8), wait_port, @as(c_uint, 1000), @as(c_uint, 0));
+    return null;
+}
+fn waitBody(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    if (c.syscall(c.SYS__kernelrpc_mach_port_allocate_trap, @as(c_uint, 0), @as(c_uint, 1), &wait_port) != 0) c.atf_tc_fail("waiting port setup failed");
+    var thread: c.pthread_t = undefined;
+    if (c.pthread_create(&thread, null, &waitingReceive, null) != 0) c.atf_tc_fail("receiver creation failed");
+    // Scheduling stress: this pause normally admits the empty-queue receive first.
+    _ = c.usleep(100000);
+    var sent = Message{ .header = .{ .bits = 20, .size = @sizeOf(Message), .remote = wait_port, .local = 0, .voucher = 0, .id = 44703 }, .payload = [_]u8{0x5a} ** 64 };
+    if (c.syscall(c.SYS_mach_msg_trap, &sent, @as(c_uint, 1), @as(c_uint, @sizeOf(Message)), @as(c_uint, 0), @as(c_uint, 0), @as(c_uint, 0), @as(c_uint, 0)) != 0 or c.pthread_join(thread, null) != 0) c.atf_tc_fail("waiting send/join failed");
+    const header: *Header = @ptrCast(&wait_wire);
+    _ = c.printf("waiting_large expected_result=0x10004004 observed_result=0x%x expected_size=88 observed_size=%u\n", wait_result, header.size);
+    if (wait_result != 0x10004004 or header.size != 88) c.atf_tc_fail("waiting LARGE did not report retained body");
+    const retry = c.syscall(c.SYS_mach_msg_trap, &wait_wire, @as(c_uint, 0x102), @as(c_uint, 0), @as(c_uint, wait_wire.len), wait_port, @as(c_uint, 0), @as(c_uint, 0));
+    if (retry != 0 or header.id != 44703) c.atf_tc_fail("waiting receive consumed the LARGE message");
 }
