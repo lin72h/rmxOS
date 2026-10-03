@@ -73,7 +73,7 @@ SRCS= jobServer.c mach_excServer.c internalServer.c
 SRCS+= job_forwardUser.c  job_replyUser.c job_replyServer.c notifyServer.c
 SRCS+= internalUser.c
 SRCS+= launchd.c core.c kill2.c ktrace.c ipc.c log.c runtime.c
-SRCS+= init.c
+SRCS+= init.c reroot.c
 
 LIBADD=	launch asl notify xpc dispatch osxsupport mach thr sys bsm auditd \
 	BlocksRuntime nv sbuf util

@@ -956,6 +956,7 @@ static int s_no_hang_fd = -1;
 mach_port_t inherited_bootstrap_port;
 jobmgr_t root_jobmgr;
 static bool single_user_handoff;
+static bool reroot_handoff;
 static bool logins_blocked;
 bool launchd_shutdown_debugging = false;
 bool launchd_verbose_boot = false;
@@ -1404,11 +1405,16 @@ jobmgr_remove(jobmgr_t jm)
 			raise(SIGTERM);
 		}
 	} else if (pid1_magic) {
-		if (single_user_handoff) {
+		if (single_user_handoff || reroot_handoff) {
 			/* Native init takes over PID 1, including the single-user shell. */
 			(void)kill(-1, SIGTERM);
 			sleep(3);
 			(void)kill(-1, SIGKILL);
+			if (reroot_handoff) {
+				(void)launchd_reroot();
+				jobmgr_log(jm, LOG_EMERG | LOG_CONSOLE,
+				    "Reroot handoff failed: %s; entering single-user mode", strerror(errno));
+			}
 			execl("/sbin/init", "init", "-s", NULL);
 			jobmgr_log(jm, LOG_EMERG | LOG_CONSOLE,
 			    "Cannot hand PID 1 to /sbin/init: %s", strerror(errno));
@@ -8750,6 +8756,13 @@ void
 launchd_request_single_user(void)
 {
 	single_user_handoff = true;
+	launchd_shutdown();
+}
+
+void
+launchd_request_reroot(void)
+{
+	reroot_handoff = true;
 	launchd_shutdown();
 }
 

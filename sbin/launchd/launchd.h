@@ -41,6 +41,8 @@ void launchd_SessionCreate(void);
 void launchd_shutdown(void);
 void launchd_request_reboot(int flags);
 void launchd_request_single_user(void);
+void launchd_request_reroot(void);
+int launchd_reroot(void);
 void launchd_set_logins_blocked(bool blocked);
 
 enum {
