@@ -201,6 +201,16 @@ mach_msg_return_t msg_receive_error(
 	mach_port_seqno_t	seqno,
 	ipc_space_t		space);
 
+/* User wire names remain 32 bits even when the kernel stores port pointers. */
+struct mach_receive_wire_header {
+ mach_msg_bits_t bits; mach_msg_size_t size;
+ mach_port_name_t remote, local, voucher; mach_msg_id_t id;
+};
+#define RECEIVE_HEADER_DELTA (sizeof(mach_msg_header_t) - sizeof(struct mach_receive_wire_header))
+static mach_msg_return_t msg_receive_error_bounded(ipc_kmsg_t,
+ mach_msg_header_t *, mach_msg_option_t, mach_port_seqno_t, ipc_space_t,
+ mach_msg_size_t);
+
 #if 0
 /* the size of each trailer has to be listed here for copyout purposes */
 mach_msg_trailer_size_t trailer_size[] = {
@@ -330,6 +340,11 @@ mach_msg_receive(
 	mach_msg_max_trailer_t *trailer;
 	ipc_entry_bits_t bits;
 
+	/* Scatter/overwrite and unknown trailer formats are not implemented. */
+	if ((option & MACH_RCV_OVERWRITE) != 0 ||
+	    (option & MACH_RCV_TRAILER_MASK & 0xf0000000) != 0 ||
+	    GET_RCV_ELEMENTS(option) > MACH_RCV_TRAILER_CTX)
+		return MACH_RCV_INVALID_TYPE;
 	mr = ipc_mqueue_copyin(space, rcv_name, &bits, &object);
 	if (mr != MACH_MSG_SUCCESS) {
 		return mr;
@@ -369,16 +384,27 @@ mach_msg_receive(
 	self->ith_scatter_list_size = slist_size;
 	self->ith_object = object;
 	assert(object->io_references > 0);
-	mr = ipc_mqueue_receive(bits, option & MACH_RCV_TIMEOUT, rcv_size,
+	mr = ipc_mqueue_receive(bits, option & MACH_RCV_USER, rcv_size,
 							timeout, &kmsg, &seqno, self);
 	/* mqueue is unlocked */
 	ipc_object_release(object);
 
 	if (mr != MACH_MSG_SUCCESS) {
-		if (mr == MACH_RCV_TOO_LARGE || mr == MACH_RCV_SCATTER_SMALL
-		    ) {
+        if (mr == MACH_RCV_TOO_LARGE && (option & MACH_RCV_LARGE)) {
+            mach_vm_address_t address = (mach_vm_address_t)msg;
+            if (rcv_size >= offsetof(struct mach_receive_wire_header, size) + sizeof(mach_msg_size_t) &&
+                copyout(&self->ith_msize, (void *)(address + offsetof(struct mach_receive_wire_header, size)), sizeof(mach_msg_size_t)))
+                mr = MACH_RCV_INVALID_DATA;
+            if ((option & MACH_RCV_LARGE_IDENTITY) &&
+                rcv_size >= offsetof(struct mach_receive_wire_header, local) + sizeof(mach_port_name_t) &&
+                copyout(&self->ith_receiver_name, (void *)(address + offsetof(struct mach_receive_wire_header, local)), sizeof(mach_port_name_t)))
+                mr = MACH_RCV_INVALID_DATA;
+            FREE_SCATTER_LIST(slist, slist_size, slist_rt);
+            return mr;
+        }
+		if (mr == MACH_RCV_TOO_LARGE || mr == MACH_RCV_SCATTER_SMALL) {
 			if (kmsg != IKM_NULL &&
-			    msg_receive_error(kmsg, msg, option, seqno, space)
+			    msg_receive_error_bounded(kmsg, msg, option, seqno, space, rcv_size)
 			    == MACH_RCV_INVALID_DATA)
 				mr = MACH_RCV_INVALID_DATA;
 		}
@@ -388,23 +414,31 @@ mach_msg_receive(
 	trailer = (mach_msg_max_trailer_t *)
 			((vm_offset_t)kmsg->ikm_header +
 			round_msg(kmsg->ikm_header->msgh_size));
-	if (option & MACH_RCV_TRAILER_MASK) {
-		trailer->msgh_seqno = seqno;
-		trailer->msgh_context = kmsg->ikm_header->msgh_remote_port->ip_context;
-		trailer->msgh_trailer_size = REQUESTED_TRAILER_SIZE(option);
-	}
+    /* Preserve the send-time identity; initialize every other trailer byte. */
+    {
+        security_token_t sender = trailer->msgh_sender;
+        audit_token_t audit = trailer->msgh_audit;
+        bzero(trailer, sizeof(*trailer));
+        trailer->msgh_sender = sender;
+        trailer->msgh_audit = audit;
+        trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
+        trailer->msgh_seqno = seqno;
+        trailer->msgh_context = self->ith_receive_context;
+        trailer->msgh_trailer_size = REQUESTED_TRAILER_SIZE(option);
+    }
+
 
 	mr = ipc_kmsg_copyout(kmsg, space, map, slist, 0);
 	if (mr != MACH_MSG_SUCCESS) {
 		/* XXX do we know that the message always gets freed */
 		if ((mr &~ MACH_MSG_MASK) == MACH_RCV_BODY_ERROR
 		    ) {
-			if (ipc_kmsg_put(msg, kmsg, kmsg->ikm_header->msgh_size +
-			   trailer->msgh_trailer_size) == MACH_RCV_INVALID_DATA)
+			if (ipc_kmsg_put(msg, kmsg, MIN(kmsg->ikm_header->msgh_size +
+			   trailer->msgh_trailer_size, rcv_size + RECEIVE_HEADER_DELTA)) == MACH_RCV_INVALID_DATA)
 				mr = MACH_RCV_INVALID_DATA;
 		}
 		else {
-			if (msg_receive_error(kmsg, msg, option, seqno, space) 
+			if (msg_receive_error_bounded(kmsg, msg, option, seqno, space, rcv_size)
 						== MACH_RCV_INVALID_DATA)
 				mr = MACH_RCV_INVALID_DATA;
 		}
@@ -491,13 +525,14 @@ mach_msg_overwrite_trap(
  *		MACH_RCV_INVALID_DATA	copyout to user buffer failed
  */
 	
-mach_msg_return_t
-msg_receive_error(
+static mach_msg_return_t
+msg_receive_error_bounded(
 	ipc_kmsg_t		kmsg,
 	mach_msg_header_t	*msg,
 	mach_msg_option_t	option,
 	mach_port_seqno_t	seqno,
-	ipc_space_t		space)
+	ipc_space_t		space,
+	mach_msg_size_t capacity)
 {
 	mach_vm_address_t context;
 	mach_msg_max_trailer_t *trailer;
@@ -516,9 +551,8 @@ msg_receive_error(
 			((vm_offset_t)kmsg->ikm_header +
 			round_msg(sizeof(mach_msg_header_t)));
 	kmsg->ikm_header->msgh_size = sizeof(mach_msg_header_t);
-	bcopy(  (char *)&trailer_template, 
-		(char *)trailer, 
-		sizeof(trailer_template));
+	bzero(trailer, sizeof(*trailer));
+	bcopy(&trailer_template, trailer, sizeof(trailer_template));
 	if (option & MACH_RCV_TRAILER_MASK) {
 		trailer->msgh_seqno = seqno;
 		trailer->msgh_context = context;
@@ -528,13 +562,20 @@ msg_receive_error(
 	/*
 	 * Copy the message to user space
 	 */
-	if (ipc_kmsg_put(msg, kmsg, kmsg->ikm_header->msgh_size +
-			trailer->msgh_trailer_size) == MACH_RCV_INVALID_DATA)
+	if (ipc_kmsg_put(msg, kmsg, MIN(kmsg->ikm_header->msgh_size +
+			trailer->msgh_trailer_size, (uint64_t)capacity + RECEIVE_HEADER_DELTA)) == MACH_RCV_INVALID_DATA)
 		return(MACH_RCV_INVALID_DATA);
 	else 
 		return(MACH_MSG_SUCCESS);
 }
 
+
+mach_msg_return_t
+msg_receive_error(ipc_kmsg_t kmsg, mach_msg_header_t *msg,
+ mach_msg_option_t option, mach_port_seqno_t seqno, ipc_space_t space)
+{
+ return msg_receive_error_bounded(kmsg, msg, option, seqno, space, UINT_MAX);
+}
 
 static mach_msg_return_t
 mach_msg_receive_results_error(thread_t thread, ipc_kmsg_t kmsg)

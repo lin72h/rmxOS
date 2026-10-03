@@ -76,6 +76,7 @@ struct thread_shuttle {
 	struct mach_task *ith_task_ref;
 	u_int ith_binding_state;
 	boolean_t ith_port_bound;
+	mach_vm_address_t ith_receive_context;
 
 
 #define	ith_wait_result		wait_result

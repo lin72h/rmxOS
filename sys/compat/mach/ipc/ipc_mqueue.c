@@ -419,6 +419,7 @@ ipc_mqueue_run(thread_act_t receiver, ipc_mqueue_t mqueue, ipc_kmsg_t kmsg, ipc_
 	receiver->ith_kmsg = kmsg;
 	receiver->ith_object = (ipc_object_t)port;
 	receiver->ith_seqno = port->ip_seqno++;
+	receiver->ith_receive_context = port->ip_context;
 	ip_unlock(port);
 	thread_go(receiver);
 }
@@ -623,7 +624,9 @@ ipc_mqueue_post_on_thread(
 	 * (and size needed).
 	 */
 	rcv_size = ipc_kmsg_copyout_size(kmsg, map);
-	if (rcv_size + REQUESTED_TRAILER_SIZE(option) > max_size) {
+	if (rcv_size > max_size ||
+	    round_msg(rcv_size) < rcv_size || round_msg(rcv_size) > max_size ||
+	    REQUESTED_TRAILER_SIZE(option) > max_size - round_msg(rcv_size)) {
 		mr = MACH_RCV_TOO_LARGE;
 		if (option & MACH_RCV_LARGE) {
 			thread->ith_receiver_name = port->ip_receiver_name;
@@ -641,6 +644,7 @@ ipc_mqueue_post_on_thread(
 
 	thread->ith_object = (ipc_object_t)port;
 	thread->ith_seqno = port->ip_seqno++;
+	thread->ith_receive_context = port->ip_context;
 	thread->ith_kmsg = kmsg;
 	thread->ith_state = mr;
 
@@ -901,7 +905,9 @@ ipc_mqueue_finish_receive(
 	/* check sizes */
 
 	rcv_size = ipc_kmsg_copyout_size(kmsg, thread_map(self));
-	if (rcv_size + REQUESTED_TRAILER_SIZE(option) > max_size) {
+	if (rcv_size > max_size ||
+	    round_msg(rcv_size) < rcv_size || round_msg(rcv_size) > max_size ||
+	    REQUESTED_TRAILER_SIZE(option) > max_size - round_msg(rcv_size)) {
 		/* the receive buffer isn't large enough */
 		if (mach_debug_enable) {
 			printf("%s max_size=%d REQUESTED_TRAILER_SIZE(option=%d)=%d\n",
