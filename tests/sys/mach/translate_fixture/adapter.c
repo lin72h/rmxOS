@@ -328,7 +328,11 @@ void *rmx_fixture_receive_hold(uint32_t name) {
 void rmx_fixture_object_lock(void *p) { io_lock((ipc_object_t)p); }
 void rmx_fixture_object_drop(void *p) { io_release((ipc_object_t)p); }
 int rmx_fixture_retire_waiter(void *set, void *port) {
- return (!io_active((ipc_object_t)set) &&
-     (atomic_load_acq_ptr(&((ipc_port_t)port)->port_comm.rcd_io_lock_data.mtx_lock) & MTX_CONTESTED) != 0);
+ int retiring;
+ (void)port;
+ if (!ips_lock_try((ipc_pset_t)set)) return (0);
+ retiring = !io_active((ipc_object_t)set);
+ ips_unlock((ipc_pset_t)set);
+ return (retiring);
 }
 uint32_t rmx_fixture_object_refs(void *p) { return (atomic_load_acq_int(&((ipc_object_t)p)->io_references)); }

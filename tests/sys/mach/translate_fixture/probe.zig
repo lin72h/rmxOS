@@ -268,6 +268,7 @@ var pin_port: ?*anyopaque = null;
 var pin_pset: ?*anyopaque = null;
 var pin_release: u32 = 0;
 var pin_locked: u32 = 0;
+var retire_observed: Observation = .{ .result = 0, .owned = 0 };
 export fn rmx_pset_pin_observe(command: u64, out: *Observation) c_int {
     out.* = .{ .result = 0, .owned = 0 };
     switch (command >> 32) {
@@ -297,6 +298,7 @@ export fn rmx_pset_pin_observe(command: u64, out: *Observation) c_int {
         },
         6 => out.result = @intCast(@atomicLoad(u32, &pin_locked, .acquire)),
         7 => {
+            retire_observed = .{ .result = 0, .owned = 0 };
             pin_port = rmx_fixture_receive_hold(@truncate(command)) orelse return 22;
         },
         8 => {
@@ -304,12 +306,20 @@ export fn rmx_pset_pin_observe(command: u64, out: *Observation) c_int {
             rmx_fixture_object_lock(p);
             @atomicStore(u32, &pin_locked, 1, .release);
             const begin = rmx_fixture_uptime();
-            while (@atomicLoad(u32, &pin_release, .acquire) == 0 and rmx_fixture_uptime() - begin < 10 * 4294967296) @import("std").atomic.spinLoopHint();
+            // The holder observes before unlock: adaptive mutex spinning need
+            // not publish MTX_CONTESTED, and two busy CPUs can starve userland.
+            while (rmx_fixture_uptime() - begin < 10 * 4294967296) {
+                if (rmx_fixture_retire_waiter(pin_pset orelse return 22, p) != 0) {
+                    retire_observed = .{ .result = 1, .owned = @intCast(rmx_fixture_object_refs(p)) };
+                    break;
+                }
+                @import("std").atomic.spinLoopHint();
+            }
+
             rmx_fixture_unlock(p);
         },
         9 => {
-            out.result = rmx_fixture_retire_waiter(pin_pset orelse return 22, pin_port orelse return 22);
-            out.owned = @intCast(rmx_fixture_object_refs(pin_port.?));
+            out.* = retire_observed;
         },
         10 => {
             rmx_fixture_object_drop(pin_port orelse return 22);

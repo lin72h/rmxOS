@@ -128,6 +128,8 @@ fn holdPort(_: ?*anyopaque) callconv(.c) ?*anyopaque {
     return null;
 }
 fn destroySet(_: ?*anyopaque) callconv(.c) ?*anyopaque {
+    var tries: usize = 0;
+    while (pin(6, 0).result != 1 and tries < 1000) : (tries += 1) _ = c.usleep(1000);
     return if (c.syscall(c.SYS__kernelrpc_mach_port_destroy_trap, @as(c_uint, 0), selected_set) == 0) null else @ptrFromInt(1);
 }
 fn retirePin(t: [*c]const c.atf_tc_t) callconv(.c) void {
@@ -139,19 +141,11 @@ fn retirePin(t: [*c]const c.atf_tc_t) callconv(.c) void {
     _ = pin(7, selected_port);
     var holder: c.pthread_t = undefined;
     var destroyer: c.pthread_t = undefined;
-    if (c.pthread_create(&holder, null, &holdPort, null) != 0) c.atf_tc_fail("port holder failed");
-    var tries: usize = 0;
-    while (pin(6, 0).result != 1 and tries < 1000) : (tries += 1) _ = c.usleep(1000);
     if (c.pthread_create(&destroyer, null, &destroySet, null) != 0) c.atf_tc_fail("set destroyer failed");
-    tries = 0;
-    var observed = pin(9, 0);
-    while (observed.result != 1 and tries < 1000) : (tries += 1) {
-        _ = c.usleep(1000);
-        observed = pin(9, 0);
-    }
-    _ = pin(4, 0);
+    if (c.pthread_create(&holder, null, &holdPort, null) != 0) c.atf_tc_fail("port holder failed");
     var result: ?*anyopaque = null;
     const joined = c.pthread_join(holder, null) == 0 and c.pthread_join(destroyer, &result) == 0 and result == null;
+    const observed = pin(9, 0);
     _ = pin(10, 0);
     _ = pin(5, 0);
     _ = c.printf("pset_retire_pin expected_waiter=1 observed_waiter=%d expected_refs=3 observed_refs=%d\n", observed.result, observed.owned);

@@ -192,8 +192,9 @@ not a guaranteed allocation interleaving, and a base PASS is not a proof.
 
 `mach_entry_knote_test:retire_pin` checks #15: while set retirement blocks
 on a deliberately held member mutex, the member has an extra storage pin.
-Base FAIL (two pins); fixed PASS (three pins). The mutex contested bit and
-inactive set establish the controlled lock-drop interval.
+Base FAIL (two pins); fixed PASS (three pins). The holder observes an inactive set after acquiring its dropped mutex,
+then samples the member references before releasing the member mutex.
+This establishes the lock-drop interval without requiring MTX_CONTESTED.
 
 `mach_short_kevent_test:queued_member`: base FAIL (set receiver times out
 after an already queued port joins); fixed PASS (membership wakes dequeue).
