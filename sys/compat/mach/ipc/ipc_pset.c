@@ -288,6 +288,8 @@ ipc_pset_add(
 	port->ip_pset = pset;
 	ips_reference(pset);
 	TAILQ_INSERT_TAIL(&pset->ips_ports, port, ip_next);
+	if (port->ip_msgcount != 0)
+		wakeup(pset);
 }
 
 /*
@@ -494,6 +496,8 @@ ipc_pset_destroy(
 			}
 			TAILQ_REMOVE(&pset->ips_ports, port, ip_next);
 			port->ip_pset = IPS_NULL;
+			port->ip_receive_epoch++;
+			wakeup(port);
 			ip_unlock(port);
 			ip_release(port);
 			ips_release(pset);
