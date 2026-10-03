@@ -79,19 +79,40 @@ fn reuse(t: [*c]const c.atf_tc_t) callconv(.c) void {
     }
 }
 fn worker(_: ?*anyopaque) callconv(.c) ?*anyopaque {
-    return if (observe(6).owned == 1) null else @ptrFromInt(1);
+    if (observe(6).owned != 1) return @ptrFromInt(1);
+    const live = observe(13);
+    _ = c.printf("thread_control_live expected_conversion_result=0 observed_conversion_result=%d expected_converted=1 observed_converted=%d\n", live.result, live.owned);
+    return if (live.result == 0 and live.owned == 1) null else @ptrFromInt(1);
+}
+fn threadHead(t: [*c]c.atf_tc_t) callconv(.c) void {
+    head(t);
+    _ = c.atf_tc_set_md_var(t, "timeout", "%s", "25");
+}
+fn monotonicMilliseconds() i64 {
+    var time: c.struct_timespec = undefined;
+    if (c.clock_gettime(c.CLOCK_MONOTONIC, &time) != 0) c.atf_tc_fail("monotonic clock observation failed");
+    return time.tv_sec * 1000 + @divTrunc(time.tv_nsec, 1000000);
 }
 fn threadDeath(t: [*c]const c.atf_tc_t) callconv(.c) void {
     load(t);
     var thread: c.pthread_t = undefined;
     var result: ?*anyopaque = null;
     if (c.pthread_create(&thread, null, &worker, null) != 0 or c.pthread_join(thread, &result) != 0 or result != null) c.atf_tc_fail("thread observation failed");
-    // Dtor runs in the reaper; bound the wait for its post-gate port disable.
-    var tries: usize = 0;
-    while (tries < 100 and observe(4).owned != 0) : (tries += 1) _ = c.usleep(10000);
-    const after = observe(4).owned;
-    _ = c.printf("thread_control_after_exit expected_active=0 observed_active=%d\n", after);
-    if (after != 0) c.atf_tc_fail("exited thread retained an active control port");
+    // Conversion must already fail; eventual inactivity cannot hide a usable
+    // dying binding. Do not delay or retry the post-join conversion check.
+    const conversion = observe(13);
+    _ = c.printf("thread_control_after_join expected_conversion_result=4 observed_conversion_result=%d expected_converted=0 observed_converted=%d\n", conversion.result, conversion.owned);
+    if (conversion.result != 4 or conversion.owned != 0) c.atf_tc_fail("exited thread control port still converts to a thread");
+    // The native five-second callout checks time since the domain's last reap.
+    const begin = monotonicMilliseconds();
+    var after = observe(4).owned;
+    while (after != 0 and monotonicMilliseconds() - begin < 15000) {
+        _ = c.usleep(10000);
+        after = observe(4).owned;
+    }
+    const elapsed = monotonicMilliseconds() - begin;
+    _ = c.printf("thread_control_after_reaper expected_active=0 observed_active=%d bound_ms=15000 elapsed_ms=%lld\n", after, elapsed);
+    if (after != 0 or elapsed > 15000) c.atf_tc_fail("exited thread control port did not become inactive within the reaper bound");
 }
 fn shared(t: [*c]const c.atf_tc_t) callconv(.c) void {
     load(t);
@@ -216,7 +237,7 @@ fn addTests(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     const names = [_][*:0]const u8{ "inherited_rights", "task_control_death", "incarnation", "thread_control_death", "shared_fd_exit", "rfork_unshare", "rfork_clean_table", "failed_creation", "parked_reply" };
     const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &inherited, &taskDeath, &reuse, &threadDeath, &shared, &unshare, &cleanTable, &failedCreation, &parkedReply };
     for (names, bodies, 0..) |name, body, i| {
-        const err = c.atf_tc_init(&cases[i], name, &head, body, &cleanup, c.atf_tp_get_config(tp));
+        const err = c.atf_tc_init(&cases[i], name, if (i == 3) &threadHead else &head, body, &cleanup, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
         const added = c.atf_tp_add_tc(tp, &cases[i]);
         if (c.atf_is_error(added)) return added;

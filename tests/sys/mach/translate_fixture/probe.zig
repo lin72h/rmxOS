@@ -49,6 +49,19 @@ export fn rmx_lifetime_observe(command: u32, out: *Observation) c_int {
         },
         4 => out.owned = portActive(watched_control orelse return 22),
         5 => rmx_lifetime_clear(),
+        13 => {
+            const port = watched_control orelse return 22;
+            const thread = convert_port_to_thread(port);
+            out.result = if (thread == null) 4 else 0;
+            out.owned = @intFromBool(thread != null);
+            if (thread) |converted| {
+                if (rmx_fixture_thread_release_function()) |address| {
+                    const release: *const fn (*anyopaque) callconv(.c) void = @ptrCast(@alignCast(address));
+                    release(converted);
+                }
+            }
+        },
+
         10 => return observeEmptyProc(out),
         11 => return observeParkedReply(out),
         12 => {
@@ -251,3 +264,6 @@ export fn rmx_lifetime_refs(name: u32, out: *Observation) c_int {
     out.owned = @intCast(count);
     return 0;
 }
+
+extern fn convert_port_to_thread(*anyopaque) ?*anyopaque;
+extern fn rmx_fixture_thread_release_function() ?*anyopaque;
