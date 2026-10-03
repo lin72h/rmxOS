@@ -109,3 +109,14 @@ Fix 9 calls the live Mach proc_pidbsdinfo routine through leak-locals on a
 private proc snapshot with p_fd=NULL. It never edits a live process descriptor
 table. The source kernel/module ABI is projected by the C adapter; the snapshot
 setup, call and observed count are in the Zig fixture.
+
+## op-437 teardown remediation
+
+`mach_lifetime_test:failed_creation` routes the actual process ctor/dtor events
+on a private, zeroed proc with an empty thread list. This is the state before
+the first native thread allocation, which cannot be forced reliably from user
+space. Only Mach registers these two events in this source tree. Expected on
+`db592723`: PANIC (NULL first thread); after remediation: PASS (constructed=1,
+attachment cleared). On batch-2 `ee883a74`: PASS, constructed=0, since that
+branch has no per-process constructor and does not contain this regression.
+The observation includes applicability; no allocation failure is claimed.

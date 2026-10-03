@@ -49,6 +49,7 @@ export fn rmx_lifetime_observe(command: u32, out: *Observation) c_int {
         },
         4 => out.owned = rmx_fixture_port_active(watched_control orelse return 22),
         5 => rmx_lifetime_clear(),
+        10 => return observeEmptyProc(out),
         8 => {
             watched_space = rmx_fixture_space();
             ipc_space_reference(watched_space.?);
@@ -171,5 +172,21 @@ export fn rmx_translate_observe(name: u32, out: *Observation) c_int {
         out.owned = rmx_fixture_owned(object);
         if (out.owned != 0) rmx_fixture_unlock(object);
     }
+    return 0;
+}
+
+extern fn rmx_fixture_proc_empty(*anyopaque) void;
+extern fn rmx_fixture_proc_ctor(*anyopaque) void;
+extern fn rmx_fixture_proc_dtor(*anyopaque) void;
+extern fn rmx_fixture_proc_attached(*anyopaque) c_int;
+fn observeEmptyProc(out: *Observation) c_int {
+    const allocator = rmx_fixture_malloc_type();
+    const snapshot = malloc(rmx_fixture_proc_size(), allocator, 0x102) orelse return 12;
+    defer free(snapshot, allocator);
+    rmx_fixture_proc_empty(snapshot);
+    rmx_fixture_proc_ctor(snapshot);
+    out.result = rmx_fixture_proc_attached(snapshot);
+    rmx_fixture_proc_dtor(snapshot);
+    out.owned = rmx_fixture_proc_attached(snapshot);
     return 0;
 }

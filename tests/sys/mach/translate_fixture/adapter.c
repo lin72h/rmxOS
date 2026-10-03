@@ -214,3 +214,14 @@ static int module_event(module_t mod __unused, int event, void *arg __unused)
 static moduledata_t module = { "rmx_translate_fixture", module_event, NULL };
 DECLARE_MODULE(rmx_translate_fixture, module, SI_SUB_DRIVERS, SI_ORDER_ANY);
 MODULE_DEPEND(rmx_translate_fixture, mach, 1, 1, 1);
+
+/* Route the real process constructor/destructor events for an unpublished
+ * proc snapshot with an empty thread list, as at first thread_alloc failure. */
+void rmx_fixture_proc_empty(void *);
+void rmx_fixture_proc_ctor(void *);
+void rmx_fixture_proc_dtor(void *);
+int rmx_fixture_proc_attached(void *);
+void rmx_fixture_proc_empty(void *p) { TAILQ_INIT(&((struct proc *)p)->p_threads); }
+void rmx_fixture_proc_ctor(void *p) { EVENTHANDLER_DIRECT_INVOKE(process_ctor, p); }
+void rmx_fixture_proc_dtor(void *p) { EVENTHANDLER_DIRECT_INVOKE(process_dtor, p); }
+int rmx_fixture_proc_attached(void *p) { return (((struct proc *)p)->p_machdata != NULL); }
