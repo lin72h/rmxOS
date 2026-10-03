@@ -10,6 +10,7 @@ const c = @cImport({
     @cInclude("pthread.h");
     @cInclude("time.h");
     @cInclude("signal.h");
+    @cInclude("sys/mach/message.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 const Header = extern struct { bits: u32, size: u32, remote: u32, local: u32, voucher: u32, id: i32 };
@@ -75,7 +76,7 @@ fn boundaryBody(t: [*c]const c.atf_tc_t) callconv(.c) void {
     var sent = Message{ .header = .{ .bits = 20, .size = @sizeOf(Message), .remote = port, .local = 0, .voucher = 0, .id = 44702 }, .payload = [_]u8{0x5a} ** 64 };
     if (c.syscall(c.SYS_mach_msg_trap, &sent, @as(c_uint, 1), @as(c_uint, @sizeOf(Message)), @as(c_uint, 0), @as(c_uint, 0), @as(c_uint, 0), @as(c_uint, 0)) != 0) c.atf_tc_fail("send failed");
     var wire: [192]u8 align(8) = [_]u8{0xa5} ** 192;
-    const trailer: u32 = if (audit) 52 else if (context) 64 else 8;
+    const trailer: u32 = if (audit) @sizeOf(c.mach_msg_audit_trailer_t) else if (context) @sizeOf(c.mach_msg_context_trailer_t) else @sizeOf(c.mach_msg_trailer_t);
     const elements: u32 = if (audit) 3 else if (context) 4 else 0;
     const options: u32 = 0x102 | 4 | 8 | (elements << 24);
     const capacity: u32 = if (audit or context) @sizeOf(Message) + trailer - 1 else 8;
@@ -101,6 +102,10 @@ fn boundaryBody(t: [*c]const c.atf_tc_t) callconv(.c) void {
     if (words[23] != trailer) c.atf_tc_fail("requested trailer size differs");
     if (audit or context) {
         if (words[32] != @as(u32, @intCast(c.getpid()))) c.atf_tc_fail("audit trailer lost send-time pid");
+    }
+    if (context) {
+        const value: *align(4) const u64 = @ptrCast(&wire[@sizeOf(Message) + @offsetOf(c.mach_msg_context_trailer_t, "msgh_context")]);
+        if (value.* != 0) c.atf_tc_fail("default receive context differs");
     }
     const empty = c.syscall(c.SYS_mach_msg_trap, &wire, @as(c_uint, 0x102), @as(c_uint, 0), @as(c_uint, wire.len), receive, @as(c_uint, 0), @as(c_uint, 0));
     if (empty != 0x10004003) c.atf_tc_fail("message delivered more than once");
