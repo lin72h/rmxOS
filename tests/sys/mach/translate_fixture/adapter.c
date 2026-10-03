@@ -263,10 +263,3 @@ void rmx_fixture_file_revoke(void *pointer) {
 	fp->f_ops->fo_fdpostclose(fp, 0, curthread);
 }
 
-/* Resolve the optional release ABI: batch 2's thread_deallocate is a no-op
- * macro, while batch 3 provides a real function in resident mach.ko. */
-void *rmx_fixture_thread_release_function(void);
-void *rmx_fixture_thread_release_function(void) {
-	return (linker_file_lookup_symbol((linker_file_t)&__this_linker_file,
-	    "thread_deallocate", 1));
-}

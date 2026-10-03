@@ -9,7 +9,7 @@ Continuation op-427 adds `mach_lifetime_test` before the lifetime fixes:
 | `inherited_rights` | op-389 #4 | FAIL: child exit retains its bootstrap send right | PASS: send count returns to baseline |
 | `shared_fd_exit` | op-389 #11 | FAIL: shared-table child cannot use the parent's Mach name | PASS: both use the name; child exit leaves it intact |
 | `task_control_death` | op-392 F2 | FAIL: exited task's control port is still active | PASS: port is dead |
-| `thread_control_death` | op-392 F2 | FAIL: exited thread's control port still converts | PASS: conversion refused immediately; inactive within 15 s after reaping |
+| `thread_control_death` | op-392 F2 | FAIL: control port remains active beyond 15 s | PASS: control port inactive within 15 s after reaping |
 | `rfork_unshare` | op-430 in-place RFFDG | FAIL: old binding remains attached | PASS: fresh names; bootstrap retained |
 | `rfork_clean_table` | op-430 in-place RFCFDG | FAIL: old binding remains attached | PASS: fresh names; bootstrap retained |
 | `incarnation` | op-393 N5 prerequisite | FAIL: old task port remains active across later births | PASS: old port stays dead |
@@ -142,26 +142,21 @@ or timeout. Fixed reaches all namespace/special-port checks and expects PASS.
 A five-second internal wait also bounds unexpected child delays. The negative
 control cleanup runs only after its observations, never on a fresh binding.
 
-## op-442 thread-control timing
+## op-444 thread-control check
 
-`thread_control_death` first checks live conversion in the worker (fixture
-result 0, converted=1), then checks conversion once immediately after join
-(expected fixture KERN_INVALID_ARGUMENT=4, converted=0). It fails immediately
-if conversion succeeds; waiting for the reaper cannot make that case green.
-Only after refusal does it poll activity for at most 15 seconds, printing the
-observed monotonic elapsed milliseconds and bound. Its ATF timeout is 25 seconds
-to allow that internal bound; other cases keep their existing metadata.
+The worker checks that its real thread control port is active and pins it via
+fixture command 6. After pthread_join the test polls its activity for at most
+15 seconds, printing active state, elapsed milliseconds and the bound. ATF's
+25-second timeout permits that bound. Base ee883a74 expects FAIL (port never
+disabled); fixed cf398822 expects PASS (thread_dtor disables it after reaping).
 
-Base `ee883a74`: expected FAIL at immediate conversion (result=0, converted=1).
-Fixed: expected PASS (result=4, converted=0, then active=0 within the bound).
-`ref_act_port_locked` in fixed refuses bindings that are not MACH_BIND_ALIVE;
-the exit gate marks DYING, whereas port disable occurs in thread_dtor.
-The five-second native callout tests time since the domain's last reap, rather
-than a separate age timestamp for each zombie. No kernel or Mach product change
-is made. The fixture projects a NULL conversion as result 4 and successful
-conversion as result 0; these are fixture result codes, not a MIG call result.
-It releases successful references with batch 3's resident release function;
-on base it preserves that branch's no-op thread_deallocate ABI.
-Source-derived expectations remain unexecuted here. Native sys_thr_exit wakes
-joiners before its final exit gate; the immediate observation is not retried,
-so a scheduling race in that interval remains visible as a FAIL for review.
+There is no supported user-space thread_info/thread_get_state call: libmach's
+Makefile generates seven non-thread MIG interfaces, and sys/compat/mach/defs
+contains no thread interface. An always-unsupported RPC would not distinguish
+live and exited threads. Per op-444's fallback, the immediate conversion check
+is removed. No result code or retries are claimed; observed activity is 1 live
+and eventually 0 fixed. Validator3's source review covers the dying gate.
+
+Fixture command 13 and its run-time linker_file_lookup_symbol are removed.
+No product code changes. The self-check runs both images and repeats this case
+20 times on fixed; Gatekeeper proof remains separate acceptance.
