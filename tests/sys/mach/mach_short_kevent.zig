@@ -15,6 +15,21 @@ const c = @cImport({
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 const Header = extern struct { bits: u32, size: u32, remote: u32, local: u32, voucher: u32, id: i32 };
 const Message = extern struct { header: Header, payload: [64]u8 };
+// message.h uses pragma pack(4). Zig's C import gives this trailer
+// native u64 alignment; represent the wire alignment explicitly.
+const ContextTrailer = extern struct {
+    trailer_type: u32,
+    trailer_size: u32,
+    seqno: u32,
+    sender: [2]u32,
+    audit: [8]u32,
+    context: u64 align(4),
+};
+comptime {
+    if (@sizeOf(ContextTrailer) != 60 or @offsetOf(ContextTrailer, "context") != 52)
+        @compileError("context trailer wire layout differs");
+}
+
 var tc: c.atf_tc_t = undefined;
 var boundary: [7]c.atf_tc_t = undefined;
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
@@ -76,7 +91,7 @@ fn boundaryBody(t: [*c]const c.atf_tc_t) callconv(.c) void {
     var sent = Message{ .header = .{ .bits = 20, .size = @sizeOf(Message), .remote = port, .local = 0, .voucher = 0, .id = 44702 }, .payload = [_]u8{0x5a} ** 64 };
     if (c.syscall(c.SYS_mach_msg_trap, &sent, @as(c_uint, 1), @as(c_uint, @sizeOf(Message)), @as(c_uint, 0), @as(c_uint, 0), @as(c_uint, 0), @as(c_uint, 0)) != 0) c.atf_tc_fail("send failed");
     var wire: [192]u8 align(8) = [_]u8{0xa5} ** 192;
-    const trailer: u32 = if (audit) @sizeOf(c.mach_msg_audit_trailer_t) else if (context) @sizeOf(c.mach_msg_context_trailer_t) else @sizeOf(c.mach_msg_trailer_t);
+    const trailer: u32 = if (audit) @sizeOf(c.mach_msg_audit_trailer_t) else if (context) @sizeOf(ContextTrailer) else @sizeOf(c.mach_msg_trailer_t);
     const elements: u32 = if (audit) 3 else if (context) 4 else 0;
     const options: u32 = 0x102 | 4 | 8 | (elements << 24);
     const capacity: u32 = if (audit or context) @sizeOf(Message) + trailer - 1 else 8;
@@ -104,7 +119,7 @@ fn boundaryBody(t: [*c]const c.atf_tc_t) callconv(.c) void {
         if (words[32] != @as(u32, @intCast(c.getpid()))) c.atf_tc_fail("audit trailer lost send-time pid");
     }
     if (context) {
-        const value: *align(4) const u64 = @ptrCast(&wire[@sizeOf(Message) + @offsetOf(c.mach_msg_context_trailer_t, "msgh_context")]);
+        const value: *align(4) const u64 = @ptrCast(&wire[@sizeOf(Message) + @offsetOf(ContextTrailer, "context")]);
         if (value.* != 0) c.atf_tc_fail("default receive context differs");
     }
     const empty = c.syscall(c.SYS_mach_msg_trap, &wire, @as(c_uint, 0x102), @as(c_uint, 0), @as(c_uint, wire.len), receive, @as(c_uint, 0), @as(c_uint, 0));
