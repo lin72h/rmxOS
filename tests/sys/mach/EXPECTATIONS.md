@@ -128,3 +128,16 @@ delta before cleaning up a negative-control leak. Expected on `ee883a74` and
 `db592723`: FAIL (slot retained, extra send right=1); fixed: PASS (slot NULL,
 extra send rights=0). This fixture isolates cleanup used by native thread dtor
 and committed exec; it does not claim a live MIG/exec round-trip or heap census.
+
+op-437 corrects the fixture's raw `ip_active` mask to Boolean observations.
+`task_control_death` and `thread_control_death` now reach their named activity
+checks on both images: expected FAIL / PASS remains unchanged.
+For rfork, an invalid-right allocation enters `current_space` but rejects
+before descriptor lookup. The fixture probes Mach urefs without a native
+`fget` prerequisite, so a missing name reports KERN_INVALID_NAME. On the stale
+base binding it records fresh=0, special state, and skipped namespace values=-1,
+then revokes the old private space's entries via the real fileops to avoid the
+base exit loop. The parent reports the named binding FAIL, not a setup failure
+or timeout. Fixed reaches all namespace/special-port checks and expects PASS.
+A five-second internal wait also bounds unexpected child delays. The negative
+control cleanup runs only after its observations, never on a fresh binding.

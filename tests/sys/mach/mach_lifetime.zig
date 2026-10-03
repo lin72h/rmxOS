@@ -12,6 +12,8 @@ const c = @cImport({
     @cInclude("pthread.h");
     @cInclude("stdio.h");
     @cInclude("fcntl.h");
+    @cInclude("signal.h");
+    @cInclude("time.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 const Observation = extern struct { result: c_int = 0, owned: c_int = 0 };
@@ -117,8 +119,30 @@ fn nameRefs(name_value: u32) Observation {
     var name = name_value;
     var result: Observation = .{};
     var size: usize = @sizeOf(Observation);
-    if (c.sysctlbyname("debug.rmx_urefs_observe", &result, &size, &name, @sizeOf(u32)) != 0) c._exit(2);
+    if (c.sysctlbyname("debug.rmx_lifetime_refs", &result, &size, &name, @sizeOf(u32)) != 0) c._exit(2);
     return result;
+}
+fn waitBounded(child: c.pid_t) void {
+    if (child < 0) c.atf_tc_fail("rfork child creation failed");
+    var begin: c.struct_timespec = undefined;
+    if (c.clock_gettime(c.CLOCK_MONOTONIC, &begin) != 0) c.atf_tc_fail("clock observation failed");
+    while (true) {
+        var status: c_int = 0;
+        const ended = c.waitpid(child, &status, c.WNOHANG);
+        if (ended == child) {
+            if (status != 0) c.atf_tc_fail("rfork child observation failed: status=%d", status);
+            return;
+        }
+        if (ended < 0) c.atf_tc_fail("rfork child wait failed");
+        var now: c.struct_timespec = undefined;
+        if (c.clock_gettime(c.CLOCK_MONOTONIC, &now) != 0) c.atf_tc_fail("clock observation failed");
+        if (now.tv_sec - begin.tv_sec >= 5) {
+            _ = c.kill(child, c.SIGKILL);
+            _ = c.waitpid(child, &status, c.WNOHANG);
+            c.atf_tc_fail("rfork namespace observation exceeded its internal five-second bound");
+        }
+        _ = c.usleep(10000);
+    }
 }
 fn divorce(t: [*c]const c.atf_tc_t, flags: c_int) void {
     load(t);
@@ -136,22 +160,30 @@ fn divorce(t: [*c]const c.atf_tc_t, flags: c_int) void {
         if (c.rfork(flags) != 0) c._exit(2);
         // Two clean-table changes must not make the old table address current.
         if (flags == c.RFCFDG and c.rfork(flags) != 0) c._exit(2);
-        // Enter Mach without allocating a name that could reuse the old name.
-        _ = c.syscall(c.SYS__kernelrpc_mach_port_destroy_trap, @as(c_uint, 0), @as(c_uint, 0));
+        // current_space runs before invalid-right rejection. No descriptor
+        // lookup or allocation follows, including on the stale base binding.
+        var rejected: u32 = 0;
+        _ = c.syscall(c.SYS__kernelrpc_mach_port_allocate_trap, @as(c_uint, 0), @as(c_uint, 99), &rejected);
         const space = observe(9);
-        const previous = nameRefs(old);
-        var new: u32 = 0;
-        if (c.syscall(c.SYS__kernelrpc_mach_port_allocate_trap, @as(c_uint, 0), @as(c_uint, 4), &new) != 0) c._exit(2);
-        const next = nameRefs(new);
-        const result = Divorce{ .fresh = space.result, .special = space.owned, .old_result = previous.result, .new_result = next.result, .new_count = next.owned };
+        var result = Divorce{ .fresh = space.result, .special = space.owned, .old_result = -1, .new_result = -1, .new_count = -1 };
+        if (space.result == 1) {
+            const previous = nameRefs(old);
+            var new: u32 = 0;
+            if (c.syscall(c.SYS__kernelrpc_mach_port_allocate_trap, @as(c_uint, 0), @as(c_uint, 4), &new) != 0) c._exit(2);
+            const next = nameRefs(new);
+            result.old_result = previous.result;
+            result.new_result = next.result;
+            result.new_count = next.owned;
+        }
         // RFCFDG closes every descriptor, including ATF's result channel.
         // Reopen a private file; only the parent performs the ATF verdict.
         const fd = c.open(&path, c.O_CREAT | c.O_TRUNC | c.O_WRONLY, @as(c_uint, 0o600));
         if (fd < 0 or c.write(fd, &result, @sizeOf(Divorce)) != @sizeOf(Divorce)) c._exit(2);
         _ = c.close(fd);
+        if (space.result == 0) _ = observe(12);
         c._exit(0);
     }
-    wait(child);
+    waitBounded(child);
     const fd = c.open(&path, c.O_RDONLY);
     if (fd < 0) c.atf_tc_fail("child observation missing");
     var result: Divorce = undefined;

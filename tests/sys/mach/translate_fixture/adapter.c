@@ -236,3 +236,28 @@ void *rmx_fixture_parked(void *t) { return (((thread_t)t)->ith_kmsg); }
 void rmx_fixture_set_parked(void *t, void *m) { ((thread_t)t)->ith_kmsg = m; }
 void *rmx_fixture_kmsg_header(void *m) { return (((ipc_kmsg_t)m)->ikm_header); }
 size_t rmx_fixture_kmsg_header_size(void) { return (sizeof(mach_msg_header_t)); }
+
+extern int rmx_lifetime_refs(uint32_t, struct observation *);
+SYSCTL_PROC(_debug, OID_AUTO, rmx_lifetime_refs,
+    CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, rmx_lifetime_refs, 0,
+    observe_sysctl, "S,observation", "Mach namespace urefs without a native file hold");
+void *rmx_fixture_first_file(void *);
+void rmx_fixture_file_revoke(void *);
+void *rmx_fixture_first_file(void *pointer) {
+	ipc_space_t space = pointer;
+	ipc_entry_t entry;
+	struct file *fp = NULL;
+	is_read_lock(space);
+	entry = LIST_FIRST(&space->is_entry_list);
+	if (entry != IE_NULL) {
+		fp = entry->ie_fp;
+		(void)fhold(fp);
+	}
+	is_read_unlock(space);
+	return (fp);
+}
+void rmx_fixture_file_revoke(void *pointer) {
+	struct file *fp = pointer;
+	fp->f_ops->fo_fdclose(fp, 0, curthread);
+	fp->f_ops->fo_fdpostclose(fp, 0, curthread);
+}

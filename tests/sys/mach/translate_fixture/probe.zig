@@ -45,19 +45,29 @@ export fn rmx_lifetime_observe(command: u32, out: *Observation) c_int {
             if (watched_control != null) return 16;
             watched_control = rmx_fixture_control_port(if (command == 6) 1 else 0);
             rmx_fixture_port_hold(watched_control.?);
-            out.owned = rmx_fixture_port_active(watched_control.?);
+            out.owned = portActive(watched_control.?);
         },
-        4 => out.owned = rmx_fixture_port_active(watched_control orelse return 22),
+        4 => out.owned = portActive(watched_control orelse return 22),
         5 => rmx_lifetime_clear(),
         10 => return observeEmptyProc(out),
         11 => return observeParkedReply(out),
+        12 => {
+            // Negative-control cleanup only: do not let batch-2 exit loop
+            // on names that are no longer in the current descriptor table.
+            const space = watched_space orelse return 22;
+            while (rmx_fixture_first_file(space)) |file| {
+                rmx_fixture_file_revoke(file);
+                rmx_fixture_file_drop(file);
+            }
+        },
+
         8 => {
             watched_space = rmx_fixture_space();
             ipc_space_reference(watched_space.?);
         },
         9 => {
             out.result = @intFromBool(rmx_fixture_space() != watched_space);
-            out.owned = @intFromBool(rmx_fixture_bootstrap() == watched_bootstrap and watched_bootstrap != null and rmx_fixture_port_active(watched_bootstrap.?) == 1);
+            out.owned = @intFromBool(rmx_fixture_bootstrap() == watched_bootstrap and watched_bootstrap != null and portActive(watched_bootstrap.?) == 1);
         },
         else => return 22,
     }
@@ -226,5 +236,18 @@ fn observeParkedReply(out: *Observation) c_int {
         rmx_fixture_set_parked(thread, null);
         ipc_kmsg_destroy(retained);
     }
+    return 0;
+}
+
+fn portActive(port: *anyopaque) c_int {
+    // ip_active is an activity bit mask, not a Boolean 1.
+    return @intFromBool(rmx_fixture_port_active(port) != 0);
+}
+extern fn rmx_fixture_first_file(*anyopaque) ?*anyopaque;
+extern fn rmx_fixture_file_revoke(*anyopaque) void;
+export fn rmx_lifetime_refs(name: u32, out: *Observation) c_int {
+    var count: u32 = 0;
+    out.result = rmx_fixture_get_urefs(name, &count);
+    out.owned = @intCast(count);
     return 0;
 }
