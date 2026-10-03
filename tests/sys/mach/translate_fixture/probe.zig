@@ -294,3 +294,40 @@ export fn rmx_pset_pin_observe(command: u64, out: *Observation) c_int {
     }
     return 0;
 }
+extern fn ipc_object_copyout(?*anyopaque, ?*anyopaque, u32, *u32) c_int;
+extern fn ipc_port_release_send(?*anyopaque) void;
+var copyout_port: ?*anyopaque = null;
+var copyout_ready: u32 = 0;
+export fn rmx_copyout_observe(command: u64, out: *Observation) c_int {
+    out.* = .{ .result = 0, .owned = 0 };
+    switch (command) {
+        1 => {
+            if (copyout_port != null) return 16;
+            copyout_port = rmx_fixture_alloc_kernel() orelse return 12;
+            @atomicStore(u32, &copyout_ready, 0, .release);
+        },
+        2 => {
+            const port = copyout_port orelse return 22;
+            const right = ipc_port_make_send(port);
+            _ = @atomicRmw(u32, &copyout_ready, .Add, 1, .acq_rel);
+            const deadline = rmx_fixture_uptime() + (10 << 32);
+            while (@atomicLoad(u32, &copyout_ready, .acquire) < 2) {
+                if (rmx_fixture_uptime() >= deadline) {
+                    ipc_port_release_send(right);
+                    return 60;
+                }
+                @import("std").atomic.spinLoopHint();
+            }
+            var name: u32 = 0;
+            out.result = ipc_object_copyout(rmx_fixture_space(), right, 17, &name);
+            if (out.result != 0) ipc_port_release_send(right);
+            out.owned = @intCast(name);
+        },
+        3 => {
+            rmx_fixture_dealloc_kernel(copyout_port orelse return 22);
+            copyout_port = null;
+        },
+        else => return 22,
+    }
+    return 0;
+}

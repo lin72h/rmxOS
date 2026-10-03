@@ -302,3 +302,15 @@ static int pset_pin_sysctl(SYSCTL_HANDLER_ARGS) {
 SYSCTL_PROC(_debug, OID_AUTO, rmx_pset_pin_observe,
  CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0, pset_pin_sysctl,
  "S,observation", "Pset notification pin at its native sx interlock");
+/* ABI projection only; copyout scheduling and assertions live in Zig. */
+extern int rmx_copyout_observe(uint64_t, struct observation *);
+static int copyout_sysctl(SYSCTL_HANDLER_ARGS) {
+ uint64_t command; struct observation observed; int error;
+ error = SYSCTL_IN(req, &command, sizeof(command));
+ if (error == 0) error = rmx_copyout_observe(command, &observed);
+ if (error != 0) return (error);
+ return (SYSCTL_OUT(req, &observed, sizeof(observed)));
+}
+SYSCTL_PROC(_debug, OID_AUTO, rmx_copyout_observe,
+ CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0, copyout_sysctl,
+ "S,observation", "Concurrent first send-right copyouts");

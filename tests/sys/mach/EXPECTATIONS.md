@@ -183,3 +183,9 @@ times out; another thread receives two distinct MIG_BAD_ID replies on a set).
 handoff consumes the message despite LARGE. Fixed: PASS, required size and
 a subsequent full receive of the same message. The admission ordering uses
 a scheduling pause, so this case is stress, not a controlled interleaving.
+
+`mach_entry_test:first_copyout` covers N6. Base: expected FAIL when two
+first copyouts overlap their unlocked allocation interval. Fixed: PASS, both
+copyouts return the same Mach name. The fixture creates a private kernel
+port and starts two real copyouts together for 200 rounds; this is stress,
+not a guaranteed allocation interleaving, and a base PASS is not a proof.
