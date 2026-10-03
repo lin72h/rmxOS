@@ -6,11 +6,13 @@ const c = @cImport({
     @cInclude("sys/syscall.h");
     @cInclude("unistd.h");
     @cInclude("stdio.h");
+    @cInclude("string.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 const Header = extern struct { bits: u32, size: u32, remote: u32, local: u32, voucher: u32, id: i32 };
 const Message = extern struct { header: Header, payload: [64]u8 };
 var tc: c.atf_tc_t = undefined;
+var boundary: [4]c.atf_tc_t = undefined;
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "descr", "%s", "Direct kevent short receive cleans up the saved message");
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "10");
@@ -41,8 +43,58 @@ fn body(_: [*c]const c.atf_tc_t) callconv(.c) void {
 fn addTests(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     const err = c.atf_tc_init(&tc, "short_buffer", &head, &body, null, c.atf_tp_get_config(tp));
     if (c.atf_is_error(err)) return err;
-    return c.atf_tp_add_tc(tp, &tc);
+    const add = c.atf_tp_add_tc(tp, &tc);
+    if (c.atf_is_error(add)) return add;
+    for ([_][*:0]const u8{ "large_port", "large_set", "audit_boundary", "context_boundary" }, 0..) |name, i| {
+        const e = c.atf_tc_init(&boundary[i], name, &head, &boundaryBody, null, c.atf_tp_get_config(tp));
+        if (c.atf_is_error(e)) return e;
+        const a = c.atf_tp_add_tc(tp, &boundary[i]);
+        if (c.atf_is_error(a)) return a;
+    }
+    return c.atf_no_error();
 }
 pub export fn main(argc: c_int, argv: [*c][*c]u8) c_int {
     return atf_tp_main(argc, argv, &addTests);
+}
+fn boundaryBody(t: [*c]const c.atf_tc_t) callconv(.c) void {
+    const name = c.atf_tc_get_ident(t);
+    const is_set = c.strcmp(name, "large_set") == 0;
+    const audit = c.strcmp(name, "audit_boundary") == 0;
+    const context = c.strcmp(name, "context_boundary") == 0;
+    var port: u32 = 0;
+    var pset: u32 = 0;
+    if (c.syscall(c.SYS__kernelrpc_mach_port_allocate_trap, @as(c_uint, 0), @as(c_uint, 1), &port) != 0) c.atf_tc_fail("receive setup failed");
+    var receive = port;
+    if (is_set) {
+        if (c.syscall(c.SYS__kernelrpc_mach_port_allocate_trap, @as(c_uint, 0), @as(c_uint, 3), &pset) != 0 or c.syscall(c.SYS__kernelrpc_mach_port_move_member_trap, @as(c_uint, 0), port, pset) != 0) c.atf_tc_fail("set setup failed");
+        receive = pset;
+    }
+    var sent = Message{ .header = .{ .bits = 20, .size = @sizeOf(Message), .remote = port, .local = 0, .voucher = 0, .id = 44702 }, .payload = [_]u8{0x5a} ** 64 };
+    if (c.syscall(c.SYS_mach_msg_trap, &sent, @as(c_uint, 1), @as(c_uint, @sizeOf(Message)), @as(c_uint, 0), @as(c_uint, 0), @as(c_uint, 0), @as(c_uint, 0)) != 0) c.atf_tc_fail("send failed");
+    var wire: [192]u8 align(8) = [_]u8{0xa5} ** 192;
+    const trailer: u32 = if (audit) 52 else if (context) 64 else 8;
+    const elements: u32 = if (audit) 3 else if (context) 4 else 0;
+    const options: u32 = 0x102 | 4 | 8 | (elements << 24);
+    const capacity: u32 = if (audit or context) @sizeOf(Message) + trailer - 1 else 8;
+    const short = c.syscall(c.SYS_mach_msg_trap, &wire, options, @as(c_uint, 0), capacity, receive, @as(c_uint, 0), @as(c_uint, 0));
+    const header: *Header = @ptrCast(&wire);
+    var canary = true;
+    for (wire[capacity..]) |byte| {
+        if (byte != 0xa5) canary = false;
+    }
+    _ = c.printf("receive_large expected_result=0x10004004 observed_result=0x%x expected_size=%u observed_size=%u expected_canary=1 observed_canary=%d trailer=%u\n", short, @as(c_uint, @sizeOf(Message)), header.size, @as(c_int, @intFromBool(canary)), trailer);
+    if (short != 0x10004004 or header.size != @sizeOf(Message) or !canary) c.atf_tc_fail("LARGE size or receive boundary differs");
+    wire = [_]u8{0xa5} ** 192;
+    const exact = c.syscall(c.SYS_mach_msg_trap, &wire, options, @as(c_uint, 0), @as(c_uint, @sizeOf(Message)) + trailer, receive, @as(c_uint, 0), @as(c_uint, 0));
+    if (exact != 0 or header.id != 44702) c.atf_tc_fail("LARGE retry did not receive the retained message");
+    for (wire[@sizeOf(Message) + trailer ..]) |byte| {
+        if (byte != 0xa5) c.atf_tc_fail("exact receive overwrote canary");
+    }
+    const words: *[48]u32 = @ptrCast(&wire);
+    if (words[23] != trailer) c.atf_tc_fail("requested trailer size differs");
+    if (audit or context) {
+        if (words[32] != @as(u32, @intCast(c.getpid()))) c.atf_tc_fail("audit trailer lost send-time pid");
+    }
+    const empty = c.syscall(c.SYS_mach_msg_trap, &wire, @as(c_uint, 0x102), @as(c_uint, 0), @as(c_uint, wire.len), receive, @as(c_uint, 0), @as(c_uint, 0));
+    if (empty != 0x10004003) c.atf_tc_fail("message delivered more than once");
 }

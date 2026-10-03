@@ -169,3 +169,8 @@ notifier pin. The fixture holds the native note sx lock and observes its
 shared waiter flag before removing membership, so these are controlled
 interleavings, not stress. The entry and fixture holds remain on both builds;
 the live producer must supply the third hold. No numeric fd result is asserted.
+
+`mach_short_kevent_test:large_port`, `:large_set`, `:audit_boundary`, and
+`:context_boundary`: base FAIL (options stripped, message consumed or size/
+canary wrong); fixed PASS (short LARGE retains message; exact retry once with
+requested trailer and unchanged canaries). Existing destructive short test stays.
