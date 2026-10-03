@@ -7,12 +7,13 @@ const c = @cImport({
     @cInclude("unistd.h");
     @cInclude("stdio.h");
     @cInclude("string.h");
+    @cInclude("pthread.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 const Header = extern struct { bits: u32, size: u32, remote: u32, local: u32, voucher: u32, id: i32 };
 const Message = extern struct { header: Header, payload: [64]u8 };
 var tc: c.atf_tc_t = undefined;
-var boundary: [4]c.atf_tc_t = undefined;
+var boundary: [5]c.atf_tc_t = undefined;
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "descr", "%s", "Direct kevent short receive cleans up the saved message");
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "10");
@@ -45,8 +46,8 @@ fn addTests(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     if (c.atf_is_error(err)) return err;
     const add = c.atf_tp_add_tc(tp, &tc);
     if (c.atf_is_error(add)) return add;
-    for ([_][*:0]const u8{ "large_port", "large_set", "audit_boundary", "context_boundary" }, 0..) |name, i| {
-        const e = c.atf_tc_init(&boundary[i], name, &head, &boundaryBody, null, c.atf_tp_get_config(tp));
+    for ([_][*:0]const u8{ "large_port", "large_set", "audit_boundary", "context_boundary", "reply_route" }, 0..) |name, i| {
+        const e = c.atf_tc_init(&boundary[i], name, &head, if (i == 4) &replyBody else &boundaryBody, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(e)) return e;
         const a = c.atf_tp_add_tc(tp, &boundary[i]);
         if (c.atf_is_error(a)) return a;
@@ -97,4 +98,34 @@ fn boundaryBody(t: [*c]const c.atf_tc_t) callconv(.c) void {
     }
     const empty = c.syscall(c.SYS_mach_msg_trap, &wire, @as(c_uint, 0x102), @as(c_uint, 0), @as(c_uint, wire.len), receive, @as(c_uint, 0), @as(c_uint, 0));
     if (empty != 0x10004003) c.atf_tc_fail("message delivered more than once");
+}
+var reply_name: u32 = 0;
+fn replyReceive(_: ?*anyopaque) callconv(.c) ?*anyopaque {
+    var wire: [128]u32 = [_]u32{0} ** 128;
+    for (0..2) |i| {
+        const rc = c.syscall(c.SYS_mach_msg_trap, &wire, @as(c_uint, 0x102), @as(c_uint, 0), @as(c_uint, @sizeOf(@TypeOf(wire))), reply_name, @as(c_uint, 500), @as(c_uint, 0));
+        _ = c.printf("mig_reply expected_result=0 observed_result=0x%x expected_id=%u observed_id=%u expected_error=-303 observed_error=%d\n", rc, @as(c_uint, @intCast(123550 + i)), wire[5], @as(i32, @bitCast(wire[8])));
+        if (rc != 0 or wire[5] != 123550 + i or @as(i32, @bitCast(wire[8])) != -303) return @ptrFromInt(1);
+    }
+    return null;
+}
+fn replyBody(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const task = c.syscall(c.SYS_task_self_trap);
+    var reply_port: u32 = 0;
+    var unrelated: u32 = 0;
+    var pset: u32 = 0;
+    if (task <= 0 or c.syscall(c.SYS__kernelrpc_mach_port_allocate_trap, @as(c_uint, 0), @as(c_uint, 1), &reply_port) != 0 or c.syscall(c.SYS__kernelrpc_mach_port_allocate_trap, @as(c_uint, 0), @as(c_uint, 1), &unrelated) != 0 or c.syscall(c.SYS__kernelrpc_mach_port_allocate_trap, @as(c_uint, 0), @as(c_uint, 3), &pset) != 0 or c.syscall(c.SYS__kernelrpc_mach_port_move_member_trap, @as(c_uint, 0), reply_port, pset) != 0) c.atf_tc_fail("reply ports failed");
+    reply_name = pset;
+    for (0..2) |i| {
+        var request = Header{ .bits = 19 | (21 << 8), .size = 24, .remote = @intCast(task), .local = reply_port, .voucher = 0, .id = @intCast(123450 + i) };
+        if (c.syscall(c.SYS_mach_msg_trap, &request, @as(c_uint, 1), @as(c_uint, 24), @as(c_uint, 0), @as(c_uint, 0), @as(c_uint, 0), @as(c_uint, 0)) != 0) c.atf_tc_fail("send-only MIG request failed");
+    }
+    var buffer: [128]u32 = [_]u32{0} ** 128;
+    const wrong = c.syscall(c.SYS_mach_msg_trap, &buffer, @as(c_uint, 0x102), @as(c_uint, 0), @as(c_uint, @sizeOf(@TypeOf(buffer))), unrelated, @as(c_uint, 0), @as(c_uint, 0));
+    _ = c.printf("unrelated_receive expected_result=0x10004003 observed_result=0x%x\n", wrong);
+    if (wrong != 0x10004003) c.atf_tc_fail("MIG reply followed the sending thread instead of its reply port");
+    var thread: c.pthread_t = undefined;
+    var result: ?*anyopaque = null;
+    if (c.pthread_create(&thread, null, &replyReceive, null) != 0 or c.pthread_join(thread, &result) != 0 or result != null) c.atf_tc_fail("another thread did not receive both distinct replies");
+    if (c.syscall(c.SYS__kernelrpc_mach_port_destroy_trap, @as(c_uint, 0), reply_port) != 0) c.atf_tc_fail("reply destination cleanup failed");
 }

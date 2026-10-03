@@ -174,3 +174,7 @@ the live producer must supply the third hold. No numeric fd result is asserted.
 `:context_boundary`: base FAIL (options stripped, message consumed or size/
 canary wrong); fixed PASS (short LARGE retains message; exact retry once with
 requested trailer and unchanged canaries). Existing destructive short test stays.
+
+`mach_short_kevent_test:reply_route`: base FAIL (parked MIG reply follows
+the sending thread to an unrelated port); fixed PASS (unrelated receive
+times out; another thread receives two distinct MIG_BAD_ID replies on a set).
