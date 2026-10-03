@@ -153,6 +153,8 @@ static const int init_compat_signals[] = {
 static const int sigigns[] = { SIGHUP, SIGPIPE, SIGALRM,
 	SIGURG, SIGCONT, SIGTTIN, SIGTTOU, SIGIO, SIGXCPU,
 	SIGXFSZ, SIGVTALRM, SIGPROF, SIGWINCH, SIGINFO,
+	/* runtime_fork restores defaults for these in each job child. */
+	SIGINT, SIGTERM, SIGUSR1, SIGUSR2,
 };
 static sigset_t sigign_set;
 bool pid1_magic;
