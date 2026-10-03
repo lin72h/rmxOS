@@ -356,7 +356,14 @@ void
 ipc_thread_terminate(
 	thread_t	thread)
 {
+	ipc_kmsg_t reply;
+
 	assert(ipc_kmsg_queue_empty(&thread->ith_messages));
+	/* The suspended/current thread cannot receive this parked RPC reply. */
+	reply = thread->ith_kmsg;
+	thread->ith_kmsg = IKM_NULL;
+	if (reply != IKM_NULL)
+		ipc_kmsg_destroy(reply);
 
         if (thread->ith_rpc_reply != IP_NULL)
             ipc_port_dealloc_reply(thread->ith_rpc_reply);
