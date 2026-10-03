@@ -15,7 +15,7 @@ extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c)
 const Header = extern struct { bits: u32, size: u32, remote: u32, local: u32, voucher: u32, id: i32 };
 const Message = extern struct { header: Header, payload: [64]u8 };
 var tc: c.atf_tc_t = undefined;
-var boundary: [6]c.atf_tc_t = undefined;
+var boundary: [7]c.atf_tc_t = undefined;
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "descr", "%s", "Direct kevent short receive cleans up the saved message");
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "10");
@@ -48,8 +48,8 @@ fn addTests(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     if (c.atf_is_error(err)) return err;
     const add = c.atf_tp_add_tc(tp, &tc);
     if (c.atf_is_error(add)) return add;
-    for ([_][*:0]const u8{ "large_port", "large_set", "audit_boundary", "context_boundary", "reply_route", "wait_large" }, 0..) |name, i| {
-        const e = c.atf_tc_init(&boundary[i], name, &head, if (i == 4) &replyBody else if (i == 5) &waitBody else &boundaryBody, null, c.atf_tp_get_config(tp));
+    for ([_][*:0]const u8{ "large_port", "large_set", "audit_boundary", "context_boundary", "reply_route", "wait_large", "queued_member" }, 0..) |name, i| {
+        const e = c.atf_tc_init(&boundary[i], name, &head, if (i == 4) &replyBody else if (i == 5) &waitBody else if (i == 6) &memberBody else &boundaryBody, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(e)) return e;
         const a = c.atf_tp_add_tc(tp, &boundary[i]);
         if (c.atf_is_error(a)) return a;
@@ -212,4 +212,19 @@ fn waitControls() void {
         if (mode != 2) _ = c.syscall(c.SYS__kernelrpc_mach_port_destroy_trap, @as(c_uint, 0), port);
         if (pset != 0) _ = c.syscall(c.SYS__kernelrpc_mach_port_destroy_trap, @as(c_uint, 0), pset);
     }
+}
+fn memberBody(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    var port: u32 = 0;
+    var pset: u32 = 0;
+    if (c.syscall(c.SYS__kernelrpc_mach_port_allocate_trap, @as(c_uint, 0), @as(c_uint, 1), &port) != 0 or c.syscall(c.SYS__kernelrpc_mach_port_allocate_trap, @as(c_uint, 0), @as(c_uint, 3), &pset) != 0) c.atf_tc_fail("queued member setup failed");
+    var sent = Header{ .bits = 20, .size = 24, .remote = port, .local = 0, .voucher = 0, .id = 44704 };
+    if (c.syscall(c.SYS_mach_msg_trap, &sent, @as(c_uint, 1), @as(c_uint, 24), @as(c_uint, 0), @as(c_uint, 0), @as(c_uint, 0), @as(c_uint, 0)) != 0) c.atf_tc_fail("queued member send failed");
+    normal_name = pset;
+    normal_timeout = 1000;
+    var receiver: c.pthread_t = undefined;
+    if (c.pthread_create(&receiver, null, &normalReceive, null) != 0) c.atf_tc_fail("set receiver failed");
+    _ = c.usleep(100000);
+    if (c.syscall(c.SYS__kernelrpc_mach_port_move_member_trap, @as(c_uint, 0), port, pset) != 0 or c.pthread_join(receiver, null) != 0) c.atf_tc_fail("queued membership/join failed");
+    _ = c.printf("queued_member expected_result=0 observed_result=0x%x\n", normal_result);
+    if (normal_result != 0) c.atf_tc_fail("queued member did not wake its set receiver");
 }

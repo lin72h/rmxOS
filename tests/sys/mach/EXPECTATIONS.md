@@ -194,3 +194,7 @@ not a guaranteed allocation interleaving, and a base PASS is not a proof.
 on a deliberately held member mutex, the member has an extra storage pin.
 Base FAIL (two pins); fixed PASS (three pins). The mutex contested bit and
 inactive set establish the controlled lock-drop interval.
+
+`mach_short_kevent_test:queued_member`: base FAIL (set receiver times out
+after an already queued port joins); fixed PASS (membership wakes dequeue).
+Receiver admission uses a scheduling pause, so this is scheduling stress.
