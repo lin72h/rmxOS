@@ -146,6 +146,7 @@ static const int init_compat_signals[] = {
 	SIGUSR2,	// halt & power off
 	SIGTERM,	// Go to single user mode
 	SIGINT,	// Reboot
+	SIGEMT,	// Reroot through static rescue init
 	SIGTSTP,	// Stop further logins
 	SIGHUP,		// Resume logins after an aborted reboot
 };
@@ -154,7 +155,7 @@ static const int sigigns[] = { SIGHUP, SIGPIPE, SIGALRM,
 	SIGURG, SIGCONT, SIGTTIN, SIGTTOU, SIGIO, SIGXCPU,
 	SIGXFSZ, SIGVTALRM, SIGPROF, SIGWINCH, SIGINFO,
 	/* runtime_fork restores defaults for these in each job child. */
-	SIGINT, SIGTERM, SIGUSR1, SIGUSR2,
+	SIGINT, SIGTERM, SIGUSR1, SIGUSR2, SIGEMT,
 };
 static sigset_t sigign_set;
 bool pid1_magic;
@@ -378,6 +379,9 @@ init_compat_callback(void *unused __unused, struct kevent *event)
 		break;
 	case SIGINT:
 		launchd_request_reboot(RB_AUTOBOOT);
+		break;
+	case SIGEMT:
+		launchd_request_reroot();
 		break;
 	case SIGTERM:
 		launchd_request_single_user();
