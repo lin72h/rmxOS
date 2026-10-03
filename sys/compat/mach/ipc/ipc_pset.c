@@ -505,6 +505,8 @@ ipc_pset_destroy(
 		}
 		TAILQ_REMOVE(&pset->ips_ports, port, ip_next);
 		port->ip_pset = NULL;
+		port->ip_receive_epoch++;
+		wakeup(port);
 		ip_unlock(port);
 		ips_release(pset);
 	}
