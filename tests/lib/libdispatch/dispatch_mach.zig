@@ -31,12 +31,16 @@ var fixture_watched: c_uint = 0;
 var fixture_copied: c_uint = 0;
 var fixture_released: c_uint = 0;
 var fixture_set: c_uint = 0;
+var growth_set: c_uint = 0;
+var growth_facts: [3]c_uint = .{ 0, 0, 0 };
 var fixture_facts: [4]c_uint = .{ 0, 0, 0, 0 };
 fn op468_configure(mode: c_int, p: c_uint) void {
     @atomicStore(c_uint, &fixture_watched, p, .seq_cst);
     @atomicStore(c_int, &fixture_mode, mode, .seq_cst);
     @atomicStore(c_uint, &fixture_copied, 0, .seq_cst);
     @atomicStore(c_uint, &fixture_released, 0, .seq_cst);
+    @atomicStore(c_uint, &growth_set, 0, .seq_cst);
+    for (&growth_facts) |*v| @atomicStore(c_uint, v, 0, .seq_cst);
     for (&fixture_facts) |*v| @atomicStore(c_uint, v, 0, .seq_cst);
 }
 fn op468_wait_copied() c_int {
@@ -76,6 +80,18 @@ pub export fn op468_move(p: c_uint) void {
 pub export fn op468_deallocate(p: c_uint) void {
     if (p == @atomicLoad(c_uint, &fixture_watched, .seq_cst))
         _ = @atomicRmw(c_uint, &fixture_facts[2], .Add, 1, .seq_cst);
+}
+pub export fn op468_received(options: c_uint, name: c_uint, timeout: c_uint, kr: c_int) void {
+    if ((options & c.MACH_RCV_MSG) == 0) return;
+    if (name != 0 and name == @atomicLoad(c_uint, &growth_set, .seq_cst)) {
+        _ = @atomicRmw(c_uint, &growth_facts[1], .Add, 1, .seq_cst);
+        if ((options & c.MACH_RCV_LARGE) == 0 or (options & c.MACH_RCV_TIMEOUT) == 0 or timeout != 0 or (options & @as(c_uint, @bitCast(@as(c_int, c.MACH_RCV_TRAILER_MASK)))) == 0)
+            _ = @atomicRmw(c_uint, &growth_facts[2], .Add, 1, .seq_cst);
+    }
+    if (kr == c.MACH_RCV_TOO_LARGE) {
+        @atomicStore(c_uint, &growth_set, name, .seq_cst);
+        _ = @atomicRmw(c_uint, &growth_facts[0], .Add, 1, .seq_cst);
+    }
 }
 pub export fn op468_registered(p: c_uint, handle: c_uint, kr: c_int) void {
     if (p == @atomicLoad(c_uint, &fixture_watched, .seq_cst) and handle != 0 and kr == 0) _ = c.sem_post(&registered);
@@ -191,6 +207,12 @@ fn channel(len: usize, count: u32) void {
     var facts: [4]c_uint = undefined;
     op468_facts(&facts);
     _ = c.printf("channel expected=%u observed=%u cancel_expected=1 cancel_observed=%u wire_expected=0 wire_observed=%u size_expected=%zu size_observed=%u wait_rc=%d\n", count, received, canceled, facts[0], len, sizes[0], rc);
+    if (len == 32768) {
+        var growth: [3]c_uint = undefined;
+        for (&growth, &growth_facts) |*dest, *v| dest.* = @atomicLoad(c_uint, v, .seq_cst);
+        _ = c.printf("growth oversize_expected_min=1 oversize_observed=%u retry_expected_min=1 retry_observed=%u bad_options_expected=0 bad_options_observed=%u\n", growth[0], growth[1], growth[2]);
+        if (growth[0] == 0 or growth[1] == 0 or growth[2] != 0) c.atf_tc_fail("channel receive/count/buffer registration mismatch");
+    }
     if (rc != 0 or received != count or canceled != 1 or ids[0] != 44701 or sizes[0] != len or facts[0] != 0) c.atf_tc_fail("channel receive/count/buffer registration mismatch");
     if (count == 2 and ids[1] != 44702) c.atf_tc_fail("second identity");
     if (c.mach_port_mod_refs(c.mach_task_self(), p, c.MACH_PORT_RIGHT_RECEIVE, -1) != 0) c.atf_tc_fail("borrowed receive was released by channel");
