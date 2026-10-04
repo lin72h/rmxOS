@@ -3799,10 +3799,12 @@ _dispatch_mach_reconnect_invoke(dispatch_mach_t dm, dispatch_object_t dou)
 	if (MACH_PORT_VALID((mach_port_t)dou._dc->dc_other) || dm->dm_dkev ||
 			!TAILQ_EMPTY(&dm->dm_refs->dm_replies)) {
 		if (slowpath(_dispatch_queue_get_current() != &_dispatch_mgr_q)) {
-			// send/reply kevents must be uninstalled on the manager queue
+			// Route registration as well as unregistration through the manager.
+			dm->dm_refs->dm_needs_mgr = 1;
 			return false;
 		}
 	}
+	dm->dm_refs->dm_needs_mgr = 0;
 	_dispatch_mach_disconnect(dm);
 	dispatch_mach_send_refs_t dr = dm->dm_refs;
 	dr->dm_checkin = dou._dc->dc_data;
