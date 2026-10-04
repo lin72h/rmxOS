@@ -75,8 +75,9 @@ pub fn body(t: anytype) void {
     _ = control(7, 0);
     if (set) _ = c.syscall(c.SYS__kernelrpc_mach_port_destroy_trap, @as(c_uint, 0), port);
     const after = control(4, 0);
-    _ = c.printf("entry_revoke expected_enrolled=1 observed_enrolled=%d expected_wake=1 observed_wake=%d expected_result=0x10004009 observed_result=0x%x expected_queued=1 observed_queued=%u expected_carried=1 observed_carried=%u expected_entry_refs=%u observed_entry_refs=%u expected_post_rights=0 observed_post_rights=%u\n", @as(c_int, @intFromBool(enrolled)), @as(c_int, @intFromBool(woke)), result, held[4], held[5], before[2] - 1, held[2], after[5]);
+    const expected_object_refs = before[3] + @as(u32, if (set) 0 else 1);
+    _ = c.printf("entry_revoke expected_enrolled=1 observed_enrolled=%d expected_wake=1 observed_wake=%d expected_result=0x10004009 observed_result=0x%x expected_queued=1 observed_queued=%u expected_carried=1 observed_carried=%u expected_entry_refs=%u observed_entry_refs=%u expected_object_refs=%u observed_object_refs=%u expected_post_rights=0 observed_post_rights=%u\n", @as(c_int, @intFromBool(enrolled)), @as(c_int, @intFromBool(woke)), result, held[4], held[5], before[2] - 1, held[2], expected_object_refs, held[3], after[5]);
     _ = control(8, 0);
     _ = c.close(@intCast(receive));
-    if (result != 0x10004009 or !woke or held[4] != 1 or held[5] != 1 or held[2] != before[2] - 1 or held[3] != before[3] or after[5] != 0) c.atf_tc_fail("revoked admitted entry received or did not wake");
+    if (result != 0x10004009 or !woke or held[4] != 1 or held[5] != 1 or held[2] != before[2] - 1 or held[3] != expected_object_refs or after[5] != 0) c.atf_tc_fail("revoked admitted entry received or did not wake");
 }
