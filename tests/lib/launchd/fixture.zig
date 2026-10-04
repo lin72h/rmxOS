@@ -49,6 +49,7 @@ const Drain = struct {
     complete: u64 = 0,
     signal: u64 = 0,
     crashed: bool = false,
+    invalidate_on_drain: bool = false,
     first_error: c_int = 0,
 };
 var drains: [3]Drain = @splat(.{});
@@ -120,20 +121,20 @@ fn queue(name: u32, id: u32, size: usize) void {
     errorIf(c.mach_msg(head, c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, head.msgh_size, 0, 0, 0, 0) != 0, 16);
 }
 fn launchDrain(index: usize, label: [*:0]const u8, service: [*:0]const u8, kind: u32) void {
+    // Retire completed observations before allocating a possibly reused name.
+    for (&drains) |*d| {
+        if (d.complete != 0) d.port = 0;
+    }
     const job = makeJob(label, service, true);
     if (job == null) return;
     const ms = op484_first_service(job);
     errorIf(ms == null, 17);
     if (ms == null) return;
     const name = op484_service_port(ms);
-    drains[index] = .{ .port = name };
+    drains[index] = .{ .port = name, .invalidate_on_drain = kind == 1 };
     if (kind == 0) {
         for (0..3) |i| queue(name, @intCast(48410 + i), 64);
-    } else if (kind == 1) {
-        // Directly remove this fixture's receive right; leave the real job's
-        // service record for the crash drain to encounter an invalid name.
-        errorIf(c.mach_port_mod_refs(c.mach_task_self(), name, c.MACH_PORT_RIGHT_RECEIVE, -1) != 0, 18);
-    } else {
+    } else if (kind == 2) {
         queue(name, 48420, @as(usize, op484_request_size()) + 4096);
     }
     if (fixture_error == 0) errorIf(job_dispatch(job, true) == null, 19);
@@ -346,6 +347,13 @@ pub export fn op484_drain_begin(name: u32, status: c_int, crashed: c_int) void {
         active = i;
         d.signal = @intCast(status & 0x7f);
         d.crashed = crashed != 0;
+        // Invalidate only after launch and reaping, at the actual drain entry.
+        // Earlier destruction lets job launch or a later service reuse the name.
+        if (d.invalidate_on_drain) {
+            d.invalidate_on_drain = false;
+            errorIf(c.mach_port_mod_refs(c.mach_task_self(), name, c.MACH_PORT_RIGHT_RECEIVE, -1) != 0, 18);
+        }
+
         return;
     };
 }

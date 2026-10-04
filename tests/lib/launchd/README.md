@@ -40,3 +40,6 @@ the current callback table, joins it to the demand set without registration,
 and observes detach before close and the final invalid name. It is not run on
 base: its unchecked table write could corrupt PID 1 and prevent later cases.
 It also checks that a receive right already outside every set is closed.
+The invalid-name receive right is destroyed at real drain entry, after job
+launch and reaping. Completed drain-name mappings are retired before another
+job is created, so reused names cannot be attributed to an earlier drain.
