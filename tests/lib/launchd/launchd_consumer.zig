@@ -73,7 +73,7 @@ fn terminal(_: [*c]const c.atf_tc_t) callconv(.c) void {
     observe("drain_terminal", reply, &.{ 1, 1, 1, 0, 4, 4, c.SIGABRT, c.SIGABRT, c.MACH_RCV_INVALID_NAME, c.MACH_RCV_TOO_LARGE });
 }
 fn unregistered(_: [*c]const c.atf_tc_t) callconv(.c) void {
-    observe("close_unregistered", request(.close_unregistered), &.{ 1, 1, 0, 15 });
+    observe("close_unregistered", request(.close_unregistered), &.{ 1, 1, 0, 15, 0, 15 });
 }
 fn dead(_: [*c]const c.atf_tc_t) callconv(.c) void {
     // Job absent; real notification; one fixture uref plus notification uref
