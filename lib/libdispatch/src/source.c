@@ -2767,76 +2767,6 @@ _dispatch_kevent_machport_drain(struct kevent64_s *ke)
 
 DISPATCH_NOINLINE
 static void
-_dispatch_mach_received_right_destroy(mach_port_t name,
-		mach_msg_type_name_t disposition)
-{
-	if (!MACH_PORT_VALID(name)) return;
-	if (disposition == MACH_MSG_TYPE_MOVE_RECEIVE) {
-		(void)mach_port_mod_refs(mach_task_self(), name,
-				MACH_PORT_RIGHT_RECEIVE, -1);
-	} else if (disposition == MACH_MSG_TYPE_MOVE_SEND ||
-			disposition == MACH_MSG_TYPE_MOVE_SEND_ONCE) {
-		(void)mach_port_deallocate(mach_task_self(), name);
-	}
-}
-
-static void
-_dispatch_mach_partial_receive_destroy(mach_msg_header_t *hdr)
-{
-	/* libmach's body walker currently walks past a stack copy of the base.
-	 * Destroy the header through that API, but walk received body bytes here.
-	 * User port descriptors are 12 bytes; 64-bit OOL descriptors are 16. */
-	mach_msg_header_t header = *hdr;
-	header.msgh_bits &= ~MACH_MSGH_BITS_COMPLEX;
-	mach_msg_destroy(&header);
-	if (!(hdr->msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-			hdr->msgh_size < sizeof(mach_msg_base_t)) return;
-	mach_msg_body_t *body = (void *)(hdr + 1);
-	char *cursor = (void *)(body + 1);
-	char *end = (char *)hdr + hdr->msgh_size;
-	for (mach_msg_size_t i = 0; i < body->msgh_descriptor_count; i++) {
-		mach_msg_descriptor_t d = {0};
-		if ((size_t)(end - cursor) < sizeof(mach_msg_type_descriptor_t)) return;
-		memcpy(&d, cursor, sizeof(mach_msg_type_descriptor_t));
-		size_t length;
-		switch (d.type.type) {
-		case MACH_MSG_PORT_DESCRIPTOR: length = sizeof(d.port); break;
-		case MACH_MSG_OOL_DESCRIPTOR:
-		case MACH_MSG_OOL_VOLATILE_DESCRIPTOR: length = sizeof(d.out_of_line); break;
-		case MACH_MSG_OOL_PORTS_DESCRIPTOR: length = sizeof(d.ool_ports); break;
-		default: return; /* Kernel copyout never produces an unknown type. */
-		}
-		if ((size_t)(end - cursor) < length) return;
-		memcpy(&d, cursor, length); /* An OOL descriptor may be only 4-byte aligned. */
-		cursor += length;
-		switch (d.type.type) {
-		case MACH_MSG_PORT_DESCRIPTOR:
-			_dispatch_mach_received_right_destroy(d.port.name, d.port.disposition);
-			break;
-		case MACH_MSG_OOL_DESCRIPTOR:
-		case MACH_MSG_OOL_VOLATILE_DESCRIPTOR:
-			if (d.out_of_line.address && d.out_of_line.size) {
-				(void)mach_vm_deallocate(mach_task_self(),
-						(mach_vm_address_t)d.out_of_line.address, d.out_of_line.size);
-			}
-			break;
-		case MACH_MSG_OOL_PORTS_DESCRIPTOR:
-			if (d.ool_ports.address && d.ool_ports.count) {
-				mach_port_t *ports = d.ool_ports.address;
-				for (mach_msg_size_t j = 0; j < d.ool_ports.count; j++) {
-					_dispatch_mach_received_right_destroy(ports[j], d.ool_ports.disposition);
-				}
-				(void)mach_vm_deallocate(mach_task_self(),
-						(mach_vm_address_t)ports,
-						(mach_vm_size_t)d.ool_ports.count * sizeof(*ports));
-			}
-			break;
-		}
-	}
-}
-
-DISPATCH_NOINLINE
-static void
 _dispatch_kevent_mach_msg_drain(struct kevent64_s *ke)
 {
 	/* Readiness is a hint. Never wait for a message already claimed elsewhere. */
@@ -2864,7 +2794,7 @@ _dispatch_kevent_mach_msg_drain(struct kevent64_s *ke)
 		if (kr != MACH_MSG_SUCCESS) {
 			/* BODY_ERROR still copies out the successfully received resources. */
 			if ((kr & ~MACH_MSG_MASK) == MACH_RCV_BODY_ERROR) {
-				_dispatch_mach_partial_receive_destroy(hdr);
+				mach_msg_destroy(hdr);
 			}
 			_dispatch_bug_mach_client("manager aggregate receive failed", kr);
 			break;

@@ -245,18 +245,30 @@ mach_msg_destroy(mach_msg_header_t *msg)
     mach_msg_destroy_port(msg->msgh_remote_port, MACH_MSGH_BITS_REMOTE(mbits));
 
     if (mbits & MACH_MSGH_BITS_COMPLEX) {
-		mach_msg_base_t base __aligned(8);
-		mach_msg_base_t *basep;
-		mach_msg_body_t		*body;
-		mach_msg_descriptor_t	*saddr, *eaddr;
-
-		basep = &base;
-		memcpy(basep, msg, sizeof(base));
-    	body = (mach_msg_body_t *) (msg + 1);
-		saddr = (mach_msg_descriptor_t *) (uintptr_t)(basep + 1);
-    	eaddr =  saddr + body->msgh_descriptor_count;
-
-	for  ( ; saddr < eaddr; saddr++) {
+	if (msg->msgh_size < sizeof(mach_msg_base_t)) return;
+	mach_msg_body_t *body = (mach_msg_body_t *)(msg + 1);
+	char *cursor = (char *)(body + 1);
+	char *end = (char *)msg + msg->msgh_size;
+	for (mach_msg_size_t i = 0; i < body->msgh_descriptor_count; i++) {
+	    /* User descriptors have different sizes and only 4-byte alignment.
+	     * Copy into aligned storage before reading pointers or bitfields. */
+	    mach_msg_descriptor_t descriptor __aligned(8);
+	    mach_msg_descriptor_t *saddr = &descriptor;
+	    size_t length;
+	    if ((size_t)(end - cursor) < sizeof(mach_msg_type_descriptor_t)) return;
+	    memset(&descriptor, 0, sizeof(descriptor));
+	    memcpy(&descriptor, cursor, sizeof(mach_msg_type_descriptor_t));
+	    switch (descriptor.type.type) {
+	    case MACH_MSG_PORT_DESCRIPTOR: length = sizeof(descriptor.port); break;
+	    case MACH_MSG_OOL_DESCRIPTOR:
+	    case MACH_MSG_OOL_VOLATILE_DESCRIPTOR:
+		length = sizeof(descriptor.out_of_line); break;
+	    case MACH_MSG_OOL_PORTS_DESCRIPTOR: length = sizeof(descriptor.ool_ports); break;
+	    default: return;
+	    }
+	    if ((size_t)(end - cursor) < length) return;
+	    memcpy(&descriptor, cursor, length);
+	    cursor += length;
 	    switch (saddr->type.type) {
 	    
 	        case MACH_MSG_PORT_DESCRIPTOR: {
@@ -270,6 +282,7 @@ mach_msg_destroy(mach_msg_header_t *msg)
 		    break;
 	        }
 
+	        case MACH_MSG_OOL_VOLATILE_DESCRIPTOR:
 	        case MACH_MSG_OOL_DESCRIPTOR : {
 		    mach_msg_ool_descriptor_t *dsc;
 
