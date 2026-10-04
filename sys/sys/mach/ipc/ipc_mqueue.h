@@ -162,7 +162,7 @@ extern mach_msg_return_t ipc_mqueue_receive(
 	mach_msg_timeout_t	timeout,
 	ipc_kmsg_t		*kmsgp,
 	mach_port_seqno_t	*seqnop,
-	thread_t thread);
+	thread_t thread, ipc_entry_t admitted_entry);
 
 /* Receive a message from a message queue */
 extern mach_msg_return_t ipc_mqueue_pset_receive(

@@ -692,9 +692,12 @@ restart:
 mach_msg_return_t
 ipc_mqueue_receive(natural_t bits, mach_msg_option_t option,
     mach_msg_size_t max_size, mach_msg_timeout_t timeout,
-    ipc_kmsg_t *kmsgp, mach_port_seqno_t *seqnop, thread_t thread)
+    ipc_kmsg_t *kmsgp, mach_port_seqno_t *seqnop, thread_t thread,
+    ipc_entry_t entry)
 {
     ipc_object_t admitted = thread->ith_object;
+    ipc_space_t space = entry->ie_space;
+    mach_port_type_t receive_type = bits & (MACH_PORT_TYPE_RECEIVE | MACH_PORT_TYPE_PORT_SET);
     ipc_port_t port;
     ipc_pset_t pset;
     mach_msg_return_t mr;
@@ -707,8 +710,18 @@ ipc_mqueue_receive(natural_t bits, mach_msg_option_t option,
     thread->ith_kmsg = IKM_NULL;
     if (option & MACH_RCV_TIMEOUT)
         deadline = sbinuptime() + (sbintime_t)timeout * SBT_1MS;
-    io_lock(admitted);
     for (;;) {
+        /* Space-before-object; retain the read lock through message claim. */
+        is_read_lock(space);
+        io_lock(admitted);
+        if (!space->is_active || !mach_space_is_current(space) ||
+            entry->ie_revoked || !entry->ie_published ||
+            entry->ie_object != admitted ||
+            (entry->ie_bits & (MACH_PORT_TYPE_RECEIVE | MACH_PORT_TYPE_PORT_SET)) != receive_type) {
+            mr = MACH_RCV_PORT_DIED;
+            break;
+        }
+
         if (!io_active(admitted)) {
             mr = MACH_RCV_PORT_DIED;
             break;
@@ -737,6 +750,7 @@ ipc_mqueue_receive(natural_t bits, mach_msg_option_t option,
                 *seqnop = thread->ith_seqno;
                 mr = ipc_mqueue_finish_receive(kmsgp, port, option, max_size);
                 ip_unlock(port);
+                is_read_unlock(space);
                 goto out;
             }
         } else {
@@ -756,20 +770,26 @@ ipc_mqueue_receive(natural_t bits, mach_msg_option_t option,
             mr = MACH_RCV_TIMED_OUT;
             break;
         }
+        /* Revocation takes this mutex after the space lock: no lost wake. */
+        is_read_unlock(space);
         error = msleep_sbt(admitted, &((rpc_common_t)admitted)->rcd_io_lock_data,
             PCATCH, "machrcv", deadline, 0,
             (option & MACH_RCV_TIMEOUT) ? C_ABSOLUTE : 0);
         if (error == EINTR || error == ERESTART) {
             mr = MACH_RCV_INTERRUPTED;
-            break;
+            io_unlock(admitted);
+            goto out;
         }
         if (error == EWOULDBLOCK) {
             mr = MACH_RCV_TIMED_OUT;
-            break;
+            io_unlock(admitted);
+            goto out;
         }
-        /* A wakeup only requests revalidation and another locked dequeue. */
+        io_unlock(admitted);
+        /* Reacquire space before object on every wakeup. */
     }
     io_unlock(admitted);
+    is_read_unlock(space);
 out:
     thread->ith_state = mr;
     thread->ith_kmsg = IKM_NULL;

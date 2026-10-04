@@ -389,7 +389,7 @@ mach_msg_receive(
 	self->ith_object = object;
 	assert(object->io_references > 0);
 	mr = ipc_mqueue_receive(bits, option & MACH_RCV_USER, rcv_size,
-							timeout, &kmsg, &seqno, self);
+							timeout, &kmsg, &seqno, self, admitted_entry);
 	/* mqueue is unlocked */
 	ipc_object_release(object);
 	ipc_entry_put(admitted_entry);

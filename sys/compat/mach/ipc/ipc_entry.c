@@ -291,7 +291,15 @@ mach_port_fdclose(struct file *fp, int fd __unused, struct thread *td __unused)
 		entry->ie_request = 0;
 		entry->ie_object = IO_NULL;
 		entry->ie_bits &= IE_BITS_GEN_MASK;
-		entry->ie_revoked = TRUE;
+        entry->ie_revoked = TRUE;
+        /* Cancel admitted waits before postclose destroys the right. */
+        if (entry->ie_close_object != IO_NULL &&
+            (entry->ie_close_bits & (MACH_PORT_TYPE_RECEIVE | MACH_PORT_TYPE_PORT_SET))) {
+            io_lock(entry->ie_close_object);
+            wakeup(entry->ie_close_object);
+            io_unlock(entry->ie_close_object);
+        }
+
 		if (entry->ie_published) {
 			LIST_REMOVE(entry, ie_space_link);
 			entry->ie_published = FALSE;
