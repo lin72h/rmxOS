@@ -59,8 +59,11 @@ pub export fn op468_change(filter: c_int, flags: c_uint, ext0: u64, ext1: u64) v
     if (filter == c.EVFILT_MACHPORT and (flags != 0 or ext0 != 0 or ext1 != 0))
         _ = @atomicRmw(c_uint, &fixture_facts[0], .Add, 1, .seq_cst);
 }
-pub export fn op468_event(filter: c_int, ident: usize) void {
-    if (filter != c.EVFILT_MACHPORT or @atomicLoad(c_int, &fixture_mode, .seq_cst) == 0) return;
+pub export fn op468_event(filter: c_int, flags: c_uint, ident: usize, member: usize, local: c_uint) void {
+    const mode = @atomicLoad(c_int, &fixture_mode, .seq_cst);
+    if (filter != c.EVFILT_MACHPORT or (flags & c.EV_ERROR) != 0 or (mode != 1 and mode != 4)) return;
+    const watched = @atomicLoad(c_uint, &fixture_watched, .seq_cst);
+    if (mode == 1 and member != watched and local != watched) return;
     if (@cmpxchgStrong(c_uint, &fixture_copied, 0, 2, .seq_cst, .seq_cst) != null) return;
     @atomicStore(c_uint, &fixture_set, @intCast(ident), .seq_cst);
     @atomicStore(c_uint, &fixture_copied, 1, .seq_cst);
@@ -210,6 +213,7 @@ fn copied(cancel: bool) void {
         const q = dispatch_queue_create("op468.stale", null);
         object = dispatch_mach_create_f("op468", q, null, &channelCall);
         dispatch_mach_connect(object, p, 0, null);
+        if (wait(&registered) != 0) c.atf_tc_fail("channel membership timeout");
     }
     op468_configure(1, p);
     send(p, 44703, @sizeOf(c.mach_msg_header_t));
@@ -224,6 +228,11 @@ fn copied(cancel: bool) void {
         if (kr != 0) {
             op468_release();
             c.atf_tc_fail("competing receive kr=%d", kr);
+        }
+        const claimed: *c.mach_msg_header_t = @ptrCast(&h);
+        if (claimed.msgh_id != 44703) {
+            op468_release();
+            c.atf_tc_fail("competing receive claimed unrelated message");
         }
     }
     if (cancel) dispatch_source_cancel(object) else dispatch_mach_cancel(object);
@@ -261,7 +270,7 @@ fn death(during: bool, late: bool) void {
     object = source(p, true);
     if (late) {
         if (wait(&registered) != 0) c.atf_tc_fail("death registration timeout");
-        op468_configure(1, p);
+        op468_configure(4, p);
         _ = c.mach_port_mod_refs(c.mach_task_self(), p, c.MACH_PORT_RIGHT_RECEIVE, -1);
         const rc = op468_wait_copied();
         if (rc != 0) {

@@ -5,7 +5,7 @@
 #include <dlfcn.h>
 #include <pthread.h>
 void op468_change(int, unsigned, uint64_t, uint64_t);
-void op468_event(int, uintptr_t);
+void op468_event(int, unsigned, uintptr_t, uintptr_t, unsigned);
 void op468_move(unsigned);
 void op468_deallocate(unsigned);
 void op468_registered(unsigned, unsigned, int);
@@ -25,7 +25,12 @@ int kevent(int kq,const struct kevent *changes,int nc,struct kevent *events,int 
  pthread_once(&once,resolve);
  for(int i=0;i<nc;i++) op468_change(changes[i].filter,changes[i].fflags,changes[i].ext[0],changes[i].ext[1]);
  int r=real_kevent(kq,changes,nc,events,ne,timeout);
- for(int i=0;i<r;i++) op468_event(events[i].filter,events[i].ident);
+ for(int i=0;i<r;i++) {
+  unsigned local=0;
+  if(events[i].filter==EVFILT_MACHPORT && !(events[i].flags&EV_ERROR) && events[i].ext[0])
+   local=((const mach_msg_header_t *)(uintptr_t)events[i].ext[0])->msgh_local_port;
+  op468_event(events[i].filter,events[i].flags,events[i].ident,events[i].data,local);
+ }
  return r;
 }
 kern_return_t mach_port_move_member(mach_port_t task,mach_port_t p,mach_port_t set) {
