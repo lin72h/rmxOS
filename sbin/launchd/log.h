@@ -59,6 +59,8 @@ __attribute__((format(printf, 2, 0)))
 void
 launchd_vsyslog(struct launchd_syslog_attr *attr, const char *message, va_list args);
 
+uint64_t launchd_log_dropped(void);
+
 void
 launchd_log_push(void);
 

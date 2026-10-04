@@ -49,6 +49,7 @@ void jobmgr_reap_pid(jobmgr_t jm, pid_t pid);
 launch_data_t job_export_all(void);
 
 job_t job_dispatch(job_t j, bool kickstart); /* returns j on success, NULL on job removal */
+bool launchd_asl_drainer_running(void);
 job_t job_find(jobmgr_t jm, const char *label);
 job_t job_find_by_service_port(mach_port_t p);
 bool job_ack_port_destruction(mach_port_t p);

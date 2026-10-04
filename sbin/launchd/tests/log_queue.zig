@@ -36,3 +36,19 @@ test "oversized record is dropped without discarding retained messages" {
     try std.testing.expectEqual(before[1], after[1]);
     try std.testing.expectEqual(@as(u64, 1), after[2]);
 }
+extern fn rmx_route(c_int, c_int) c_int;
+extern fn rmx_queue_numbered(c_uint) void;
+extern fn rmx_queue_oldest() c_uint;
+test "queue retains newest records in insertion order" {
+    rmx_queue_clear();
+    defer rmx_queue_clear();
+    rmx_queue_numbered(6000);
+    try std.testing.expectEqual(@as(c_uint, 5000), rmx_queue_oldest());
+}
+test "PID1 routing follows drainer start stop and restart" {
+    try std.testing.expectEqual(@as(c_int, 0), rmx_route(0, 0));
+    try std.testing.expectEqual(@as(c_int, 1), rmx_route(1, 0));
+    try std.testing.expectEqual(@as(c_int, 0), rmx_route(1, 1));
+    try std.testing.expectEqual(@as(c_int, 1), rmx_route(1, 0));
+    try std.testing.expectEqual(@as(c_int, 0), rmx_route(1, 1));
+}
