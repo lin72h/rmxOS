@@ -8,9 +8,30 @@
 #include "log.h"
 #include "core.h"
 
-/* libasl also exports syslog; this fallback must use FreeBSD libc. */
-extern void launchd_native_syslog(int, const char *, ...) __attribute__((format(printf, 2, 3)));
-__asm__(".symver launchd_native_syslog,syslog@FBSD_1.0");
+/* A normal versioned relocation can still bind libasl's global export.
+ * Resolve the version on the libc handle instead of in the global scope. */
+#include <dlfcn.h>
+#define LAUNCHD_NATIVE_SYSLOG_LOOKUP 1
+typedef void (*launchd_syslog_fn)(int, const char *, ...);
+static launchd_syslog_fn _launchd_native_syslog;
+static pthread_once_t _launchd_native_syslog_once = PTHREAD_ONCE_INIT;
+
+static void
+_launchd_resolve_native_syslog(void)
+{
+	void *libc = dlopen("libc.so.7", RTLD_LAZY | RTLD_LOCAL);
+	if (libc) {
+		_launchd_native_syslog = (launchd_syslog_fn)dlvsym(libc, "syslog", "FBSD_1.0");
+		/* libc is a permanent dependency; retain the handle for this pointer. */
+	}
+}
+
+static launchd_syslog_fn
+_launchd_get_native_syslog(void)
+{
+	(void)pthread_once(&_launchd_native_syslog_once, _launchd_resolve_native_syslog);
+	return _launchd_native_syslog;
+}
 
 #define LAUNCHD_LOGQ_MAX_COUNT 1000
 #define LAUNCHD_LOGQ_MAX_BYTES (256 * 1024)
@@ -72,8 +93,14 @@ _launchd_use_system_log(void)
 static void
 _launchd_system_log(const char *from, pid_t from_pid, const char *about, pid_t about_pid, int pri, const char *msg)
 {
-	launchd_native_syslog(LOG_DAEMON | LOG_PRI(pri), "%s[%u] %s[%u]: %s",
-	    from, from_pid, about, about_pid, msg);
+	launchd_syslog_fn native = _launchd_get_native_syslog();
+	if (native) {
+		native(LOG_DAEMON | LOG_PRI(pri), "%s[%u] %s[%u]: %s",
+		    from, from_pid, about, about_pid, msg);
+	} else if (launchd_console) {
+		fprintf(launchd_console, "native syslog unavailable: %s[%u] %s[%u]: %s\n",
+		    from, from_pid, about, about_pid, msg);
+	}
 }
 static int _launchd_log_up2 = LOG_UPTO(LOG_NOTICE);
 
