@@ -220,6 +220,16 @@ fn death(during: bool, late: bool) void {
     if (c.mach_port_type(c.mach_task_self(), newer, &typ) != 0 or (typ & c.MACH_PORT_TYPE_RECEIVE) == 0) c.atf_tc_fail("new receive affected by late death");
 }
 fn deathRegistration(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    setup();
+    const invalid = port();
+    op468_configure(0, invalid);
+    _ = c.mach_port_mod_refs(c.mach_task_self(), invalid, c.MACH_PORT_RIGHT_RECEIVE, -1);
+    object = source(invalid, true);
+    const rc = wait(&sem);
+    var facts: [4]c_uint = undefined;
+    op468_facts(&facts);
+    _ = c.printf("invalid_registration cancel_expected=1 cancel_observed=%u terminal_expected=1 terminal_observed=%u releases_expected=0 releases_observed=%u wait_rc=%d\n", canceled, callbacks, facts[2], rc);
+    if (rc != 0 or canceled != 1 or callbacks != 1 or facts[2] != 0) c.atf_tc_fail("invalid registration did not finish cleanly");
     death(false, false);
     death(true, false);
 }
