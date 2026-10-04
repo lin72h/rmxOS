@@ -11,6 +11,8 @@ void op468_deallocate(unsigned);
 void op468_received(unsigned, unsigned, unsigned, int);
 void op468_registered(unsigned, unsigned, int);
 void op468_notification(unsigned, unsigned, unsigned);
+void op478_previous(unsigned, unsigned, unsigned, int);
+int op478_receive(mach_msg_header_t *, unsigned, int);
 static int (*real_kevent)(int,const struct kevent*,int,struct kevent*,int,const struct timespec*);
 static kern_return_t (*real_move)(mach_port_t,mach_port_t,mach_port_t);
 static kern_return_t (*real_deallocate)(mach_port_t,mach_port_t);
@@ -44,10 +46,12 @@ kern_return_t mach_port_deallocate(mach_port_t task,mach_port_t p) {
 }
 kern_return_t mach_port_request_notification(mach_port_t task,mach_port_t p,mach_msg_id_t id,mach_port_mscount_t sync,mach_port_t notify,mach_msg_type_name_t type,mach_port_t *previous) {
  pthread_once(&once,resolve);op468_notification(task,p,notify);
- kern_return_t kr=real_notification(task,p,id,sync,notify,type,previous);op468_registered(p,notify,kr);return kr;
+ kern_return_t kr=real_notification(task,p,id,sync,notify,type,previous);
+ op478_previous(p,notify,kr==KERN_SUCCESS && previous ? *previous : MACH_PORT_NULL,kr);
+ op468_registered(p,notify,kr);return kr;
 }
 
 mach_msg_return_t mach_msg(mach_msg_header_t *h,mach_msg_option_t opts,mach_msg_size_t send_size,mach_msg_size_t recv_size,mach_port_name_t name,mach_msg_timeout_t timeout,mach_port_name_t notify) {
  pthread_once(&once,resolve);mach_msg_return_t kr=real_msg(h,opts,send_size,recv_size,name,timeout,notify);
- op468_received(opts,name,timeout,kr);return kr;
+ op468_received(opts,name,timeout,kr);return op478_receive(h,opts,kr);
 }

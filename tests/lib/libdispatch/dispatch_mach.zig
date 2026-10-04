@@ -334,14 +334,108 @@ fn deathRegistration(_: [*c]const c.atf_tc_t) callconv(.c) void {
 fn lateDeath(_: [*c]const c.atf_tc_t) callconv(.c) void {
     death(false, true);
 }
-const names = [_][*:0]const u8{ "channel_two", "set_large_retry", "stale_readiness", "cancel_copied", "send_death_registration", "late_death" };
-const bodies = .{ &two, &large, &stale, &cancelCopied, &deathRegistration, &lateDeath };
-var cases: [6]c.atf_tc_t = undefined;
+// Mach's packed user ABI has twelve-byte port descriptors. Express the
+// bitfields as their byte-sized ABI fields so Zig owns message construction.
+const PortDescriptor = extern struct { name: u32, pad1: u32 = 0, pad2: u16 = 0, disposition: u8 = c.MACH_MSG_TYPE_COPY_SEND, kind: u8 = c.MACH_MSG_PORT_DESCRIPTOR };
+var partial_enabled: u32 = 0;
+var partial_count: u32 = 0;
+var transferred_refs: [2]u32 = .{ 0, 0 };
+var previous_name: u32 = 0;
+var previous_count: u32 = 0;
+var pending_enabled: u32 = 0;
+pub export fn op478_receive(h: *c.mach_msg_header_t, options: c_uint, kr: c_int) c_int {
+    if (kr != c.MACH_MSG_SUCCESS or (options & c.MACH_RCV_MSG) == 0 or h.msgh_id != 47801) return kr;
+    if (@cmpxchgStrong(u32, &partial_enabled, 1, 0, .seq_cst, .seq_cst) != null) return kr;
+    const bytes: [*]u8 = @ptrCast(h);
+    const desc: [*]const PortDescriptor = @ptrCast(@alignCast(bytes + @sizeOf(c.mach_msg_header_t) + 4));
+    for (0..2) |i| {
+        var refs: u32 = 0;
+        const rc = c.mach_port_get_refs(c.mach_task_self(), desc[i].name, c.MACH_PORT_RIGHT_SEND, &refs);
+        @atomicStore(u32, &transferred_refs[i], if (rc == 0) refs else 0, .seq_cst);
+    }
+    _ = @atomicRmw(u32, &partial_count, .Add, 1, .seq_cst);
+    // A successful kernel copyout followed by a controlled BODY_ERROR return
+    // exercises dispatch cleanup. Include a real copyout resource-error bit.
+    return c.MACH_RCV_BODY_ERROR | c.MACH_MSG_IPC_SPACE;
+}
+pub export fn op478_previous(p: c_uint, notify: c_uint, previous: c_uint, kr: c_int) void {
+    if (@atomicLoad(u32, &pending_enabled, .seq_cst) == 0 or p != @atomicLoad(c_uint, &fixture_watched, .seq_cst) or notify != 0 or kr != 0) return;
+    @atomicStore(u32, &previous_name, previous, .seq_cst);
+    _ = @atomicRmw(u32, &previous_count, .Add, 1, .seq_cst);
+}
+fn sendRight(p: u32) void {
+    if (c.mach_port_insert_right(c.mach_task_self(), p, p, c.MACH_MSG_TYPE_MAKE_SEND) != 0) c.atf_tc_fail("owned send setup");
+}
+fn partialReceive(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    setup();
+    const p = port();
+    const rights = [2]u32{ port(), port() };
+    for (rights) |r| sendRight(r);
+    op468_configure(0, p);
+    object = dispatch_mach_create_f("op478.partial", dispatch_queue_create("op478.partial", null), null, &channelCall);
+    dispatch_mach_connect(object, p, 0, null);
+    if (wait(&registered) != 0) c.atf_tc_fail("partial channel membership timeout");
+    var storage: [32768]u8 align(8) = @splat(0);
+    const h: *c.mach_msg_header_t = @ptrCast(&storage);
+    h.* = std.mem.zeroes(c.mach_msg_header_t);
+    h.msgh_bits = c.MACH_MSGH_BITS_COMPLEX | c.MACH_MSG_TYPE_MAKE_SEND;
+    h.msgh_size = storage.len;
+    h.msgh_remote_port = p;
+    h.msgh_id = 47801;
+    const body: *u32 = @ptrCast(@alignCast(storage[@sizeOf(c.mach_msg_header_t)..].ptr));
+    body.* = 2;
+    const desc: [*]PortDescriptor = @ptrCast(@alignCast(storage[@sizeOf(c.mach_msg_header_t) + 4 ..].ptr));
+    for (rights, 0..) |r, i| desc[i] = .{ .name = r };
+    @atomicStore(u32, &partial_enabled, 1, .seq_cst);
+    const sent = c.mach_msg(h, c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, storage.len, 0, 0, 0, 0);
+    if (sent != 0) c.atf_tc_fail("complex send kr=%d", sent);
+    send(p, 47802, @sizeOf(c.mach_msg_header_t));
+    const response = wait(&sem);
+    dispatch_mach_cancel(object);
+    const cancellation = wait(&sem);
+    var refs: [2]u32 = .{ 0, 0 };
+    var ref_rc: c_int = 0;
+    for (rights, 0..) |r, i| ref_rc |= c.mach_port_get_refs(c.mach_task_self(), r, c.MACH_PORT_RIGHT_SEND, &refs[i]);
+    const injected = @atomicLoad(u32, &partial_count, .seq_cst);
+    const before = [2]u32{ @atomicLoad(u32, &transferred_refs[0], .seq_cst), @atomicLoad(u32, &transferred_refs[1], .seq_cst) };
+    _ = c.printf("partial injected_expected=1 injected_observed=%u copied_refs_expected=2,2 copied_refs_observed=%u,%u refs_expected=1,1 refs_observed=%u,%u response_expected=47802 response_observed=%d count_expected=1 count_observed=%u cancel_expected=1 cancel_observed=%u wait_rc=%d refs_kr=%d\n", injected, before[0], before[1], refs[0], refs[1], ids[0], received, canceled, response | cancellation, ref_rc);
+    if (injected != 1 or before[0] != 2 or before[1] != 2 or response != 0 or cancellation != 0 or received != 1 or ids[0] != 47802 or canceled != 1) c.atf_tc_fail("partial receive fixture or manager response mismatch");
+    if (ref_rc != 0 or refs[0] != 1 or refs[1] != 1) c.atf_tc_fail("partial receive leaked copied send rights");
+    for (rights) |r| {
+        _ = c.mach_port_deallocate(c.mach_task_self(), r);
+        _ = c.mach_port_mod_refs(c.mach_task_self(), r, c.MACH_PORT_RIGHT_RECEIVE, -1);
+    }
+    if (c.mach_port_mod_refs(c.mach_task_self(), p, c.MACH_PORT_RIGHT_RECEIVE, -1) != 0) c.atf_tc_fail("partial borrowed receive release");
+}
+fn pendingRequest(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    setup();
+    const p = port();
+    sendRight(p);
+    op468_configure(0, p);
+    @atomicStore(u32, &pending_enabled, 1, .seq_cst);
+    object = source(p, true);
+    if (wait(&registered) != 0) c.atf_tc_fail("pending watch registration timeout");
+    dispatch_source_cancel(object);
+    const rc = wait(&sem);
+    const previous = @atomicLoad(u32, &previous_name, .seq_cst);
+    const requests = @atomicLoad(u32, &previous_count, .seq_cst);
+    var once_refs: u32 = 0;
+    const once_rc = c.mach_port_get_refs(c.mach_task_self(), previous, c.MACH_PORT_RIGHT_SEND_ONCE, &once_refs);
+    var refs: u32 = 0;
+    const refs_rc = c.mach_port_get_refs(c.mach_task_self(), p, c.MACH_PORT_RIGHT_SEND, &refs);
+    _ = c.printf("pending returned_expected=1 returned_observed=%u previous=%u absent_expected=%d absent_observed=%d refs_expected=1 refs_observed=%u cancel_expected=1 cancel_observed=%u callbacks_expected=0 callbacks_observed=%u wait_rc=%d refs_kr=%d\n", requests, previous, @as(c_int, c.KERN_INVALID_NAME), once_rc, refs, canceled, callbacks, rc, refs_rc);
+    if (rc != 0 or requests != 1 or previous == 0 or once_rc != c.KERN_INVALID_NAME or refs_rc != 0 or refs != 1 or canceled != 1 or callbacks != 0) c.atf_tc_fail("pending request right or owner uref imbalance");
+    _ = c.mach_port_deallocate(c.mach_task_self(), p);
+    if (c.mach_port_mod_refs(c.mach_task_self(), p, c.MACH_PORT_RIGHT_RECEIVE, -1) != 0) c.atf_tc_fail("pending watched receive release");
+}
+const names = [_][*:0]const u8{ "channel_two", "set_large_retry", "stale_readiness", "cancel_copied", "send_death_registration", "late_death", "partial_receive_cleanup", "pending_request_cancel" };
+const bodies = .{ &two, &large, &stale, &cancelCopied, &deathRegistration, &lateDeath, &partialReceive, &pendingRequest };
+var cases: [8]c.atf_tc_t = undefined;
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "20");
 }
 fn addTests(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    inline for (0..6) |i| {
+    inline for (0..8) |i| {
         const err = c.atf_tc_init(&cases[i], names[i], &head, bodies[i], null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
         const added = c.atf_tp_add_tc(tp, &cases[i]);
