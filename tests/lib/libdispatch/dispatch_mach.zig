@@ -29,6 +29,7 @@ extern fn op468_release() void;
 extern fn op468_copied_set() c_uint;
 extern fn op468_facts(*[4]c_uint) void;
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
+var sem_initialized = false;
 var sem: c.sem_t = undefined;
 var registered: c.sem_t = undefined;
 var object: Object = null;
@@ -64,6 +65,11 @@ fn channelCall(_: Object, reason: c_ulong, message: Object, _: c_int) callconv(.
     }
 }
 fn setup() void {
+    if (sem_initialized) {
+        _ = c.sem_destroy(&sem);
+        _ = c.sem_destroy(&registered);
+    }
+    sem_initialized = true;
     received = 0;
     canceled = 0;
     callbacks = 0;
@@ -220,6 +226,10 @@ fn death(during: bool, late: bool) void {
     if (c.mach_port_type(c.mach_task_self(), newer, &typ) != 0 or (typ & c.MACH_PORT_TYPE_RECEIVE) == 0) c.atf_tc_fail("new receive affected by late death");
 }
 fn deathRegistration(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    // Initialize the manager and notification ports before revoking an empty name.
+    // Otherwise lazy manager allocation can reuse that name before registration.
+    death(false, false);
+    death(true, false);
     setup();
     const invalid = port();
     op468_configure(0, invalid);
@@ -230,8 +240,6 @@ fn deathRegistration(_: [*c]const c.atf_tc_t) callconv(.c) void {
     op468_facts(&facts);
     _ = c.printf("invalid_registration cancel_expected=1 cancel_observed=%u terminal_expected=1 terminal_observed=%u releases_expected=0 releases_observed=%u wait_rc=%d\n", canceled, callbacks, facts[2], rc);
     if (rc != 0 or canceled != 1 or callbacks != 1 or facts[2] != 0) c.atf_tc_fail("invalid registration did not finish cleanly");
-    death(false, false);
-    death(true, false);
 }
 fn lateDeath(_: [*c]const c.atf_tc_t) callconv(.c) void {
     death(false, true);
