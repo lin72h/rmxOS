@@ -866,7 +866,7 @@ kern_return_t
 launchd_mport_close_recv(mach_port_t name)
 {
 	kern_return_t kr = runtime_remove_mport(name);
-	if (kr != KERN_SUCCESS) {
+	if (kr != KERN_SUCCESS && kr != KERN_NOT_IN_SET) {
 		return errno = kr;
 	}
 	return errno = mach_port_mod_refs(mach_task_self(), name, MACH_PORT_RIGHT_RECEIVE, -1);
