@@ -29,3 +29,4 @@ mach_identity_test: ${.CURDIR}/mach_identity.zig ${.CURDIR}/file_message.zig
 .include <bsd.test.mk>
 
 mach_entry_knote_test: ${.CURDIR}/revocation.zig
+mach_identity_test: ${.CURDIR}/reply_audit.zig

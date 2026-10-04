@@ -206,3 +206,10 @@ callback with postclose held open, then a rights-bearing message. Base FAIL:
 revoked entry can dequeue and empty receive does not wake. Fixed PASS:
 PORT_DIED before delivery, one message/right retained, admission pin balanced,
 and postclose/member destruction releases the queued send right.
+
+## op461 F2
+`kernel_reply_audit`: a real task MIG request runs a fixture routine which
+poisons the allocated reply trailer before ipc_kobject_server initializes it.
+The reply is queued and received with AUDIT via mach_msg. Base FAIL: audit
+contains 0xa5. Fixed PASS: every word equals KERNEL_AUDIT_TOKEN (all zero).
+An observed routine marker prevents zeroed allocation hiding the omission.

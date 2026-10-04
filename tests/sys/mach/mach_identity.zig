@@ -13,6 +13,7 @@ const c = @cImport({
 const Identity = extern struct { sender: [2]u32, audit: [8]u32 };
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 var tc: c.atf_tc_t = undefined;
+var reply_tc: c.atf_tc_t = undefined;
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "descr", "%s", "Mach send trailer uses the sender's current credentials");
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "10");
@@ -44,8 +45,16 @@ fn cleanup(_: [*c]const c.atf_tc_t) callconv(.c) void {
 fn addTests(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     const err = c.atf_tc_init(&tc, "live_credentials", &head, &body, &cleanup, c.atf_tp_get_config(tp));
     if (c.atf_is_error(err)) return err;
-    return c.atf_tp_add_tc(tp, &tc);
+    const a = c.atf_tp_add_tc(tp, &tc);
+    if (c.atf_is_error(a)) return a;
+    const e = c.atf_tc_init(&reply_tc, "kernel_reply_audit", &head, &replyBody, &cleanup, c.atf_tp_get_config(tp));
+    if (c.atf_is_error(e)) return e;
+    return c.atf_tp_add_tc(tp, &reply_tc);
 }
 pub export fn main(argc: c_int, argv: [*c][*c]u8) c_int {
     return atf_tp_main(argc, argv, &addTests);
+}
+
+fn replyBody(t: [*c]const c.atf_tc_t) callconv(.c) void {
+    @import("reply_audit.zig").body(t);
 }

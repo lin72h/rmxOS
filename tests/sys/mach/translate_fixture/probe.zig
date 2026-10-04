@@ -390,3 +390,42 @@ export fn rmx_revoke_control(command: u64, out: [*]u32) c_int {
     }
     return 0;
 }
+extern fn rmx_mig_slot_num(u32) c_int;
+extern fn rmx_mig_slot_set(u32, u32) void;
+extern fn rmx_mig_trailer(*anyopaque) [*]u8;
+extern fn rmx_mig_trailer_size() u32;
+extern fn rmx_mig_success(*anyopaque) void;
+var mig_slot: ?u32 = null;
+var mig_poisoned: u32 = 0;
+export fn rmx_poison_reply(_: *anyopaque, reply: *anyopaque) void {
+    const bytes = rmx_mig_trailer(reply);
+    @memset(bytes[0..rmx_mig_trailer_size()], 0xa5);
+    rmx_mig_success(reply);
+    @atomicStore(u32, &mig_poisoned, 1, .release);
+}
+export fn rmx_mig_control(command: u32, out: *u32) c_int {
+    switch (command) {
+        1 => {
+            if (mig_slot != null) return 16;
+            for (0..1024) |i| {
+                const slot: u32 = @intCast(i);
+                if (rmx_mig_slot_num(slot) == 0) {
+                    mig_slot = slot;
+                    const id = 461 * 1024 + slot;
+                    rmx_mig_slot_set(slot, id);
+                    out.* = id;
+                    @atomicStore(u32, &mig_poisoned, 0, .release);
+                    return 0;
+                }
+            }
+            return 12;
+        },
+        2 => {
+            rmx_mig_slot_set(mig_slot orelse return 22, 0);
+            mig_slot = null;
+        },
+        3 => out.* = @atomicLoad(u32, &mig_poisoned, .acquire),
+        else => return 22,
+    }
+    return 0;
+}
