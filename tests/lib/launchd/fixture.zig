@@ -32,6 +32,7 @@ extern fn op484_port_index(u32) usize;
 extern fn op484_demand_set() u32;
 extern fn op484_request_size() u32;
 extern fn runtime_add_mport(u32, ?*anyopaque) c_int;
+extern fn runtime_remove_mport(u32) c_int;
 extern fn launchd_mport_close_recv(u32) c_int;
 extern fn do_mach_notify_dead_name(u32, u32) c_int;
 extern fn kevent_mod(usize, i16, u16, u32, isize, ?*anyopaque) c_int;
@@ -351,6 +352,8 @@ pub export fn op484_drain_begin(name: u32, status: c_int, crashed: c_int) void {
         // Earlier destruction lets job launch or a later service reuse the name.
         if (d.invalidate_on_drain) {
             d.invalidate_on_drain = false;
+            const detached_result = runtime_remove_mport(name);
+            errorIf(detached_result != 0 and detached_result != c.KERN_NOT_IN_SET, 18);
             errorIf(c.mach_port_mod_refs(c.mach_task_self(), name, c.MACH_PORT_RIGHT_RECEIVE, -1) != 0, 18);
         }
 
