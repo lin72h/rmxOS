@@ -336,3 +336,88 @@ int rmx_fixture_retire_waiter(void *set, void *port) {
  return (retiring);
 }
 uint32_t rmx_fixture_object_refs(void *p) { return (atomic_load_acq_int(&((ipc_object_t)p)->io_references)); }
+/* op461: project real fileops phases and admitted wait enrollment. */
+#include <sys/mach/ipc/ipc_mqueue.h>
+struct revocation_state {
+ struct file *fp;
+ ipc_entry_t entry;
+ ipc_object_t object;
+ ipc_port_t member, carried;
+ struct thread *receiver;
+};
+static struct revocation_state revoke_state;
+int rmx_revoke_prepare(uint32_t name, uint32_t member);
+void rmx_revoke_thread(void);
+void rmx_revoke_thread_done(void);
+void rmx_revoke_facts(uint32_t *);
+void rmx_revoke_phase(int);
+int rmx_revoke_deliver(void);
+void rmx_revoke_finish(void);
+int rmx_revoke_prepare(uint32_t name, uint32_t member) {
+ struct revocation_state *s = &revoke_state;
+ cap_rights_t rights;
+ int error = fget(curthread, name, cap_rights_init(&rights), &s->fp);
+ if (error) return (error);
+ s->entry = s->fp->f_data;
+ is_read_lock(s->entry->ie_space);
+ s->object = s->entry->ie_object;
+ ipc_entry_reference(s->entry); io_reference(s->object);
+ is_read_unlock(s->entry->ie_space);
+ s->member = rmx_fixture_receive_hold(member);
+ s->carried = ipc_port_alloc_kernel();
+ s->receiver = NULL;
+ return (s->member && s->carried ? 0 : EINVAL);
+}
+void rmx_revoke_thread(void) { revoke_state.receiver = curthread; }
+void rmx_revoke_thread_done(void) { revoke_state.receiver = NULL; }
+void rmx_revoke_facts(uint32_t *out) {
+ struct revocation_state *s = &revoke_state;
+ struct thread *td = s->receiver;
+ out[0] = 0;
+ if (td) { thread_lock(td); out[0] = td->td_wchan == s->object; thread_unlock(td); }
+ is_read_lock(s->entry->ie_space);
+ out[1] = s->entry->ie_revoked;
+ out[2] = s->entry->ie_references;
+ is_read_unlock(s->entry->ie_space);
+ io_lock(s->object); out[3] = s->object->io_references; io_unlock(s->object);
+ ip_lock(s->member); out[4] = s->member->ip_msgcount; ip_unlock(s->member);
+ ip_lock(s->carried); out[5] = s->carried->ip_srights; ip_unlock(s->carried);
+}
+void rmx_revoke_phase(int post) {
+ struct file *fp = revoke_state.fp;
+ if (post) fp->f_ops->fo_fdpostclose(fp, -1, curthread);
+ else fp->f_ops->fo_fdclose(fp, -1, curthread);
+}
+int rmx_revoke_deliver(void) {
+ struct revocation_state *s = &revoke_state;
+ struct { mach_msg_header_t head; mach_msg_body_t body; mach_msg_port_descriptor_t right; } message = {0};
+ ipc_kmsg_t kmsg;
+ mach_msg_return_t mr;
+ message.head.msgh_bits = MACH_MSGH_BITS_COMPLEX | MACH_MSGH_BITS(MACH_MSG_TYPE_PORT_SEND,0);
+ message.head.msgh_size = sizeof(message);
+ message.head.msgh_remote_port = (mach_port_t)ipc_port_make_send(s->member);
+ message.head.msgh_id = 46101;
+ message.body.msgh_descriptor_count = 1;
+ message.right.name = (mach_port_t)ipc_port_make_send(s->carried);
+ message.right.disposition = MACH_MSG_TYPE_PORT_SEND;
+ message.right.type = MACH_MSG_PORT_DESCRIPTOR;
+ mr = ipc_kmsg_get_from_kernel(&message.head, sizeof(message), &kmsg);
+ if (mr != MACH_MSG_SUCCESS) return (mr);
+ return (ipc_mqueue_send(kmsg, MACH_SEND_ALWAYS, 0));
+}
+void rmx_revoke_finish(void) {
+ struct revocation_state *s = &revoke_state;
+ ipc_entry_put(s->entry); ipc_object_release(s->object);
+ ip_release(s->member); ipc_port_dealloc_kernel(s->carried);
+ fdrop(s->fp,curthread); bzero(s,sizeof(*s));
+}
+extern int rmx_revoke_control(uint64_t, uint32_t *);
+static int revoke_sysctl(SYSCTL_HANDLER_ARGS) {
+ uint64_t command; uint32_t out[8] = {0}; int error;
+ error=SYSCTL_IN(req,&command,sizeof(command));
+ if (!error) error=rmx_revoke_control(command,out);
+ if (error) return (error);
+ return (SYSCTL_OUT(req,out,sizeof(out)));
+}
+SYSCTL_PROC(_debug, OID_AUTO, rmx_revoke_control, CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE,
+ NULL,0,revoke_sysctl,"S,revocation","Admitted receive entry revocation before postclose");

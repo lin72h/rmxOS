@@ -14,6 +14,7 @@ const c = @cImport({
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 var tc: c.atf_tc_t = undefined;
+var revoke_cases: [2]c.atf_tc_t = undefined;
 var pin_cases: [3]c.atf_tc_t = undefined;
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "descr", "%s", "Destroying a Mach port set removes its registered knote");
@@ -44,6 +45,12 @@ fn addTests(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
         const e = c.atf_tc_init(&pin_cases[i], name, &pinHead, if (i == 0) &sendPin else if (i == 1) &movePin else &retirePin, &pinCleanup, c.atf_tp_get_config(tp));
         if (c.atf_is_error(e)) return e;
         const a = c.atf_tp_add_tc(tp, &pin_cases[i]);
+        if (c.atf_is_error(a)) return a;
+    }
+    for ([_][*:0]const u8{ "revoked_port", "revoked_set" }, 0..) |name, i| {
+        const e = c.atf_tc_init(&revoke_cases[i], name, &pinHead, &revokedBody, &pinCleanup, c.atf_tp_get_config(tp));
+        if (c.atf_is_error(e)) return e;
+        const a = c.atf_tp_add_tc(tp, &revoke_cases[i]);
         if (c.atf_is_error(a)) return a;
     }
     return c.atf_no_error();
@@ -151,4 +158,8 @@ fn retirePin(t: [*c]const c.atf_tc_t) callconv(.c) void {
     _ = c.printf("pset_retire_pin expected_waiter=1 observed_waiter=%d expected_refs=3 observed_refs=%d\n", observed.result, observed.owned);
     if (observed.result != 1 or !joined) c.atf_tc_fail("controlled retirement interlock failed");
     if (observed.owned != 3) c.atf_tc_fail("retiring set lost its member storage pin while dropping its lock");
+}
+
+fn revokedBody(t: [*c]const c.atf_tc_t) callconv(.c) void {
+    @import("revocation.zig").body(t);
 }

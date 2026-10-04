@@ -27,3 +27,5 @@ mach_identity_test: ${.CURDIR}/mach_identity.zig ${.CURDIR}/file_message.zig
 	    -I${SRCTOP}/sys ${ATF_C_ARCHIVE} -femit-bin=${.TARGET}
 
 .include <bsd.test.mk>
+
+mach_entry_knote_test: ${.CURDIR}/revocation.zig

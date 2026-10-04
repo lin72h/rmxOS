@@ -367,3 +367,26 @@ export fn rmx_copyout_observe(command: u64, out: *Observation) c_int {
     }
     return 0;
 }
+extern fn rmx_revoke_prepare(u32, u32) c_int;
+extern fn rmx_revoke_thread() void;
+extern fn rmx_revoke_thread_done() void;
+extern fn rmx_revoke_facts([*]u32) void;
+extern fn rmx_revoke_phase(c_int) void;
+extern fn rmx_revoke_deliver() c_int;
+extern fn rmx_revoke_finish() void;
+var revoke_name: u32 = 0;
+export fn rmx_revoke_control(command: u64, out: [*]u32) c_int {
+    switch (command >> 32) {
+        1 => revoke_name = @truncate(command),
+        2 => return rmx_revoke_prepare(revoke_name, @truncate(command)),
+        3 => rmx_revoke_thread(),
+        4 => rmx_revoke_facts(out),
+        5 => rmx_revoke_phase(0),
+        6 => return rmx_revoke_deliver(),
+        7 => rmx_revoke_phase(1),
+        8 => rmx_revoke_finish(),
+        9 => rmx_revoke_thread_done(),
+        else => return 22,
+    }
+    return 0;
+}

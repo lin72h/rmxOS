@@ -199,3 +199,10 @@ This establishes the lock-drop interval without requiring MTX_CONTESTED.
 `mach_short_kevent_test:queued_member`: base FAIL (set receiver times out
 after an already queued port joins); fixed PASS (membership wakes dequeue).
 Receiver admission uses a scheduling pause, so this is scheduling stress.
+
+## op461 F1
+`revoked_port` and `revoked_set`: controlled enrolled receive, actual fdclose
+callback with postclose held open, then a rights-bearing message. Base FAIL:
+revoked entry can dequeue and empty receive does not wake. Fixed PASS:
+PORT_DIED before delivery, one message/right retained, admission pin balanced,
+and postclose/member destruction releases the queued send right.
