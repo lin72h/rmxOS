@@ -207,19 +207,19 @@ init_pre_kevent(bool sflag)
 		single_user_mode = 1;
 		run_runcom = 0;
 	}
-	syslog(LOG_EMERG, "starting init_pre_kevent() single_user_pid=%d runcom_pid=%d\n",
+	launchd_syslog(LOG_EMERG, "starting init_pre_kevent() single_user_pid=%d runcom_pid=%d\n",
 		   single_user_pid, runcom_pid);
-	syslog(LOG_EMERG, "... single_user_mode=%d run_runcom=%d\n", single_user_mode, run_runcom);
+	launchd_syslog(LOG_EMERG, "... single_user_mode=%d run_runcom=%d\n", single_user_mode, run_runcom);
 	if (single_user_pid || runcom_pid) {
-		syslog(LOG_ERR, "skipping()\n");
+		launchd_syslog(LOG_ERR, "skipping()\n");
 		return;
 	}
 	if (single_user_mode) {
-		syslog(LOG_ERR, "single_user()\n");
+		launchd_syslog(LOG_ERR, "single_user()\n");
 		return single_user();
 	}
 	if (run_runcom) {
-		syslog(LOG_EMERG, "runcom()\n");
+		launchd_syslog(LOG_EMERG, "runcom()\n");
 		return runcom();
 	}
 	/*
@@ -229,16 +229,16 @@ init_pre_kevent(bool sflag)
 	 * than level 1, then put the kernel into secure mode.
 	 */
 	if (getsecuritylevel() == 0) {
-		syslog(LOG_ERR, "setsecuritylevel()");
+		launchd_syslog(LOG_ERR, "setsecuritylevel()");
 		setsecuritylevel(1);
 	}
 	TAILQ_FOREACH(s, &sessions, tqe) {
 		if (s->se_process == 0) {
-			syslog(LOG_ERR, "session_launch()");
+			launchd_syslog(LOG_ERR, "session_launch()");
 			session_launch(s);
 		}
 	}
-	syslog(LOG_ERR, "done init_pre_kevent()\n");
+	launchd_syslog(LOG_ERR, "done init_pre_kevent()\n");
 }
 
 static void
@@ -247,7 +247,13 @@ stall(const char *message, ...)
 	va_list ap;
 	va_start(ap, message);
 
-	vsyslog(LOG_ERR, message, ap);
+	struct launchd_syslog_attr attr = {
+		.from_name = launchd_label, .about_name = launchd_label,
+		.session_name = pid1_magic ? "System" : "Background",
+		.priority = LOG_ERR, .from_uid = launchd_uid,
+		.from_pid = getpid(), .about_pid = getpid(),
+	};
+	launchd_vsyslog(&attr, message, ap);
 	va_end(ap);
 	sleep(STALL_TIMEOUT);
 }
@@ -262,7 +268,7 @@ getsecuritylevel(void)
 	name[1] = KERN_SECURELVL;
 	len = sizeof (curlevel);
 	if (sysctl(name, 2, &curlevel, &len, NULL, 0) == -1) {
-		syslog(LOG_ALERT, "cannot get kernel security level: %m");
+		launchd_syslog(LOG_ALERT, "cannot get kernel security level: %m");
 		return -1;
 	}
 	return curlevel;
@@ -279,11 +285,11 @@ setsecuritylevel(int newlevel)
 	name[0] = CTL_KERN;
 	name[1] = KERN_SECURELVL;
 	if (sysctl(name, 2, NULL, NULL, &newlevel, sizeof newlevel) == -1) {
-		syslog(LOG_ALERT, "cannot change kernel security level from %d to %d: %m",
+		launchd_syslog(LOG_ALERT, "cannot change kernel security level from %d to %d: %m",
 				curlevel, newlevel);
 		return;
 	}
-	syslog(LOG_INFO, "kernel security level changed from %d to %d",
+	launchd_syslog(LOG_INFO, "kernel security level changed from %d to %d",
 	    curlevel, newlevel);
 }
 
@@ -317,7 +323,7 @@ single_user(void)
 		setsecuritylevel(0);
 	
 	if ((single_user_pid = launchd_fork()) == -1) {
-		syslog(LOG_ERR, "can't fork single-user shell, trying again: %m");
+		launchd_syslog(LOG_ERR, "can't fork single-user shell, trying again: %m");
 		return;
 	} else if (single_user_pid == 0) {
 #if 0
@@ -342,7 +348,7 @@ single_user(void)
 		argv[0] = "-sh";
 		argv[1] = NULL;
 		execv(_PATH_BSHELL, __DECONST(char *const *, argv));
-		syslog(LOG_ERR, "can't exec %s for single user: %m", _PATH_BSHELL);
+		launchd_syslog(LOG_ERR, "can't exec %s for single user: %m", _PATH_BSHELL);
 		sleep(STALL_TIMEOUT);
 		launchd_exit(EXIT_FAILURE);
 	} else {
@@ -361,11 +367,11 @@ single_user_callback(void *obj __attribute__((unused)), struct kevent *kev __att
 		return;
 
 	if (WIFEXITED(status) && WEXITSTATUS(status) == EXIT_SUCCESS) {
-		syslog(LOG_INFO, "single user shell terminated, restarting");
+		launchd_syslog(LOG_INFO, "single user shell terminated, restarting");
 		run_runcom = true;
 		single_user_mode = false;
 	} else {
-		syslog(LOG_INFO, "single user shell terminated.");
+		launchd_syslog(LOG_INFO, "single user shell terminated.");
 		run_runcom = false;
 		if (WTERMSIG(status) != SIGKILL)
 			single_user_mode = true;
@@ -387,9 +393,9 @@ runcom(void)
 	int vdisable;
 
 	gettimeofday(&runcom_start_tv, NULL);
-	syslog(LOG_ERR, "launchd_fork()\n");
+	launchd_syslog(LOG_ERR, "launchd_fork()\n");
 	if ((runcom_pid = launchd_fork()) == -1) {
-		syslog(LOG_ERR, "can't fork for %s on %s: %m", _PATH_BSHELL, _PATH_RUNCOM);
+		launchd_syslog(LOG_ERR, "can't fork for %s on %s: %m", _PATH_BSHELL, _PATH_RUNCOM);
 		sleep(STALL_TIMEOUT);
 		runcom_pid = 0;
 		single_user_mode = true;
@@ -398,21 +404,21 @@ runcom(void)
 		run_runcom = false;
 		if (kevent_mod(runcom_pid, EVFILT_PROC, EV_ADD, 
 					   NOTE_EXIT, 0, &kqruncom_callback) == -1) {
-			syslog(LOG_ERR, "runcom_callback() ... ");
+			launchd_syslog(LOG_ERR, "runcom_callback() ... ");
 			runcom_callback(NULL, NULL);
-			syslog(LOG_ERR, "done\n");
+			launchd_syslog(LOG_ERR, "done\n");
 		}
 		return;
 	}
-	syslog(LOG_ERR, "setctty()\n");
+	launchd_syslog(LOG_ERR, "setctty()\n");
 	setctty(_PATH_CONSOLE, 0);
 	
-	syslog(LOG_ERR, "fpathconf()\n");
+	launchd_syslog(LOG_ERR, "fpathconf()\n");
 	sleep(1);
 	if ((vdisable = fpathconf(STDIN_FILENO, _PC_VDISABLE)) == -1) {
-		syslog(LOG_ERR, "fpathconf(\"%s\") %m", _PATH_CONSOLE);
+		launchd_syslog(LOG_ERR, "fpathconf(\"%s\") %m", _PATH_CONSOLE);
 	} else if (tcgetattr(STDIN_FILENO, &term) == -1) {
-		syslog(LOG_ERR, "tcgetattr(\"%s\") %m", _PATH_CONSOLE);
+		launchd_syslog(LOG_ERR, "tcgetattr(\"%s\") %m", _PATH_CONSOLE);
 	} else {
 		term.c_cc[VINTR] = vdisable;
 		term.c_cc[VKILL] = vdisable;
@@ -422,17 +428,17 @@ runcom(void)
 		term.c_cc[VSTOP] = vdisable;
 		term.c_cc[VDSUSP] = vdisable;
 		sleep(1);
-		syslog(LOG_ERR, "tcsetattr(STDIN_FILENO) ...");
+		launchd_syslog(LOG_ERR, "tcsetattr(STDIN_FILENO) ...");
 		if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &term) == -1)
-			syslog(LOG_WARNING, "tcsetattr(\"%s\") %m", _PATH_CONSOLE);
-		syslog(LOG_ERR, "done\n");
+			launchd_syslog(LOG_WARNING, "tcsetattr(\"%s\") %m", _PATH_CONSOLE);
+		launchd_syslog(LOG_ERR, "done\n");
 	}
 	sleep(1);
-	syslog(LOG_ERR, "setenv\n");
+	launchd_syslog(LOG_ERR, "setenv\n");
 	setenv("SafeBoot", runcom_safe ? "-x" : "", 1);
 	setenv("FsckSlash", runcom_fsck ? "-F" : "", 1);
 	setenv("NetBoot", runcom_netboot ? "-N" : "", 1);
-	syslog(LOG_ERR, "execv\n");
+	launchd_syslog(LOG_ERR, "execv\n");
 	{
 		char _sh[] = "sh";
 		int err;
@@ -440,9 +446,9 @@ runcom(void)
 		argv[0] = _sh;
 		argv[1] = __DECONST(char *, _PATH_RUNCOM);
 		argv[2] = 0;
-		syslog(LOG_ERR, "execv(%s, %p)\n", _PATH_BSHELL, argv);	
+		launchd_syslog(LOG_ERR, "execv(%s, %p)\n", _PATH_BSHELL, argv);	
 		err = execv(_PATH_BSHELL, argv);
-		syslog(LOG_ERR, "execv err=%d errno=%d", err, errno);
+		launchd_syslog(LOG_ERR, "execv err=%d errno=%d", err, errno);
 		sleep(2);
 	}
 	stall("can't exec %s for %s: %m", _PATH_BSHELL, _PATH_RUNCOM);
@@ -460,12 +466,12 @@ runcom_callback(void *obj __attribute__((unused)), struct kevent *kev __attribut
 	timersub(&runcom_end_tv, &runcom_start_tv, &runcom_total_tv);
 	sec = runcom_total_tv.tv_sec;
 	sec += (double)runcom_total_tv.tv_usec / (double)1000000;
-	syslog(LOG_INFO, "%s finished in: %.3f seconds", _PATH_RUNCOM, sec);
+	launchd_syslog(LOG_INFO, "%s finished in: %.3f seconds", _PATH_RUNCOM, sec);
 
 	if (launchd_assumes(waitpid(runcom_pid, &status, 0) == runcom_pid)) {
 		runcom_pid = 0;
 	} else {
-		syslog(LOG_ERR, "going to single user mode");
+		launchd_syslog(LOG_ERR, "going to single user mode");
 		single_user_mode = true;
 		return;
 	}
@@ -479,7 +485,7 @@ runcom_callback(void *obj __attribute__((unused)), struct kevent *kev __attribut
 		return;
 	}
 
-	syslog(LOG_ERR, "%s on %s terminated abnormally, going to single user mode",
+	launchd_syslog(LOG_ERR, "%s on %s terminated abnormally, going to single user mode",
 			_PATH_BSHELL, _PATH_RUNCOM);
 	single_user_mode = true;
 }
@@ -586,7 +592,7 @@ setupargv(sp, typ)
     return 1;
 
 bad_args:
-    syslog(LOG_WARNING, "can't parse %s for port %s", type, sp->se_device);
+    launchd_syslog(LOG_WARNING, "can't parse %s for port %s", type, sp->se_device);
     return 0;
 }
 
@@ -658,7 +664,7 @@ session_launch(session_t s)
 	pid = launchd_fork();
 
 	if (pid == -1) {
-		syslog(LOG_ERR, "can't fork for %s on port %s: %m",
+		launchd_syslog(LOG_ERR, "can't fork for %s on port %s: %m",
 				session_type, s->se_device);
 		return;
 	}
@@ -674,7 +680,7 @@ session_launch(session_t s)
 
 	if (current_time > s->se_started &&
 	    current_time - s->se_started < GETTY_SPACING) {
-		syslog(LOG_WARNING, "%s repeating too quickly on port %s, sleeping",
+		launchd_syslog(LOG_WARNING, "%s repeating too quickly on port %s, sleeping",
 		        session_type, s->se_device);
 		sleep(GETTY_SLEEP);
 	}
@@ -715,7 +721,7 @@ session_reap(session_t s)
 		return;
 
 	if (WIFSIGNALED(status)) {
-		syslog(LOG_WARNING, "%s port %s exited abnormally: %s",
+		launchd_syslog(LOG_WARNING, "%s port %s exited abnormally: %s",
 				s->se_getty.path, s->se_device, strsignal(WTERMSIG(status)));
 		s->se_flags |= SE_ONERROR; 
 	} else if (WEXITSTATUS(status) == REALLY_EXIT_TO_CONSOLE) {
@@ -760,7 +766,7 @@ update_ttys(void)
 		}
 
 		if (sp->se_index != session_index) {
-			syslog(LOG_INFO, "port %s changed utmp index from %d to %d",
+			launchd_syslog(LOG_INFO, "port %s changed utmp index from %d to %d",
 			       sp->se_device, sp->se_index,
 			       session_index);
 			sp->se_index = session_index;
@@ -775,7 +781,7 @@ update_ttys(void)
 		sp->se_flags &= ~SE_SHUTDOWN;
 
 		if (setupargv(sp, typ) == 0) {
-			syslog(LOG_WARNING, "can't parse getty for port %s",
+			launchd_syslog(LOG_WARNING, "can't parse getty for port %s",
 				sp->se_device);
 			session_free(sp);
 		}

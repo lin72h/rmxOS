@@ -191,7 +191,7 @@ audit_set_terminal_host(uint32_t *m)
         *m = 0;
         len = sizeof(*m);
         if (sysctl(name, 2, m, &len, NULL, 0) != 0) {
-                syslog(LOG_ERR, "sysctl() failed (%s)", strerror(errno));
+                launchd_syslog(LOG_ERR, "sysctl() failed (%s)", strerror(errno));
                 return (kAUSysctlErr);
         }
         return (kAUNoErr);
@@ -1156,7 +1156,7 @@ launchd_runtime2(mach_msg_size_t msg_size)
 		int result;
 		result = xpc_pipe_try_receive(ipc_port_set, &request, &recvp, launchd_mig_demux, msg_size, 0);
 		if (result != 1)
-			syslog(LOG_ERR, "result=%d", result);
+			launchd_syslog(LOG_ERR, "result=%d", result);
 		if (result == 0 && request) {
 			boolean_t handled = false;
 			time_of_mach_msg_return = runtime_get_opaque_time();

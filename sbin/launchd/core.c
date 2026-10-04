@@ -1427,7 +1427,7 @@ jobmgr_remove(jobmgr_t jm)
 		jobmgr_log_stray_children(jm, true);
 		jobmgr_log(root_jobmgr, LOG_NOTICE | LOG_CONSOLE, "About to call: reboot(%s).", reboot_flags_to_C_names(jm->reboot_flags));
 
-		syslog(LOG_CRIT, "About to call reboot, flags = %#x (%s)", jm->reboot_flags, reboot_flags_to_C_names(jm->reboot_flags));
+		launchd_syslog(LOG_CRIT, "About to call reboot, flags = %#x (%s)", jm->reboot_flags, reboot_flags_to_C_names(jm->reboot_flags));
 		launchd_closelog();
 		(void)jobmgr_assumes_zero_p(jm, reboot(jm->reboot_flags));
 	} else {
@@ -4033,7 +4033,7 @@ job_dispatch(job_t j, bool kickstart)
 	    strcmp(j->label, "com.rmxos.console-getty") == 0)
 		return (j);
 	// Don't dispatch a job if it has no audit session set.
-	syslog(LOG_DEBUG, "dispatching job j=%p kickstart=%d", j, kickstart);
+	launchd_syslog(LOG_DEBUG, "dispatching job j=%p kickstart=%d", j, kickstart);
 	#ifdef notyet
 	if (!uuid_is_null(j->expected_audit_uuid)) {
 		job_log(j, LOG_DEBUG, "Job is still awaiting its audit session UUID. Not dispatching.");
@@ -4543,7 +4543,7 @@ job_start(job_t j)
 		break;
 	case 0:
 		if (unlikely(_vproc_post_fork_ping())) {
-			syslog(LOG_ERR, "_vproc_post_fork_ping() fail");
+			launchd_syslog(LOG_ERR, "_vproc_post_fork_ping() fail");
 			DEBUG_EXIT(EXIT_FAILURE);
 		}
 
@@ -4693,7 +4693,7 @@ job_start_child(job_t j)
 			}
 			if (glob(j->argv[i], gflags, NULL, &g) != 0) {
 				job_log_error(j, LOG_ERR, "glob(\"%s\")", j->argv[i]);
-				syslog(LOG_ERR, "glob error");
+				launchd_syslog(LOG_ERR, "glob error");
 				DEBUG_EXIT(EXIT_FAILURE);
 			}
 		}
@@ -4862,13 +4862,13 @@ job_start_child(job_t j)
 #else
 	errno = psf(NULL, file2exec, NULL, &spattr, (char *const *)argv, environ);
 #endif
-	syslog(LOG_ERR, "job_start failed %s\n", strerror(errno));
+	launchd_syslog(LOG_ERR, "job_start failed %s\n", strerror(errno));
 	sleep(20);
 	
 #if HAVE_SANDBOX && !TARGET_OS_EMBEDDED
 out_bad:
 #endif
-	syslog(LOG_ERR, "errno=%d", errno);
+	launchd_syslog(LOG_ERR, "errno=%d", errno);
 	DEBUG_EXIT(errno);
 }
 
@@ -6960,7 +6960,7 @@ jobmgr_new(jobmgr_t jm, mach_port_t requestorport, mach_port_t transfer_port, bo
 	__OS_COMPILETIME_ASSERT__(offsetof(struct jobmgr_s, kqjobmgr_callback) == 0);
 
 	if (unlikely(jm && requestorport == MACH_PORT_NULL)) {
-		syslog(LOG_ERR, "no requester port!!!!");
+		launchd_syslog(LOG_ERR, "no requester port!!!!");
 		jobmgr_log(jm, LOG_ERR, "Mach sub-bootstrap create request requires a requester port");
 		return NULL;
 	}
@@ -6983,15 +6983,15 @@ jobmgr_new(jobmgr_t jm, mach_port_t requestorport, mach_port_t transfer_port, bo
 	if ((jmr->parentmgr = jm)) {
 		SLIST_INSERT_HEAD(&jm->submgrs, jmr, sle);
 	}
-	syslog(LOG_ERR, "if jm=%p then launchd_mport_notify_req transfer_port=%d", jm, transfer_port);
+	launchd_syslog(LOG_ERR, "if jm=%p then launchd_mport_notify_req transfer_port=%d", jm, transfer_port);
 	if (jm && jobmgr_assumes_zero(jmr, launchd_mport_notify_req(jmr->req_port, MACH_NOTIFY_DEAD_NAME)) != KERN_SUCCESS) {
-		syslog(LOG_ERR, "launchd_mport_notify_req failed!!!");
+		launchd_syslog(LOG_ERR, "launchd_mport_notify_req failed!!!");
 		sleep(1);
 		goto out_bad;
 	}
 
 	if (transfer_port != MACH_PORT_NULL) {
-		syslog(LOG_ERR, "transfer_port=%d\n", transfer_port);
+		launchd_syslog(LOG_ERR, "transfer_port=%d\n", transfer_port);
 		(void)jobmgr_assumes(jmr, jm != NULL);
 		jmr->jm_port = transfer_port;
 	} else if (!jm && !pid1_magic && uflag == false) {
@@ -7023,16 +7023,16 @@ jobmgr_new(jobmgr_t jm, mach_port_t requestorport, mach_port_t transfer_port, bo
 		// We set this explicitly as we start each child
 		os_assert_zero(launchd_set_bport(MACH_PORT_NULL));
 	} else if (jobmgr_assumes_zero(jmr, launchd_mport_create_recv(&jmr->jm_port)) != KERN_SUCCESS) {
-		syslog(LOG_ERR, "launchd_mport_create_recv failed");
+		launchd_syslog(LOG_ERR, "launchd_mport_create_recv failed");
 		goto out_bad;
 	}
-		syslog(LOG_ERR, "launchd_mport_create_recv(=%d)\n", jmr->jm_port);
+		launchd_syslog(LOG_ERR, "launchd_mport_create_recv(=%d)\n", jmr->jm_port);
 	if (!name) {
 		sprintf(jmr->name_init, "%u", MACH_PORT_INDEX(jmr->jm_port));
 	}
 
 	if (!jm) {
-		syslog(LOG_ERR, "kevent_moddding");
+		launchd_syslog(LOG_ERR, "kevent_moddding");
 		if (!pid1_magic) {
 			(void)jobmgr_assumes_zero_p(jmr, kevent_mod(SIGTERM, EVFILT_SIGNAL, EV_ADD, 0, 0, jmr));
 			(void)jobmgr_assumes_zero_p(jmr, kevent_mod(SIGUSR1, EVFILT_SIGNAL, EV_ADD, 0, 0, jmr));
@@ -7043,7 +7043,7 @@ jobmgr_new(jobmgr_t jm, mach_port_t requestorport, mach_port_t transfer_port, bo
 	}
 
 	if (name && !skip_init) {
-		syslog(LOG_ERR, "jobmgr_init_session");
+		launchd_syslog(LOG_ERR, "jobmgr_init_session");
 		bootstrapper = jobmgr_init_session(jmr, name, sflag);
 	}
 
@@ -7052,7 +7052,7 @@ jobmgr_new(jobmgr_t jm, mach_port_t requestorport, mach_port_t transfer_port, bo
 			goto out_bad;
 		}
 	}
-	syslog(LOG_ERR, "jobmgr created!!!!");
+	launchd_syslog(LOG_ERR, "jobmgr created!!!!");
 	jobmgr_log(jmr, LOG_DEBUG, "Created job manager%s%s", jm ? " with parent: " : ".", jm ? jm->name : "");
 
 	if (bootstrapper) {
@@ -11949,7 +11949,7 @@ jobmgr_init(bool sflag)
 	const char *root_session_type = pid1_magic ? VPROCMGR_SESSION_SYSTEM : VPROCMGR_SESSION_BACKGROUND;
 	SLIST_INIT(&s_curious_jobs);
 	LIST_INIT(&s_needing_sessions);
-	syslog(LOG_ERR, "starting root_jobmgr");
+	launchd_syslog(LOG_ERR, "starting root_jobmgr");
 	os_assert((root_jobmgr = jobmgr_new(NULL, MACH_PORT_NULL, MACH_PORT_NULL,
 	    sflag, root_session_type, uflag, MACH_PORT_NULL)) != NULL);
 #if 0	
@@ -12191,7 +12191,7 @@ _log_launchd_bug(const char *rcs_rev, const char *path, unsigned int line, const
                         *rcs_rev_tmp = '\0';
         }
 
-        syslog(LOG_NOTICE, "Bug: %s:%u (%s):%u: %s", file, line, buf, saved_errno, test);
+        launchd_syslog(LOG_NOTICE, "Bug: %s:%u (%s):%u: %s", file, line, buf, saved_errno, test);
 }
 
 pid_t

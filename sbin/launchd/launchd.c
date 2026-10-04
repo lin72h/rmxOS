@@ -127,7 +127,7 @@ mach_port_t bootstrap_port;
 void
 launchd_exit(int code)
 {
-	syslog(LOG_ERR, "exiting code %d errno %d", code, errno);
+	launchd_syslog(LOG_ERR, "exiting code %d errno %d", code, errno);
 	sleep(1);
 	_exit(code);
 }
@@ -441,7 +441,7 @@ do_pid1_crash_diagnosis_mode2(const char *msg)
 	fflush(stdout);
 
 	execl(_PATH_BSHELL, "-sh", NULL);
-	syslog(LOG_ERR, "can't exec %s for PID 1 crash debugging: %m", _PATH_BSHELL);
+	launchd_syslog(LOG_ERR, "can't exec %s for PID 1 crash debugging: %m", _PATH_BSHELL);
 	DEBUG_EXIT(EXIT_FAILURE);
 }
 

@@ -73,7 +73,7 @@ extern bool uflag;
 
 #define DEBUG_EXIT(x) \
 	do { \
-		syslog(LOG_EMERG | LOG_CONSOLE, "%s(%d):  about to exit", __FUNCTION__, __LINE__); \
+		launchd_syslog(LOG_EMERG | LOG_CONSOLE, "%s(%d):  about to exit", __FUNCTION__, __LINE__); \
 		sleep(30); \
 		launchd_exit(x); \
 	} while (0)
