@@ -8,6 +8,7 @@ void op468_change(int, unsigned, uint64_t, uint64_t);
 void op468_event(int, uintptr_t);
 void op468_move(unsigned);
 void op468_deallocate(unsigned);
+void op468_registered(unsigned, unsigned, int);
 void op468_notification(unsigned, unsigned, unsigned);
 static int (*real_kevent)(int,const struct kevent*,int,struct kevent*,int,const struct timespec*);
 static kern_return_t (*real_move)(mach_port_t,mach_port_t,mach_port_t);
@@ -28,12 +29,12 @@ int kevent(int kq,const struct kevent *changes,int nc,struct kevent *events,int 
  return r;
 }
 kern_return_t mach_port_move_member(mach_port_t task,mach_port_t p,mach_port_t set) {
- pthread_once(&once,resolve);op468_move(p);return real_move(task,p,set);
+ pthread_once(&once,resolve);op468_move(p);kern_return_t kr=real_move(task,p,set);op468_registered(p,set,kr);return kr;
 }
 kern_return_t mach_port_deallocate(mach_port_t task,mach_port_t p) {
  pthread_once(&once,resolve);op468_deallocate(p);return real_deallocate(task,p);
 }
 kern_return_t mach_port_request_notification(mach_port_t task,mach_port_t p,mach_msg_id_t id,mach_port_mscount_t sync,mach_port_t notify,mach_msg_type_name_t type,mach_port_t *previous) {
  pthread_once(&once,resolve);op468_notification(task,p,notify);
- return real_notification(task,p,id,sync,notify,type,previous);
+ kern_return_t kr=real_notification(task,p,id,sync,notify,type,previous);op468_registered(p,notify,kr);return kr;
 }

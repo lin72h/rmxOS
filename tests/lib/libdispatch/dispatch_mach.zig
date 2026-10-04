@@ -74,6 +74,9 @@ pub export fn op468_deallocate(p: c_uint) void {
     if (p == @atomicLoad(c_uint, &fixture_watched, .seq_cst))
         _ = @atomicRmw(c_uint, &fixture_facts[2], .Add, 1, .seq_cst);
 }
+pub export fn op468_registered(p: c_uint, handle: c_uint, kr: c_int) void {
+    if (p == @atomicLoad(c_uint, &fixture_watched, .seq_cst) and handle != 0 and kr == 0) _ = c.sem_post(&registered);
+}
 pub export fn op468_notification(task: c_uint, p: c_uint, notify: c_uint) void {
     if (p != @atomicLoad(c_uint, &fixture_watched, .seq_cst) or notify == 0) return;
     _ = @atomicRmw(c_uint, &fixture_facts[3], .Add, 1, .seq_cst);
@@ -161,7 +164,6 @@ fn source(p: u32, is_death: bool) Object {
     object = s;
     dispatch_source_set_event_handler_f(s, &sourceCall);
     dispatch_source_set_cancel_handler_f(s, &canceledCall);
-    dispatch_source_set_registration_handler_f(s, &signal);
     dispatch_resume(s);
     return s;
 }
@@ -200,7 +202,7 @@ fn large(_: [*c]const c.atf_tc_t) callconv(.c) void {
 fn copied(cancel: bool) void {
     setup();
     const p = port();
-    op468_configure(1, p);
+    op468_configure(0, p);
     if (cancel) {
         object = source(p, false);
         if (wait(&registered) != 0) c.atf_tc_fail("registration timeout");
@@ -209,6 +211,7 @@ fn copied(cancel: bool) void {
         object = dispatch_mach_create_f("op468", q, null, &channelCall);
         dispatch_mach_connect(object, p, 0, null);
     }
+    op468_configure(1, p);
     send(p, 44703, @sizeOf(c.mach_msg_header_t));
     const copy_rc = op468_wait_copied();
     if (copy_rc != 0) {
@@ -231,13 +234,13 @@ fn copied(cancel: bool) void {
     _ = c.printf("copied expected=1 observed=1 cancel_expected=1 cancel_observed=%u handler_expected=0 handler_observed=%u moves_expected=1 moves_observed=%u wait_rc=%d\n", canceled, callbacks, facts[1], rc);
     if (rc != 0 or canceled != 1 or callbacks != 0 or facts[1] != 1) c.atf_tc_fail("canceled copied record moved member or invoked handler");
     if (c.mach_port_mod_refs(c.mach_task_self(), p, c.MACH_PORT_RIGHT_RECEIVE, -1) != 0) c.atf_tc_fail("borrowed receive was released by source");
-    const reuse_kr = c.mach_port_allocate_name(c.mach_task_self(), c.MACH_PORT_RIGHT_RECEIVE, p);
-    if (reuse_kr != 0) c.atf_tc_fail("controlled name reuse kr=%d", reuse_kr);
-    const newer = p;
+    const newer = port();
+    if (newer != p) c.atf_tc_fail("reuse expected=%u observed=%u", p, newer);
     var typ: c.mach_port_type_t = 0;
     const kr = c.mach_port_type(c.mach_task_self(), newer, &typ);
     _ = c.printf("new_receive old_name=%u new_name=%u type_kr=%d type=%u\n", p, newer, kr, typ);
     if (kr != 0 or (typ & c.MACH_PORT_TYPE_RECEIVE) == 0) c.atf_tc_fail("unrelated receive damaged");
+    op468_configure(0, newer);
     object = source(newer, false);
     if (wait(&registered) != 0) c.atf_tc_fail("new source registration");
     dispatch_source_cancel(object);
@@ -253,11 +256,12 @@ fn death(during: bool, late: bool) void {
     setup();
     const p = port();
     if (c.mach_port_insert_right(c.mach_task_self(), p, p, c.MACH_MSG_TYPE_MAKE_SEND) != 0) c.atf_tc_fail("send setup");
-    op468_configure(if (during) 3 else if (late) 1 else 0, p);
+    op468_configure(if (during) 3 else 0, p);
     if (!during and !late) _ = c.mach_port_mod_refs(c.mach_task_self(), p, c.MACH_PORT_RIGHT_RECEIVE, -1);
     object = source(p, true);
     if (late) {
         if (wait(&registered) != 0) c.atf_tc_fail("death registration timeout");
+        op468_configure(1, p);
         _ = c.mach_port_mod_refs(c.mach_task_self(), p, c.MACH_PORT_RIGHT_RECEIVE, -1);
         const rc = op468_wait_copied();
         if (rc != 0) {
@@ -275,9 +279,8 @@ fn death(during: bool, late: bool) void {
     _ = c.printf("death during=%d late=%d cancel_expected=1 cancel_observed=%u callbacks=%u releases=%u refs_expected=1 refs_observed=%u refs_kr=%d wait_rc=%d\n", @as(c_int, @intFromBool(during)), @as(c_int, @intFromBool(late)), canceled, callbacks, facts[2], refs, kr, rc);
     if (rc != 0 or canceled != 1 or kr != 0 or refs != 1 or facts[2] != 1 or callbacks != (if (late) @as(u32, 0) else @as(u32, 1))) c.atf_tc_fail("death callback or extra uref imbalance");
     _ = c.mach_port_deallocate(c.mach_task_self(), p);
-    const reuse_kr = c.mach_port_allocate_name(c.mach_task_self(), c.MACH_PORT_RIGHT_RECEIVE, p);
-    if (reuse_kr != 0) c.atf_tc_fail("controlled name reuse kr=%d", reuse_kr);
-    const newer = p;
+    const newer = port();
+    if (newer != p) c.atf_tc_fail("reuse expected=%u observed=%u", p, newer);
     var typ: c.mach_port_type_t = 0;
     if (c.mach_port_type(c.mach_task_self(), newer, &typ) != 0 or (typ & c.MACH_PORT_TYPE_RECEIVE) == 0) c.atf_tc_fail("new receive affected by late death");
 }
