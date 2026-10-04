@@ -879,7 +879,21 @@ ipc_kmsg_get(
  *		MACH_SEND_NO_BUFFER	Couldn't allocate a message buffer.
  */
 
-extern mach_msg_return_t
+extern void
+ipc_kmsg_init_kernel_trailer(ipc_kmsg_t kmsg)
+{
+    mach_msg_max_trailer_t *trailer;
+
+    trailer = (mach_msg_max_trailer_t *)((char *)kmsg->ikm_header +
+        round_msg(kmsg->ikm_header->msgh_size));
+    bzero(trailer, sizeof(*trailer));
+    trailer->msgh_sender = KERNEL_SECURITY_TOKEN;
+    trailer->msgh_audit = KERNEL_AUDIT_TOKEN;
+    trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
+    trailer->msgh_trailer_size = MACH_MSG_TRAILER_MINIMUM_SIZE;
+}
+
+mach_msg_return_t
 ipc_kmsg_get_from_kernel(
 	mach_msg_header_t	*msg,
 	mach_msg_size_t		size,
@@ -887,7 +901,6 @@ ipc_kmsg_get_from_kernel(
 {
 	ipc_kmsg_t 	kmsg;
 	mach_msg_size_t	msg_and_trailer_size;
-	mach_msg_max_trailer_t *trailer;
 
 	assert(size >= sizeof(mach_msg_header_t));
 	assert((size & 3) == 0);
@@ -910,11 +923,7 @@ ipc_kmsg_get_from_kernel(
 	 * is initialized to the minimum (sizeof(mach_msg_trailer_t)), to optimize
 	 * the cases where no implicit data is requested.
 	 */
-	trailer = (mach_msg_max_trailer_t *) ((vm_offset_t)kmsg->ikm_header + size);
-	trailer->msgh_sender = KERNEL_SECURITY_TOKEN;
-	trailer->msgh_audit = KERNEL_AUDIT_TOKEN;
-	trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
-	trailer->msgh_trailer_size = MACH_MSG_TRAILER_MINIMUM_SIZE;
+	ipc_kmsg_init_kernel_trailer(kmsg);
 
 	*kmsgp = kmsg;
 	return MACH_MSG_SUCCESS;

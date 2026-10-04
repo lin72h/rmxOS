@@ -329,6 +329,9 @@ extern mach_msg_return_t ipc_kmsg_get(
 	ipc_space_t		space);
 
 /* Allocate a kernel message buffer and copy a kernel message to the buffer */
+/* Full identity for direct kernel producers; storage includes MAX_TRAILER_SIZE. */
+extern void ipc_kmsg_init_kernel_trailer(ipc_kmsg_t);
+
 extern mach_msg_return_t ipc_kmsg_get_from_kernel(
 	mach_msg_header_t	*msg,
 	mach_msg_size_t		size,

@@ -283,7 +283,6 @@ ipc_kobject_server(ipc_kmsg_t	request)
 	ipc_kmsg_t reply;
 	kern_return_t kr;
 	ipc_port_t *destp;
-	mach_msg_format_0_trailer_t *trailer;
 	register mig_hash_t *ptr;
 
 	/*
@@ -434,11 +433,7 @@ ipc_kobject_server(ipc_kmsg_t	request)
 		return IKM_NULL;
 	}
 
-	trailer = (mach_msg_format_0_trailer_t *)
-		((vm_offset_t)reply->ikm_header + (int)reply->ikm_header->msgh_size);
-	trailer->msgh_sender = KERNEL_SECURITY_TOKEN;
-	trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
-	trailer->msgh_trailer_size = MACH_MSG_TRAILER_MINIMUM_SIZE;
+	ipc_kmsg_init_kernel_trailer(reply);
 	return reply;
 }
 

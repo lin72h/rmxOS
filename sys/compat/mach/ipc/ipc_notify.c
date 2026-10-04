@@ -306,6 +306,8 @@ ipc_notify_port_deleted(
 	n->not_header.msgh_remote_port = (mach_port_t) port;
 	n->not_port = name;
 
+	/* Templates carry only the format-0 prefix; initialize the full identity. */
+	ipc_kmsg_init_kernel_trailer(kmsg);
 	ipc_mqueue_send_always(kmsg);
 }
 
@@ -345,6 +347,8 @@ ipc_notify_port_destroyed(
 	n->not_header.msgh_remote_port = (mach_port_t) port;
 	n->not_port.name = (mach_port_t)right;
 
+	/* Templates carry only the format-0 prefix; initialize the full identity. */
+	ipc_kmsg_init_kernel_trailer(kmsg);
 	ipc_mqueue_send_always(kmsg);
 }
 
@@ -379,6 +383,8 @@ ipc_notify_no_senders(
 	n->not_header.msgh_remote_port = (mach_port_t) port;
 	n->not_count = mscount;
 
+	/* Templates carry only the format-0 prefix; initialize the full identity. */
+	ipc_kmsg_init_kernel_trailer(kmsg);
 	ipc_mqueue_send_always(kmsg);
 }
 
@@ -411,6 +417,8 @@ ipc_notify_send_once(
 
 	n->not_header.msgh_remote_port = (mach_port_t) port;
 
+	/* Templates carry only the format-0 prefix; initialize the full identity. */
+	ipc_kmsg_init_kernel_trailer(kmsg);
 	ipc_mqueue_send_always(kmsg);
 }
 
@@ -445,5 +453,7 @@ ipc_notify_dead_name(
 	n->not_header.msgh_remote_port = (mach_port_t) port;
 	n->not_port = name;
 
+	/* Templates carry only the format-0 prefix; initialize the full identity. */
+	ipc_kmsg_init_kernel_trailer(kmsg);
 	ipc_mqueue_send_always(kmsg);
 }
