@@ -103,6 +103,8 @@ struct dispatch_kevent_s {
 	TAILQ_ENTRY(dispatch_kevent_s) dk_list;
 	TAILQ_HEAD(, dispatch_source_refs_s) dk_sources;
 	struct kevent64_s dk_kevent;
+	struct dispatch_kevent_s *dk_batch_next;
+	bool dk_retired;
 };
 
 typedef struct dispatch_kevent_s *dispatch_kevent_t;
@@ -168,6 +170,7 @@ _dispatch_source_timer_idx(dispatch_source_refs_t dr)
 
 // ds_atomic_flags bits
 #define DSF_CANCELED 1u // cancellation has been requested
+#define DSF_MACH_BATCH_PENDING 4u // unregister awaits the manager copy/drain fence
 #define DSF_ARMED 2u // source is armed
 
 #define DISPATCH_SOURCE_HEADER(refs) \

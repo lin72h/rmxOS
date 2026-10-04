@@ -34,6 +34,15 @@ static bool _dispatch_kevent_resume(dispatch_kevent_t dk, uint32_t new_flags,
 		uint32_t del_flags);
 static void _dispatch_kevent_drain(struct kevent64_s *ke);
 static void _dispatch_kevent_merge(struct kevent64_s *ke);
+struct dispatch_mach_batch_release_s {
+	struct dispatch_mach_batch_release_s *next;
+	dispatch_source_t source;
+};
+static struct dispatch_mach_batch_release_s *_dispatch_mach_batch_releases;
+static bool _dispatch_mach_batch_active;
+static dispatch_kevent_t _dispatch_mach_batch_records;
+static void _dispatch_mach_batch_begin(void);
+static void _dispatch_mach_batch_end(void);
 static void _dispatch_timers_kevent(struct kevent64_s *ke);
 static void _dispatch_timers_unregister(dispatch_source_t ds,
 		dispatch_kevent_t dk);
@@ -513,6 +522,11 @@ _dispatch_source_kevent_unregister(dispatch_source_t ds)
 {
 	_dispatch_object_debug(ds, "%s", __func__);
 	dispatch_kevent_t dk = ds->ds_dkev;
+	bool batch_pending = _dispatch_mach_batch_active &&
+			(dk->dk_kevent.filter == EVFILT_MACHPORT ||
+			 dk->dk_kevent.filter == DISPATCH_EVFILT_MACH_NOTIFICATION);
+	if (batch_pending)
+		(void)dispatch_atomic_or2o(ds, ds_atomic_flags, DSF_MACH_BATCH_PENDING, release);
 	ds->ds_dkev = NULL;
 	switch (dk->dk_kevent.filter) {
 	case DISPATCH_EVFILT_TIMER:
@@ -526,7 +540,13 @@ _dispatch_source_kevent_unregister(dispatch_source_t ds)
 
 	(void)dispatch_atomic_and2o(ds, ds_atomic_flags, ~DSF_ARMED, relaxed);
 	ds->ds_needs_rearm = false; // re-arm is pointless and bad now
-	_dispatch_release(ds); // the retain is done at creation time
+	if (batch_pending) {
+		struct dispatch_mach_batch_release_s *r = _dispatch_calloc(1, sizeof(*r));
+		r->source = ds; r->next = _dispatch_mach_batch_releases;
+		_dispatch_mach_batch_releases = r;
+	} else {
+		_dispatch_release(ds); // the retain is done at creation time
+	}
 }
 
 static void
@@ -542,6 +562,12 @@ _dispatch_source_kevent_resume(dispatch_source_t ds, uint32_t new_flags)
 		break;
 	}
 	if (_dispatch_kevent_resume(ds->ds_dkev, new_flags, 0)) {
+		if (ds->ds_dkev->dk_kevent.filter == DISPATCH_EVFILT_MACH_NOTIFICATION) {
+			/* Failure is terminal, and must be observable by the source. */
+			struct kevent64_s terminal = ds->ds_dkev->dk_kevent;
+			terminal.fflags = DISPATCH_MACH_SEND_DEAD;
+			_dispatch_source_merge_kevent(ds, &terminal);
+		}
 		_dispatch_source_kevent_unregister(ds);
 	}
 }
@@ -560,7 +586,8 @@ _dispatch_source_kevent_register(dispatch_source_t ds)
 	if (do_resume || ds->ds_needs_rearm) {
 		_dispatch_source_kevent_resume(ds, flags);
 	}
-	(void)dispatch_atomic_or2o(ds, ds_atomic_flags, DSF_ARMED, relaxed);
+	if (ds->ds_dkev)
+		(void)dispatch_atomic_or2o(ds, ds_atomic_flags, DSF_ARMED, relaxed);
 	_dispatch_object_debug(ds, "%s", __func__);
 }
 
@@ -628,6 +655,7 @@ _dispatch_source_invoke2(dispatch_object_t dou,
 				return ds->do_targetq;
 			}
 		}
+		if (ds->ds_atomic_flags & DSF_MACH_BATCH_PENDING) return &_dispatch_mgr_q;
 		_dispatch_source_cancel_callout(ds);
 	} else if (ds->ds_pending_data) {
 		// The source has pending data to deliver via the event handler callback
@@ -747,7 +775,70 @@ static struct dispatch_kevent_s _dispatch_kevent_data_add = {
 #define DSL_HASH(x) ((x) & (DSL_HASH_SIZE - 1))
 
 DISPATCH_CACHELINE_ALIGN
+static dispatch_kevent_t _dispatch_kevent_find(uint64_t ident, short filter);
 static TAILQ_HEAD(, dispatch_kevent_s) _dispatch_sources[DSL_HASH_SIZE];
+static TAILQ_HEAD(, dispatch_kevent_s) _dispatch_mach_retired =
+	TAILQ_HEAD_INITIALIZER(_dispatch_mach_retired);
+
+
+static void
+_dispatch_mach_batch_begin(void)
+{
+	_dispatch_mach_batch_records = NULL;
+	for (unsigned i = 0; i < DSL_HASH_SIZE; i++) {
+		dispatch_kevent_t dk;
+		TAILQ_FOREACH(dk, &_dispatch_sources[i], dk_list) {
+			if (dk->dk_kevent.filter != EVFILT_MACHPORT) continue;
+			dk->dk_batch_next = _dispatch_mach_batch_records;
+			_dispatch_mach_batch_records = dk;
+		}
+	}
+	_dispatch_mach_batch_active = true;
+}
+
+static void
+_dispatch_mach_batch_end(void)
+{
+	_dispatch_mach_batch_active = false;
+	_dispatch_mach_batch_records = NULL;
+	dispatch_kevent_t dk;
+	while ((dk = TAILQ_FIRST(&_dispatch_mach_retired))) {
+		TAILQ_REMOVE(&_dispatch_mach_retired, dk, dk_list);
+		free(dk);
+	}
+	while (_dispatch_mach_batch_releases) {
+		struct dispatch_mach_batch_release_s *r = _dispatch_mach_batch_releases;
+		_dispatch_mach_batch_releases = r->next;
+		dispatch_source_t ds = r->source;
+		(void)dispatch_atomic_and2o(ds, ds_atomic_flags, ~DSF_MACH_BATCH_PENDING, release);
+		_dispatch_wakeup(ds);
+		_dispatch_release(ds);
+		free(r);
+	}
+}
+
+static bool
+_dispatch_mach_record_has_listener(dispatch_kevent_t dk)
+{
+	if (!dk || dk->dk_retired) return false;
+	dispatch_source_refs_t dr;
+	TAILQ_FOREACH(dr, &dk->dk_sources, dr_list) {
+		dispatch_source_t ds = _dispatch_source_from_refs(dr);
+		if (!(ds->ds_atomic_flags & DSF_CANCELED) && ds->do_xref_cnt != -1) return true;
+	}
+	return false;
+}
+
+static dispatch_kevent_t
+_dispatch_mach_batch_record(mach_port_t name)
+{
+	if (!_dispatch_mach_batch_active) return _dispatch_kevent_find(name, EVFILT_MACHPORT);
+	for (dispatch_kevent_t dk = _dispatch_mach_batch_records; dk; dk = dk->dk_batch_next) {
+		if (dk->dk_kevent.ident == name) return dk;
+	}
+	return NULL;
+}
+
 
 static void
 _dispatch_kevent_init()
@@ -905,7 +996,12 @@ _dispatch_kevent_dispose(dispatch_kevent_t dk)
 			dk->dk_kevent.filter);
 	TAILQ_REMOVE(&_dispatch_sources[hash], dk, dk_list);
 	_dispatch_kevent_unguard(dk);
-	free(dk);
+	if (_dispatch_mach_batch_active) {
+		dk->dk_retired = true;
+		TAILQ_INSERT_TAIL(&_dispatch_mach_retired, dk, dk_list);
+	} else {
+		free(dk);
+	}
 }
 
 static void
@@ -2269,6 +2365,7 @@ _dispatch_mgr_invoke(void)
 			if (!poll) continue;
 		}
 		poll = poll || _dispatch_queue_class_probe(&_dispatch_mgr_q);
+		_dispatch_mach_batch_begin();
 		r = kevent64(_dispatch_kq, _dispatch_kevent_enable,
 				_dispatch_kevent_enable ? 1 : 0, &kev, 1, 0,
 				poll ? &timeout_immediately : NULL);
@@ -2288,6 +2385,7 @@ _dispatch_mgr_invoke(void)
 		} else if (r) {
 			_dispatch_kevent_drain(&kev);
 		}
+		_dispatch_mach_batch_end();
 	}
 }
 
@@ -2424,12 +2522,13 @@ static const size_t _dispatch_mach_recv_msg_size =
 static const size_t dispatch_mach_trailer_size =
 		sizeof(dispatch_mach_trailer_t);
 static mach_msg_size_t _dispatch_mach_recv_msg_buf_size;
+static void *_dispatch_mach_recv_msg_buf;
 static mach_port_t _dispatch_mach_portset, _dispatch_mach_recv_portset;
 static mach_port_t _dispatch_mach_notify_port;
 static struct kevent64_s _dispatch_mach_recv_kevent = {
 	.filter = EVFILT_MACHPORT,
 	.flags = EV_ADD|EV_ENABLE|EV_DISPATCH,
-	.fflags = DISPATCH_MACH_RCV_OPTIONS,
+	.fflags = 0,
 };
 static dispatch_source_t _dispatch_mach_notify_source;
 static const
@@ -2459,14 +2558,13 @@ _dispatch_mach_recv_msg_buf_init(void)
 		_dispatch_temporary_resource_shortage();
 		vm_addr = vm_page_size;
 	}
-	_dispatch_mach_recv_kevent.ext[0] = (uintptr_t)vm_addr;
-	_dispatch_mach_recv_kevent.ext[1] = vm_size;
+	_dispatch_mach_recv_msg_buf = (void *)(uintptr_t)vm_addr;
 }
 
 static inline void*
 _dispatch_get_mach_recv_msg_buf(void)
 {
-	return (void*)_dispatch_mach_recv_kevent.ext[0];
+	return _dispatch_mach_recv_msg_buf;
 }
 
 static void
@@ -2657,10 +2755,8 @@ _dispatch_kevent_machport_drain(struct kevent64_s *ke)
 	struct kevent64_s kev;
 
 	_dispatch_debug_machport(name);
-	dk = _dispatch_kevent_find(name, EVFILT_MACHPORT);
-	if (!dispatch_assume(dk)) {
-		return;
-	}
+	dk = _dispatch_mach_batch_record(name);
+	if (!_dispatch_mach_record_has_listener(dk)) return;
 	_dispatch_mach_portset_update(dk, MACH_PORT_NULL); // emulate EV_DISPATCH
 
 	EV_SET64(&kev, name, EVFILT_MACHPORT, EV_ADD|EV_ENABLE|EV_DISPATCH,
@@ -2673,90 +2769,37 @@ DISPATCH_NOINLINE
 static void
 _dispatch_kevent_mach_msg_drain(struct kevent64_s *ke)
 {
-	mach_msg_header_t *hdr = (mach_msg_header_t*)ke->ext[0];
-	mach_msg_size_t siz, msgsiz;
-	mach_msg_return_t kr = (mach_msg_return_t)ke->fflags;
-
+	/* Readiness is a hint. Never wait for a message already claimed elsewhere. */
+	mach_msg_header_t *hdr = _dispatch_get_mach_recv_msg_buf();
+	mach_msg_size_t siz = _dispatch_mach_recv_msg_buf_size;
+	const mach_msg_option_t options = DISPATCH_MACH_RCV_OPTIONS | MACH_RCV_TIMEOUT;
+	/* Bound both dequeue and growth retries so manager work cannot starve. */
+	for (unsigned attempt = 0; attempt < 32; attempt++) {
+		memset(hdr, 0, siz);
+		mach_msg_return_t kr = mach_msg(hdr, options, 0, siz,
+				_dispatch_mach_recv_portset, 0, MACH_PORT_NULL);
+		if (kr == MACH_RCV_TOO_LARGE) {
+			if (hdr->msgh_size > UINT_MAX - dispatch_mach_trailer_size) break;
+			mach_msg_size_t needed = hdr->msgh_size + dispatch_mach_trailer_size;
+			if (needed <= siz) break;
+			void *grown = malloc(needed);
+			if (!grown) break; /* LARGE retains the unclaimed message. */
+			if (hdr != _dispatch_get_mach_recv_msg_buf()) free(hdr);
+			hdr = grown;
+			siz = needed;
+			continue;
+		}
+		if (kr == MACH_RCV_TIMED_OUT) break;
+		if (kr != MACH_MSG_SUCCESS) {
+			_dispatch_bug_mach_client("manager aggregate receive failed", kr);
+			break;
+		}
+		_dispatch_kevent_mach_msg_recv(hdr); /* transfers or destroys storage/rights */
+		hdr = _dispatch_get_mach_recv_msg_buf();
+		siz = _dispatch_mach_recv_msg_buf_size;
+	}
+	if (hdr != _dispatch_get_mach_recv_msg_buf()) free(hdr);
 	_dispatch_kevent_mach_recv_reenable(ke);
-	if (!dispatch_assume(hdr)) {
-		DISPATCH_CRASH("EVFILT_MACHPORT with no message");
-	}
-	if (fastpath(!kr)) {
-		return _dispatch_kevent_mach_msg_recv(hdr);
-	} else if (kr != MACH_RCV_TOO_LARGE) {
-		goto out;
-	}
-	if (!dispatch_assume(ke->ext[1] <= UINT_MAX -
-			dispatch_mach_trailer_size)) {
-		DISPATCH_CRASH("EVFILT_MACHPORT with overlarge message");
-	}
-	siz = (mach_msg_size_t)ke->ext[1] + dispatch_mach_trailer_size;
-	hdr = malloc(siz);
-	if (ke->data) {
-		if (!dispatch_assume(hdr)) {
-			// Kernel will discard message too large to fit
-			hdr = _dispatch_get_mach_recv_msg_buf();
-			siz = _dispatch_mach_recv_msg_buf_size;
-		}
-		mach_port_t name = (mach_port_name_t)ke->data;
-		const mach_msg_option_t options = ((DISPATCH_MACH_RCV_OPTIONS |
-				MACH_RCV_TIMEOUT) & ~MACH_RCV_LARGE);
-		kr = mach_msg(hdr, options, 0, siz, name, MACH_MSG_TIMEOUT_NONE,
-				MACH_PORT_NULL);
-		if (fastpath(!kr)) {
-			return _dispatch_kevent_mach_msg_recv(hdr);
-		} else if (kr == MACH_RCV_TOO_LARGE) {
-			_dispatch_log("BUG in libdispatch client: "
-					"_dispatch_kevent_mach_msg_drain: dropped message too "
-					"large to fit in memory: id = 0x%x, size = %zd",
-					hdr->msgh_id, ke->ext[1]);
-			kr = MACH_MSG_SUCCESS;
-		}
-	} else {
-		// We don't know which port in the portset contains the large message,
-		// so need to receive all messages pending on the portset to ensure the
-		// large message is drained. <rdar://problem/13950432>
-		bool received = false;
-		for (;;) {
-			if (!dispatch_assume(hdr)) {
-				DISPATCH_CLIENT_CRASH("Message too large to fit in memory");
-			}
-			const mach_msg_option_t options = (DISPATCH_MACH_RCV_OPTIONS |
-					MACH_RCV_TIMEOUT);
-			kr = mach_msg(hdr, options, 0, siz, _dispatch_mach_recv_portset,
-					MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
-			if ((!kr || kr == MACH_RCV_TOO_LARGE) && !dispatch_assume(
-					hdr->msgh_size <= UINT_MAX - dispatch_mach_trailer_size)) {
-				DISPATCH_CRASH("Overlarge message");
-			}
-			if (fastpath(!kr)) {
-				msgsiz = hdr->msgh_size + dispatch_mach_trailer_size;
-				if (msgsiz < siz) {
-					void *shrink = realloc(hdr, msgsiz);
-					if (shrink) hdr = shrink;
-				}
-				_dispatch_kevent_mach_msg_recv(hdr);
-				hdr = NULL;
-				received = true;
-			} else if (kr == MACH_RCV_TOO_LARGE) {
-				siz = hdr->msgh_size + dispatch_mach_trailer_size;
-			} else {
-				if (kr == MACH_RCV_TIMED_OUT && received) {
-					kr = MACH_MSG_SUCCESS;
-				}
-				break;
-			}
-			hdr = reallocf(hdr, siz);
-		}
-	}
-	if (hdr != _dispatch_get_mach_recv_msg_buf()) {
-		free(hdr);
-	}
-out:
-	if (slowpath(kr)) {
-		_dispatch_bug_mach_client("_dispatch_kevent_mach_msg_drain: "
-				"message reception failed", kr);
-	}
 }
 
 static void
@@ -2779,16 +2822,18 @@ _dispatch_kevent_mach_msg_recv(mach_msg_header_t *hdr)
 		return _dispatch_kevent_mach_msg_destroy(hdr);
 	}
 	_dispatch_debug_machport(name);
-	dk = _dispatch_kevent_find(name, EVFILT_MACHPORT);
+	dk = _dispatch_mach_batch_record(name);
 	if (!dispatch_assume(dk)) {
 		_dispatch_bug_client("_dispatch_kevent_mach_msg_recv: "
 				"received message with unknown kevent");
 		return _dispatch_kevent_mach_msg_destroy(hdr);
 	}
+	if (!_dispatch_mach_record_has_listener(dk)) return _dispatch_kevent_mach_msg_destroy(hdr);
 	_dispatch_kevent_debug(&dk->dk_kevent, __func__);
 	TAILQ_FOREACH(dri, &dk->dk_sources, dr_list) {
 		dispatch_source_t dsi = _dispatch_source_from_refs(dri);
-		if (dsi->ds_pending_data_mask & _DISPATCH_MACH_RECV_DIRECT_FLAGS) {
+		if (!(dsi->ds_atomic_flags & DSF_CANCELED) &&
+				(dsi->ds_pending_data_mask & _DISPATCH_MACH_RECV_DIRECT_FLAGS)) {
 			return _dispatch_source_merge_mach_msg(dsi, dri, dk, hdr, siz);
 		}
 	}
@@ -2899,7 +2944,7 @@ _dispatch_mach_notify_update(dispatch_kevent_t dk, uint32_t new_flags,
 		switch(krr) {
 		case KERN_INVALID_NAME:
 		case KERN_INVALID_RIGHT:
-			// Supress errors & clear registration state
+			// Preserve the error for terminal source/channel handling
 			dk->dk_kevent.data &= ~mask;
 			break;
 		default:
@@ -3255,6 +3300,7 @@ _dispatch_mach_kevent_register(dispatch_mach_t dm, mach_port_t send)
 	dm->dm_dkev = dk;
 	if (do_resume && _dispatch_kevent_resume(dm->dm_dkev, flags, 0)) {
 		_dispatch_mach_kevent_unregister(dm);
+		dispatch_mach_cancel(dm);
 	}
 }
 
@@ -3518,6 +3564,8 @@ _dispatch_mach_msg_send(dispatch_mach_t dm, dispatch_object_t dou)
 		// Send failed, so reply was never connected <rdar://problem/14309159>
 		dmsgr = _dispatch_mach_msg_create_reply_disconnected(dmsg, NULL);
 	}
+	if (kr == MACH_SEND_INVALID_DEST || kr == MACH_SEND_INVALID_RIGHT)
+		dispatch_mach_cancel(dm);
 	_dispatch_mach_msg_set_reason(dmsg, kr, 0);
 	_dispatch_mach_push(dm, dmsg, dmsg->dmsg_priority);
 	if (dmsgr) _dispatch_mach_push(dm, dmsgr, dmsgr->dmsg_priority);
@@ -3631,6 +3679,10 @@ static void
 _dispatch_mach_merge_kevent(dispatch_mach_t dm, const struct kevent64_s *ke)
 {
 	if (!(ke->fflags & dm->ds_pending_data_mask)) {
+		return;
+	}
+	if (ke->fflags & (DISPATCH_MACH_SEND_DEAD | DISPATCH_MACH_SEND_DELETED)) {
+		dispatch_mach_cancel(dm);
 		return;
 	}
 	_dispatch_mach_send(dm);
@@ -3974,6 +4026,9 @@ _dispatch_mach_invoke2(dispatch_object_t dou,
 		if (dm->ds_dkev) {
 			_dispatch_source_kevent_register((dispatch_source_t)dm);
 		}
+		/* Install the send-death request before publishing this channel. */
+		if (MACH_PORT_VALID(dr->dm_send))
+			_dispatch_mach_kevent_register(dm, dr->dm_send);
 		dm->ds_is_installed = true;
 		_dispatch_mach_send(dm);
 		// Apply initial target queue change
@@ -4024,6 +4079,7 @@ _dispatch_mach_invoke2(dispatch_object_t dou,
 				return NULL;
 			}
 		}
+		if (dm->ds_atomic_flags & DSF_MACH_BATCH_PENDING) return &_dispatch_mgr_q;
 		if (!dm->dm_cancel_handler_called) {
 			if (dq != dm->do_targetq) {
 				return dm->do_targetq;
