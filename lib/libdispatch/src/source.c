@@ -2792,6 +2792,10 @@ _dispatch_kevent_mach_msg_drain(struct kevent64_s *ke)
 		}
 		if (kr == MACH_RCV_TIMED_OUT) break;
 		if (kr != MACH_MSG_SUCCESS) {
+			/* BODY_ERROR still copies out the successfully received resources. */
+			if ((kr & ~MACH_MSG_MASK) == MACH_RCV_BODY_ERROR) {
+				mach_msg_destroy(hdr);
+			}
 			_dispatch_bug_mach_client("manager aggregate receive failed", kr);
 			break;
 		}
