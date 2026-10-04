@@ -40,3 +40,16 @@ void rmx_queue_numbered(unsigned count) {
  for (unsigned i=0; i<count; i++) { snprintf(text,sizeof(text),"%u",i); _logmsg_add(&attr,0,text); }
 }
 unsigned rmx_queue_oldest(void) { return strtoul(STAILQ_FIRST(&_launchd_logq)->msg,NULL,10); }
+#include <dlfcn.h>
+#include <asl.h>
+void *rmx_asl_anchor(void) { return (void *)asl_open; }
+const char *rmx_native_log_library(void) {
+ Dl_info info;
+#ifdef LAUNCHD_NATIVE_SYSLOG_LOOKUP
+ void *fn = (void *)_launchd_get_native_syslog();
+#else
+ void *fn = (void *)launchd_native_syslog;
+#endif
+ if (dladdr(fn,&info)==0) return "";
+ return info.dli_fname;
+}
