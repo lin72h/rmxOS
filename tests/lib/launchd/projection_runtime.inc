@@ -3,3 +3,4 @@ void op484_demand_scan(void) { mportset_callback(); }
 unsigned op484_demand_set(void) { return demand_port_set; }
 
 size_t op484_callback_slots(void) { return mig_cb_table_sz / sizeof(*mig_cb_table); }
+size_t op484_port_index(unsigned name) { return MACH_PORT_INDEX(name); }
