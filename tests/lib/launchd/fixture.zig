@@ -208,6 +208,10 @@ fn closeUnregistered(reply: *p.Reply) void {
         var kind: c.mach_port_type_t = 0;
         reply.facts[3] = @intCast(c.mach_port_type(c.mach_task_self(), name, &kind));
         close_port = 0;
+        const detached_name = port();
+        reply.facts[4] = @intCast(launchd_mport_close_recv(detached_name));
+        reply.facts[5] = @intCast(c.mach_port_type(c.mach_task_self(), detached_name, &kind));
+        _ = c.mach_port_destroy(c.mach_task_self(), detached_name);
         return;
     }
     errorIf(true, 32);
