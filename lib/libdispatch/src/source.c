@@ -2779,8 +2779,9 @@ _dispatch_kevent_mach_msg_drain(struct kevent64_s *ke)
 		mach_msg_return_t kr = mach_msg(hdr, options, 0, siz,
 				_dispatch_mach_recv_portset, 0, MACH_PORT_NULL);
 		if (kr == MACH_RCV_TOO_LARGE) {
-			if (hdr->msgh_size > UINT_MAX - dispatch_mach_trailer_size) break;
-			mach_msg_size_t needed = hdr->msgh_size + dispatch_mach_trailer_size;
+			if (hdr->msgh_size > UINT_MAX - dispatch_mach_trailer_size - 3) break;
+			mach_msg_size_t needed = ((hdr->msgh_size + 3) & ~3u) +
+					dispatch_mach_trailer_size;
 			if (needed <= siz) break;
 			void *grown = malloc(needed);
 			if (!grown) break; /* LARGE retains the unclaimed message. */
@@ -3795,7 +3796,8 @@ DISPATCH_NOINLINE
 static bool
 _dispatch_mach_reconnect_invoke(dispatch_mach_t dm, dispatch_object_t dou)
 {
-	if (dm->dm_dkev || !TAILQ_EMPTY(&dm->dm_refs->dm_replies)) {
+	if (MACH_PORT_VALID((mach_port_t)dou._dc->dc_other) || dm->dm_dkev ||
+			!TAILQ_EMPTY(&dm->dm_refs->dm_replies)) {
 		if (slowpath(_dispatch_queue_get_current() != &_dispatch_mgr_q)) {
 			// send/reply kevents must be uninstalled on the manager queue
 			return false;
@@ -3805,6 +3807,9 @@ _dispatch_mach_reconnect_invoke(dispatch_mach_t dm, dispatch_object_t dou)
 	dispatch_mach_send_refs_t dr = dm->dm_refs;
 	dr->dm_checkin = dou._dc->dc_data;
 	dr->dm_send = (mach_port_t)dou._dc->dc_other;
+	if (MACH_PORT_VALID(dr->dm_send)) {
+		_dispatch_mach_kevent_register(dm, dr->dm_send);
+	}
 	_dispatch_continuation_free(dou._dc);
 	(void)dispatch_atomic_dec2o(dr, dm_disconnect_cnt, relaxed);
 	_dispatch_object_debug(dm, "%s", __func__);
