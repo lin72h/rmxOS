@@ -78,6 +78,16 @@ SRCS+= init.c
 LIBADD=	launch asl notify xpc dispatch osxsupport mach thr sys bsm auditd \
 	BlocksRuntime nv sbuf util
 
+# The guest regression image enables its PID-1 observation fixture explicitly.
+# Ordinary launchd builds neither expose the fixture nor link its library.
+.if defined(LAUNCHD_CONSUMER_FIXTURE)
+CFLAGS+= -DLAUNCHD_CONSUMER_TESTING
+LDADD+= ${LAUNCHD_CONSUMER_FIXTURE}/coordination.o ${LAUNCHD_CONSUMER_FIXTURE}/libop484_launchd.so
+LDFLAGS+= -rdynamic -Wl,--wrap=launchd_runtime_init2 -Wl,--wrap=calloc -Wl,--wrap=free
+LDFLAGS+= -Wl,--wrap=mach_msg -Wl,--wrap=mach_port_get_attributes
+LDFLAGS+= -Wl,--wrap=mach_port_move_member -Wl,--wrap=mach_port_mod_refs
+.endif
+
 
 MAN=	launchd.conf.5 launchd.plist.5 launchd.8
 

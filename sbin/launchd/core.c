@@ -21,6 +21,10 @@
 
 #include "config.h"
 #include "core.h"
+#ifdef LAUNCHD_CONSUMER_TESTING
+void op484_drain_begin(unsigned, int, int);
+void op484_drain_end(unsigned);
+#endif
 
 #include "internal.h"
 #include "helper.h"
@@ -7334,6 +7338,9 @@ machservice_drain_port(struct machservice *ms)
 	}
 
 	job_log(ms->job, LOG_INFO, "Draining %s...", ms->name);
+#ifdef LAUNCHD_CONSUMER_TESTING
+	op484_drain_begin(ms->port, ms->job->last_exit_status, ms->job->crashed);
+#endif
 	char *req_buff = calloc(2, sizeof(union __RequestUnion__catch_mach_exc_subsystem));
 	char *rep_buff = calloc(1, sizeof(union __ReplyUnion__catch_mach_exc_subsystem));
 	mig_reply_error_t *req_hdr = (mig_reply_error_t *)&req_buff;
@@ -7367,6 +7374,9 @@ machservice_drain_port(struct machservice *ms)
 			}
 		}
 	} while (drain_all && mr != MACH_RCV_TIMED_OUT);
+#ifdef LAUNCHD_CONSUMER_TESTING
+	op484_drain_end(ms->port);
+#endif
 }
 
 void
@@ -12131,3 +12141,6 @@ launchd_fork(void)
 
 	return (runtime_fork(root_jobmgr->jm_port));
 }
+#ifdef LAUNCHD_CONSUMER_TESTING
+#include "../../tests/lib/launchd/projection_core.inc"
+#endif

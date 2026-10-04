@@ -20,6 +20,9 @@
 
 #include "config.h"
 #include "runtime.h"
+#ifdef LAUNCHD_CONSUMER_TESTING
+void op484_invoke(void *, struct kevent *);
+#endif
 
 #include <mach/mach.h>
 #include <mach/mach_error.h>
@@ -602,7 +605,11 @@ mportset_callback(void)
 			if (kev.udata != NULL) {
 #endif
 				log_kevent_struct(LOG_DEBUG, &kev, 0);
+#ifdef LAUNCHD_CONSUMER_TESTING
+				op484_invoke(kev.udata, &kev);
+#else
 				(*((kq_callback *)kev.udata))(kev.udata, &kev);
+#endif
 #if 0
 			} else {
 				log_kevent_struct(LOG_ERR, &kev, 0);
@@ -1582,3 +1589,6 @@ do_file_init(void)
 	}
 #endif
 }
+#ifdef LAUNCHD_CONSUMER_TESTING
+#include "../../tests/lib/launchd/projection_runtime.inc"
+#endif
