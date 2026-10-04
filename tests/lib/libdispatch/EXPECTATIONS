@@ -1,0 +1,6 @@
+channel_two: two distinct messages received once each, one cancellation completion
+set_large_retry: 32768-byte body delivered once through aggregate receive
+stale_readiness: copied readiness after competing receive leaves manager responsive
+cancel_copied: copied record dropped before member movement, cancellation before owner reuses name
+send_death_registration: death before/during registration completes one terminal callback
+late_death: selected notification survives cancellation, releases one extra dead-name uref, unrelated receive survives

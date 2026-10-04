@@ -1,0 +1,3 @@
+syntax(2)
+test_suite("FreeBSD")
+atf_test_program{name="dispatch_mach_test"}

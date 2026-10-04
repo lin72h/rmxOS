@@ -11,6 +11,7 @@ KYUAFILE= yes
 SUBDIR+= etc
 SUBDIR+= examples
 SUBDIR+= include
+SUBDIR+= lib
 SUBDIR+= sys
 SUBDIR+= atf_python
 .if ${MK_CDDL} != "no"
