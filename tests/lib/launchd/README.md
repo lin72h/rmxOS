@@ -8,6 +8,9 @@ only in the test build, in both base and fixed images.
 The demand case removes a real imported job after the kernel has returned its
 member's nonempty receive status, before launchd looks up that member's job.
 This isolates the stale lookup without relying on scheduling delays.
+The fixture puts that member first in the actual returned membership snapshot
+so unrelated boot-time demand cannot end the scan before it. It also observes
+that the subsequent job lookup returns NULL.
 
 The drain cases observe the real `mach_msg` calls made by launchd. A test-only
 receive limit ends a faulty baseline loop; hitting that limit is an observed
@@ -19,7 +22,8 @@ the two drain buffers are released.
 The late dead-name case receives a real notification after removing the job,
 then passes it to launchd's existing notification handler. It observes the
 notification's extra dead-name uref and an unrelated owned right before and
-after handling.
+after handling. That unrelated right belongs to another real idle job; its
+record, launch count and PID must remain unchanged.
 
 Each crash job invokes the test executable with `--crash-job`, which calls
 `raise(SIGABRT)`. Its messages were queued before launchd starts it. The real
@@ -30,3 +34,8 @@ In the base test build, the callback invocation fixture records an attempted
 NULL call and returns, preserving PID 1 so the remaining observations can be
 collected. The fixed lookup check must skip the invocation entirely. The test
 does not claim to demonstrate a natural PID-1 crash on base.
+
+The fixed-only `close_unregistered` case allocates a real receive name beyond
+the current callback table, joins it to the demand set without registration,
+and observes detach before close and the final invalid name. It is not run on
+base: its unchecked table write could corrupt PID 1 and prevent later cases.

@@ -27,6 +27,8 @@ extern fn op484_job_pid(Job) c_int;
 extern fn op484_job_runs(Job) u32;
 extern fn op484_send_service(Job, [*:0]const u8, *u32) Job;
 extern fn op484_demand_scan() void;
+extern fn op484_callback_slots() usize;
+extern fn op484_demand_set() u32;
 extern fn op484_request_size() u32;
 extern fn runtime_add_mport(u32, ?*anyopaque) c_int;
 extern fn launchd_mport_close_recv(u32) c_int;
@@ -52,6 +54,8 @@ var drains: [3]Drain = @splat(.{});
 var active: ?usize = null;
 var stale_job: Job = null;
 var stale_port: u32 = 0;
+var lookup_port: u32 = 0;
+var absent_lookup: u64 = 0;
 var snapshot: u64 = 0;
 var removed: u64 = 0;
 var null_calls: u64 = 0;
@@ -147,10 +151,12 @@ fn demand(reply: *p.Reply) void {
     snapshot = 0;
     removed = 0;
     null_calls = 0;
+    absent_lookup = 0;
     const unrelated = makeJob("org.rmx.op484.unrelated", "org.rmx.op484.unrelated.service", false);
     stale_job = makeJob("org.rmx.op484.removed", "org.rmx.op484.removed.service", false);
     if (fixture_error != 0) return;
     stale_port = op484_service_port(op484_first_service(stale_job));
+    lookup_port = stale_port;
     queue(stale_port, 48401, 64);
     if (fixture_error == 0) op484_demand_scan();
     reply.facts[0] = snapshot;
@@ -166,6 +172,8 @@ fn demand(reply: *p.Reply) void {
     errorIf(runtime_add_mport(close_port, null) != 0, 20);
     errorIf(launchd_mport_close_recv(close_port) != 0, 21);
     reply.facts[4] = close_order;
+    reply.facts[5] = absent_lookup;
+    lookup_port = 0;
     close_port = 0;
     if (stale_job != null) {
         job_remove(stale_job);
@@ -173,9 +181,40 @@ fn demand(reply: *p.Reply) void {
     }
     job_remove(unrelated);
 }
+fn closeUnregistered(reply: *p.Reply) void {
+    // Keep real allocated names until one exceeds the actual callback table.
+    // Never register it: registration would grow the table and hide the bug.
+    var names: [65536]u32 = undefined;
+    var used: usize = 0;
+    defer for (names[0..used]) |name| {
+        _ = c.mach_port_destroy(c.mach_task_self(), name);
+    };
+    const slots = op484_callback_slots();
+    while (used < names.len) {
+        const name = port();
+        names[used] = name;
+        used += 1;
+        if (fixture_error != 0) return;
+        if (name >> 8 < slots) continue;
+        reply.facts[0] = @intFromBool(name >> 8 >= slots);
+        errorIf(c.mach_port_move_member(c.mach_task_self(), name, op484_demand_set()) != 0, 31);
+        close_port = name;
+        detached = false;
+        close_order = 0;
+        const rc = launchd_mport_close_recv(name);
+        reply.facts[1] = close_order;
+        reply.facts[2] = @intCast(rc);
+        var kind: c.mach_port_type_t = 0;
+        reply.facts[3] = @intCast(c.mach_port_type(c.mach_task_self(), name, &kind));
+        close_port = 0;
+        return;
+    }
+    errorIf(true, 32);
+}
 fn lateDead(reply: *p.Reply) void {
-    const unrelated = port();
-    sendRight(unrelated);
+    const other_job = makeJob("org.rmx.op484.dead.unrelated", "org.rmx.op484.dead.unrelated.service", false);
+    if (fixture_error != 0) return;
+    const unrelated = op484_service_port(op484_first_service(other_job));
     errorIf(c.mach_port_mod_refs(c.mach_task_self(), unrelated, c.MACH_PORT_RIGHT_SEND, 2) != 0, 22);
     reply.facts[4] = refs(unrelated, c.MACH_PORT_RIGHT_SEND);
     const job = makeJob("org.rmx.op484.dead", null, false);
@@ -201,9 +240,14 @@ fn lateDead(reply: *p.Reply) void {
     if (fixture_error == 0) errorIf(do_mach_notify_dead_name(notify, message.not_port) != 0, 29);
     reply.facts[3] = refs(watched, c.MACH_PORT_RIGHT_DEAD_NAME);
     reply.facts[5] = refs(unrelated, c.MACH_PORT_RIGHT_SEND);
+    const other_after = job_find(root_jobmgr, "org.rmx.op484.dead.unrelated");
+    reply.facts[6] = @intFromBool(other_after == other_job);
+    reply.facts[7] = if (other_after == other_job) @as(u64, @intCast(op484_job_pid(other_after))) + op484_job_runs(other_after) else 1;
     _ = c.mach_port_deallocate(c.mach_task_self(), watched);
     _ = c.mach_port_destroy(c.mach_task_self(), notify);
-    _ = c.mach_port_destroy(c.mach_task_self(), unrelated);
+    _ = c.mach_port_deallocate(c.mach_task_self(), unrelated);
+    _ = c.mach_port_deallocate(c.mach_task_self(), unrelated);
+    if (other_after == other_job) job_remove(other_job);
 }
 fn serve(_: ?*anyopaque, _: *c.struct_kevent) callconv(.c) void {
     const fd = c.accept(listener, null, null);
@@ -216,6 +260,7 @@ fn serve(_: ?*anyopaque, _: *c.struct_kevent) callconv(.c) void {
     const op = std.meta.intToEnum(p.Operation, q.operation) catch return;
     switch (op) {
         .demand_removed => demand(&reply),
+        .close_unregistered => closeUnregistered(&reply),
         .late_dead_name => lateDead(&reply),
         .drain_start => launchDrain(0, "org.rmx.op484.drain", "org.rmx.op484.drain.service", 0),
         .terminal_start => {
@@ -265,6 +310,23 @@ pub export fn op484_attributes(name: u32, result: c_int, count: u32) void {
     stale_port = 0;
     job_remove(job);
     removed += 1;
+}
+pub export fn op484_members(members: [*]u32, count: u32) void {
+    if (stale_port == 0) return;
+    for (members[0..count], 0..) |name, i| {
+        if (name == stale_port) {
+            // Reorder only the real returned snapshot so unrelated boot-time
+            // demand cannot make the scan break before our controlled member.
+            const first = members[0];
+            members[0] = members[i];
+            members[i] = first;
+            return;
+        }
+    }
+    errorIf(true, 30);
+}
+pub export fn op484_lookup(name: u32, job: ?*anyopaque) void {
+    if (name == lookup_port and job == null) absent_lookup += 1;
 }
 pub export fn op484_invoke(job: ?*anyopaque, event: *c.struct_kevent) void {
     if (job == null) {

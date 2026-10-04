@@ -46,7 +46,7 @@ fn observe(name: [*:0]const u8, reply: p.Reply, expected: []const u64) void {
 fn demand(_: [*c]const c.atf_tc_t) callconv(.c) void {
     // Snapshot seen, job removed, no launch of that job or the unrelated job;
     // detach precedes receive-right destruction.
-    observe("demand_removed", request(.demand_removed), &.{ 1, 1, 0, 0, 1 });
+    observe("demand_removed", request(.demand_removed), &.{ 1, 1, 0, 0, 1, 1 });
 }
 fn drain(_: [*c]const c.atf_tc_t) callconv(.c) void {
     _ = request(.drain_start);
@@ -72,21 +72,24 @@ fn terminal(_: [*c]const c.atf_tc_t) callconv(.c) void {
     // all four buffer allocations freed.
     observe("drain_terminal", reply, &.{ 1, 1, 1, 0, 4, 4, c.SIGABRT, c.SIGABRT, c.MACH_RCV_INVALID_NAME, c.MACH_RCV_TOO_LARGE });
 }
+fn unregistered(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    observe("close_unregistered", request(.close_unregistered), &.{ 1, 1, 0, 15 });
+}
 fn dead(_: [*c]const c.atf_tc_t) callconv(.c) void {
     // Job absent; real notification; one fixture uref plus notification uref
     // before handling, one afterwards; unrelated send urefs remain three.
-    observe("late_dead_name", request(.late_dead_name), &.{ 1, 1, 2, 1, 3, 3 });
+    observe("late_dead_name", request(.late_dead_name), &.{ 1, 1, 2, 1, 3, 3, 1, 0 });
 }
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-var cases: [4]c.atf_tc_t = undefined;
+var cases: [5]c.atf_tc_t = undefined;
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "25");
     _ = c.atf_tc_set_md_var(t, "require.user", "%s", "root");
 }
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "demand_removed", "drain_all", "drain_terminal", "late_dead_name" };
-    const bodies = .{ &demand, &drain, &terminal, &dead };
-    inline for (0..4) |i| {
+    const names = [_][*:0]const u8{ "demand_removed", "drain_all", "drain_terminal", "late_dead_name", "close_unregistered" };
+    const bodies = .{ &demand, &drain, &terminal, &dead, &unregistered };
+    inline for (0..5) |i| {
         const err = c.atf_tc_init(&cases[i], names[i], &head, bodies[i], null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
         const added = c.atf_tp_add_tc(tp, &cases[i]);

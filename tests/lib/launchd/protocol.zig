@@ -12,6 +12,7 @@ pub const Operation = enum(u32) {
     terminal_start = 4,
     terminal_observe = 5,
     late_dead_name = 6,
+    close_unregistered = 7,
 };
 pub const Reply = extern struct {
     magic: u32 = 0x48400002,
