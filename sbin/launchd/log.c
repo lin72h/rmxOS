@@ -6,6 +6,14 @@
 #include "launch_internal.h"
 #include "vproc_internal.h"
 #include "log.h"
+#include "core.h"
+
+/* libasl also exports syslog; this fallback must use FreeBSD libc. */
+extern void launchd_native_syslog(int, const char *, ...) __attribute__((format(printf, 2, 3)));
+__asm__(".symver launchd_native_syslog,syslog@FBSD_1.0");
+
+#define LAUNCHD_LOGQ_MAX_COUNT 1000
+#define LAUNCHD_LOGQ_MAX_BYTES (256 * 1024)
 
 #define ROUND_TO_64BIT_WORD_SIZE(x)	((x + 7) & ~7)
 #define LAUNCHD_DEBUG_LOG "launchd-debug.%s.log"
@@ -27,6 +35,46 @@ static FILE *_launchd_perf_log;
 static STAILQ_HEAD(, logmsg_s) _launchd_logq = STAILQ_HEAD_INITIALIZER(_launchd_logq);
 static size_t _launchd_logq_sz;
 static size_t _launchd_logq_cnt;
+static uint64_t _launchd_logq_dropped;
+static void _logmsg_remove(struct logmsg_s *lm);
+
+static void
+_logmsg_drop(void)
+{
+	if (_launchd_logq_dropped != UINT64_MAX) _launchd_logq_dropped++;
+}
+
+uint64_t
+launchd_log_dropped(void)
+{
+	return _launchd_logq_dropped;
+}
+
+static void
+_logmsg_enqueue(struct logmsg_s *lm)
+{
+	while (_launchd_logq_cnt >= LAUNCHD_LOGQ_MAX_COUNT ||
+	    _launchd_logq_sz > LAUNCHD_LOGQ_MAX_BYTES - lm->obj_sz) {
+		_logmsg_remove(STAILQ_FIRST(&_launchd_logq));
+		_logmsg_drop();
+	}
+	STAILQ_INSERT_TAIL(&_launchd_logq, lm, sqe);
+	_launchd_logq_sz += lm->obj_sz;
+	_launchd_logq_cnt++;
+}
+
+static bool
+_launchd_use_system_log(void)
+{
+	return pid1_magic && !launchd_asl_drainer_running();
+}
+
+static void
+_launchd_system_log(const char *from, pid_t from_pid, const char *about, pid_t about_pid, int pri, const char *msg)
+{
+	launchd_native_syslog(LOG_DAEMON | LOG_PRI(pri), "%s[%u] %s[%u]: %s",
+	    from, from_pid, about, about_pid, msg);
+}
 static int _launchd_log_up2 = LOG_UPTO(LOG_NOTICE);
 
 static int64_t _launchd_shutdown_start;
@@ -78,6 +126,10 @@ _logmsg_add(struct launchd_syslog_attr *attr, int err_num, const char *msg)
 
 	/* Force the unpacking for the log_drain cause unalignment faults. */
 	lm_sz = ROUND_TO_64BIT_WORD_SIZE(lm_sz);
+	if (lm_sz > LAUNCHD_LOGQ_MAX_BYTES) {
+		_logmsg_drop();
+		return false;
+	}
 
 	if (unlikely((lm = calloc(1, lm_sz)) == NULL)) {
 		return false;
@@ -100,9 +152,7 @@ _logmsg_add(struct launchd_syslog_attr *attr, int err_num, const char *msg)
 	lm->session_name = data_off;
 	data_off += sprintf(data_off, "%s", attr->session_name) + 1;
 
-	STAILQ_INSERT_TAIL(&_launchd_logq, lm, sqe);
-	_launchd_logq_sz += lm_sz;
-	_launchd_logq_cnt++;
+	_logmsg_enqueue(lm);
 
 	return true;
 }
@@ -235,7 +285,11 @@ launchd_vsyslog(struct launchd_syslog_attr *attr, const char *fmt, va_list args)
 	}
 
 	if ((LOG_MASK(attr->priority) & _launchd_log_up2)) {
-		_logmsg_add(attr, saved_errno, message);
+		if (_launchd_use_system_log()) {
+			_launchd_system_log(attr->from_name, attr->from_pid, attr->about_name, attr->about_pid, attr->priority, message);
+		} else {
+			_logmsg_add(attr, saved_errno, message);
+		}
 	}
 }
 
@@ -324,7 +378,15 @@ launchd_log_push(void)
 			mig_deallocate(outval, outvalCnt);
 		}
 	} else {
-		_launchd_log_uncork_pending_drain();
+		if (_launchd_use_system_log()) {
+			struct logmsg_s *lm;
+			while ((lm = STAILQ_FIRST(&_launchd_logq))) {
+				_launchd_system_log(lm->from_name, lm->from_pid, lm->about_name, lm->about_pid, lm->pri, lm->msg);
+				_logmsg_remove(lm);
+			}
+		} else {
+			_launchd_log_uncork_pending_drain();
+		}
 	}
 }
 
@@ -352,6 +414,12 @@ launchd_log_forward(uid_t forward_uid, gid_t forward_gid, vm_offset_t inval, mac
 			break;
 		}
 
+		if (lm_walk->obj_sz > LAUNCHD_LOGQ_MAX_BYTES) {
+			_logmsg_drop();
+			data_left -= lm_walk->obj_sz;
+			continue;
+		}
+
 		if (!(lm = malloc(lm_walk->obj_sz))) {
 			launchd_syslog(LOG_WARNING, "Failed to allocate %zu bytes for log message with %u bytes left in forwarded data. Ignoring remaining messages.", lm_walk->obj_sz, data_left);
 			break;
@@ -366,9 +434,12 @@ launchd_log_forward(uid_t forward_uid, gid_t forward_gid, vm_offset_t inval, mac
 		lm->msg += (size_t)lm;
 		lm->session_name += (size_t)lm;
 
-		STAILQ_INSERT_TAIL(&_launchd_logq, lm, sqe);
-		_launchd_logq_sz += lm->obj_sz;
-		_launchd_logq_cnt++;
+		if (_launchd_use_system_log()) {
+			_launchd_system_log(lm->from_name, lm->from_pid, lm->about_name, lm->about_pid, lm->pri, lm->msg);
+			free(lm);
+		} else {
+			_logmsg_enqueue(lm);
+		}
 
 		data_left -= lm->obj_sz;
 	}

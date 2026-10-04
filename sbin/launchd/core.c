@@ -3388,6 +3388,14 @@ jobmgr_label_test(jobmgr_t jm, const char *str)
 	return true;
 }
 
+bool
+launchd_asl_drainer_running(void)
+{
+	if (!root_jobmgr) return false;
+	job_t j = job_find(root_jobmgr, "com.apple.syslogd");
+	return j && j->p > 0;
+}
+
 job_t 
 job_find(jobmgr_t jm, const char *label)
 {

@@ -23,3 +23,20 @@ void rmx_queue_facts(uint64_t *out) {
  out[2] = 0;
 #endif
 }
+bool pid1_magic;
+static bool test_drainer;
+bool launchd_asl_drainer_running(void) { return test_drainer; }
+int rmx_route(int pid1, int running) {
+ pid1_magic = pid1; test_drainer = running;
+#ifdef LAUNCHD_LOGQ_MAX_COUNT
+ return _launchd_use_system_log();
+#else
+ return 0;
+#endif
+}
+void rmx_queue_numbered(unsigned count) {
+ struct launchd_syslog_attr attr = {.from_name="test", .about_name="test", .session_name="System", .priority=LOG_NOTICE};
+ char text[32];
+ for (unsigned i=0; i<count; i++) { snprintf(text,sizeof(text),"%u",i); _logmsg_add(&attr,0,text); }
+}
+unsigned rmx_queue_oldest(void) { return strtoul(STAILQ_FIRST(&_launchd_logq)->msg,NULL,10); }
