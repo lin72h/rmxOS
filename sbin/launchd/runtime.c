@@ -601,19 +601,14 @@ mportset_callback(void)
 		}
 		if (status.mps_msgcount) {
 			EV_SET(&kev, members[i], EVFILT_MACHPORT, 0, 0, 0, job_find_by_service_port(members[i]));
-#if 0
-			if (kev.udata != NULL) {
-#endif
-				log_kevent_struct(LOG_DEBUG, &kev, 0);
-#ifdef LAUNCHD_CONSUMER_TESTING
-				op484_invoke(kev.udata, &kev);
-#else
-				(*((kq_callback *)kev.udata))(kev.udata, &kev);
-#endif
-#if 0
-			} else {
-				log_kevent_struct(LOG_ERR, &kev, 0);
+			if (kev.udata == NULL) {
+				continue;
 			}
+			log_kevent_struct(LOG_DEBUG, &kev, 0);
+#ifdef LAUNCHD_CONSUMER_TESTING
+			op484_invoke(kev.udata, &kev);
+#else
+			(*((kq_callback *)kev.udata))(kev.udata, &kev);
 #endif
 			/* the callback may have tainted our ability to continue this for loop */
 			break;
@@ -841,7 +836,9 @@ runtime_add_mport(mach_port_t name, mig_callback demux)
 kern_return_t
 runtime_remove_mport(mach_port_t name)
 {
-	mig_cb_table[MACH_PORT_INDEX(name)] = NULL;
+	if (MACH_PORT_INDEX(name) < mig_cb_table_sz / sizeof(*mig_cb_table)) {
+		mig_cb_table[MACH_PORT_INDEX(name)] = NULL;
+	}
 
 	return errno = mach_port_move_member(mach_task_self(), name, MACH_PORT_NULL);
 }
@@ -868,6 +865,10 @@ launchd_mport_make_send_once(mach_port_t name, mach_port_t *so)
 kern_return_t
 launchd_mport_close_recv(mach_port_t name)
 {
+	kern_return_t kr = runtime_remove_mport(name);
+	if (kr != KERN_SUCCESS) {
+		return errno = kr;
+	}
 	return errno = mach_port_mod_refs(mach_task_self(), name, MACH_PORT_RIGHT_RECEIVE, -1);
 }
 

@@ -7341,39 +7341,50 @@ machservice_drain_port(struct machservice *ms)
 #ifdef LAUNCHD_CONSUMER_TESTING
 	op484_drain_begin(ms->port, ms->job->last_exit_status, ms->job->crashed);
 #endif
-	char *req_buff = calloc(2, sizeof(union __RequestUnion__catch_mach_exc_subsystem));
-	char *rep_buff = calloc(1, sizeof(union __ReplyUnion__catch_mach_exc_subsystem));
-	mig_reply_error_t *req_hdr = (mig_reply_error_t *)&req_buff;
-	mig_reply_error_t *rep_hdr = (mig_reply_error_t *)&rep_buff;
+	mach_msg_size_t req_size = 2 * sizeof(union __RequestUnion__catch_mach_exc_subsystem);
+	mach_msg_size_t rep_size = sizeof(union __ReplyUnion__catch_mach_exc_subsystem);
+	char *req_buff = calloc(1, req_size);
+	char *rep_buff = calloc(1, rep_size);
+	mig_reply_error_t *req_hdr = (mig_reply_error_t *)req_buff;
+	mig_reply_error_t *rep_hdr = (mig_reply_error_t *)rep_buff;
+	if (!job_assumes(ms->job, req_buff != NULL && rep_buff != NULL)) {
+		goto out;
+	}
 
 	mach_msg_return_t mr = ~MACH_MSG_SUCCESS;
 
 	do {
+		memset(req_buff, 0, req_size);
+		memset(rep_buff, 0, rep_size);
 		/* This should be a direct check on the Mach service to see if it's an exception-handling
 		 * port, and it will break things if ReportCrash or SafetyNet start advertising other
 		 * Mach services. But for now, it should be okay.
 		 */
 		if (ms->job->alt_exc_handler || ms->job->internal_exc_handler) {
-			mr = launchd_exc_runtime_once(ms->port, sizeof(req_buff), sizeof(rep_buff), req_hdr, rep_hdr, 0);
+			mr = launchd_exc_runtime_once(ms->port, req_size, rep_size, req_hdr, rep_hdr, 0);
 		} else {
 			mach_msg_options_t options =	MACH_RCV_MSG		|
 											MACH_RCV_TIMEOUT	;
 
-			mr = mach_msg((mach_msg_header_t *)req_hdr, options, 0, sizeof(req_buff), ms->port, 0, MACH_PORT_NULL);
+			mr = mach_msg((mach_msg_header_t *)req_hdr, options, 0, req_size, ms->port, 0, MACH_PORT_NULL);
 			switch (mr) {
 			case MACH_MSG_SUCCESS:
+			case MACH_RCV_BODY_ERROR:
 				mach_msg_destroy((mach_msg_header_t *)req_hdr);
 				break;
 			case MACH_RCV_TIMED_OUT:
 				break;
 			case MACH_RCV_TOO_LARGE:
-				launchd_syslog(LOG_WARNING, "Tried to receive message that was larger than %lu bytes", sizeof(req_buff));
+				launchd_syslog(LOG_WARNING, "Tried to receive message that was larger than %u bytes", req_size);
 				break;
 			default:
 				break;
 			}
 		}
-	} while (drain_all && mr != MACH_RCV_TIMED_OUT);
+	} while (drain_all && mr == MACH_MSG_SUCCESS);
+out:
+	free(req_buff);
+	free(rep_buff);
 #ifdef LAUNCHD_CONSUMER_TESTING
 	op484_drain_end(ms->port);
 #endif
