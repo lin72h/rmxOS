@@ -318,8 +318,12 @@ pub export fn op484_after_receive(header: *c.mach_msg_header_t, options: u32, na
 pub export fn op484_allocation(ptr: ?*anyopaque, _: usize, _: usize) void {
     if (active) |i| {
         const d = &drains[i];
-        if (d.allocations < d.storage.len) d.storage[@intCast(d.allocations)] = ptr;
-        d.allocations += 1;
+        // These are the first two allocations after the drain-entry hook.
+        // Later warning-log records also use calloc and are not drain buffers.
+        if (d.allocations < d.storage.len) {
+            d.storage[@intCast(d.allocations)] = ptr;
+            d.allocations += 1;
+        }
     }
 }
 pub export fn op484_free(ptr: ?*anyopaque) void {
