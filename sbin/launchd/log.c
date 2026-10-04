@@ -468,7 +468,8 @@ launchd_log_forward(uid_t forward_uid, gid_t forward_gid, vm_offset_t inval, mac
 			_logmsg_enqueue(lm);
 		}
 
-		data_left -= lm->obj_sz;
+		/* The copied record may already have been freed by native logging. */
+		data_left -= lm_walk->obj_sz;
 	}
 
 	mig_deallocate(inval, invalCnt);
