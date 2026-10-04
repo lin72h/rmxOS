@@ -15,6 +15,7 @@ extern var _dispatch_source_type_mach_send: u8;
 extern fn dispatch_queue_create([*:0]const u8, Object) Object;
 extern fn dispatch_mach_create_f([*:0]const u8, Object, Object, *const fn (Object, c_ulong, Object, c_int) callconv(.c) void) Object;
 extern fn dispatch_mach_connect(Object, u32, u32, Object) void;
+extern fn dispatch_mach_reconnect(Object, u32, Object) void;
 extern fn dispatch_mach_cancel(Object) void;
 extern fn dispatch_mach_msg_get_msg(Object, ?*usize) *c.mach_msg_header_t;
 extern fn dispatch_source_create(*u8, usize, usize, Object) Object;
@@ -172,9 +173,12 @@ fn channel(len: usize, count: u32) void {
     object = dispatch_mach_create_f("op468", q, null, &channelCall);
     dispatch_mach_connect(object, p, 0, null);
     send(p, 44701, len);
-    if (count == 2) send(p, 44702, len);
-    var rc: c_int = 0;
-    for (0..count) |_| {
+    var rc: c_int = wait(&sem);
+    if (count == 2) {
+        if (c.mach_port_insert_right(c.mach_task_self(), p, p, c.MACH_MSG_TYPE_MAKE_SEND) != 0) c.atf_tc_fail("reconnect send ownership");
+        // Reconnect an installed receive-only channel; registration must route to the manager.
+        dispatch_mach_reconnect(object, p, null);
+        send(p, 44702, len);
         rc |= wait(&sem);
     }
     dispatch_mach_cancel(object);
@@ -184,7 +188,8 @@ fn channel(len: usize, count: u32) void {
     _ = c.printf("channel expected=%u observed=%u cancel_expected=1 cancel_observed=%u wire_expected=0 wire_observed=%u size_expected=%zu size_observed=%u wait_rc=%d\n", count, received, canceled, facts[0], len, sizes[0], rc);
     if (rc != 0 or received != count or canceled != 1 or ids[0] != 44701 or sizes[0] != len or facts[0] != 0) c.atf_tc_fail("channel receive/count/buffer registration mismatch");
     if (count == 2 and ids[1] != 44702) c.atf_tc_fail("second identity");
-    _ = c.mach_port_mod_refs(c.mach_task_self(), p, c.MACH_PORT_RIGHT_RECEIVE, -1);
+    if (c.mach_port_mod_refs(c.mach_task_self(), p, c.MACH_PORT_RIGHT_RECEIVE, -1) != 0) c.atf_tc_fail("borrowed receive was released by channel");
+    if (count == 2 and c.mach_port_deallocate(c.mach_task_self(), p) != 0) c.atf_tc_fail("owned send release");
 }
 fn two(_: [*c]const c.atf_tc_t) callconv(.c) void {
     channel(@sizeOf(c.mach_msg_header_t) + 8, 2);
@@ -225,7 +230,7 @@ fn copied(cancel: bool) void {
     op468_facts(&facts);
     _ = c.printf("copied expected=1 observed=1 cancel_expected=1 cancel_observed=%u handler_expected=0 handler_observed=%u moves_expected=1 moves_observed=%u wait_rc=%d\n", canceled, callbacks, facts[1], rc);
     if (rc != 0 or canceled != 1 or callbacks != 0 or facts[1] != 1) c.atf_tc_fail("canceled copied record moved member or invoked handler");
-    _ = c.mach_port_mod_refs(c.mach_task_self(), p, c.MACH_PORT_RIGHT_RECEIVE, -1);
+    if (c.mach_port_mod_refs(c.mach_task_self(), p, c.MACH_PORT_RIGHT_RECEIVE, -1) != 0) c.atf_tc_fail("borrowed receive was released by source");
     const reuse_kr = c.mach_port_allocate_name(c.mach_task_self(), c.MACH_PORT_RIGHT_RECEIVE, p);
     if (reuse_kr != 0) c.atf_tc_fail("controlled name reuse kr=%d", reuse_kr);
     const newer = p;
