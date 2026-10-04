@@ -7,6 +7,7 @@ const c = @cImport({
     @cInclude("semaphore.h");
     @cInclude("time.h");
     @cInclude("unistd.h");
+    @cInclude("sys/event.h");
 });
 const Object = ?*anyopaque;
 extern var _dispatch_source_type_mach_recv: u8;
@@ -23,11 +24,61 @@ extern fn dispatch_source_set_registration_handler_f(Object, *const fn (Object) 
 extern fn dispatch_source_cancel(Object) void;
 extern fn dispatch_resume(Object) void;
 extern fn dispatch_release(Object) void;
-extern fn op468_configure(c_int, c_uint) void;
-extern fn op468_wait_copied() c_int;
-extern fn op468_release() void;
-extern fn op468_copied_set() c_uint;
-extern fn op468_facts(*[4]c_uint) void;
+// The adapter projects C ABI fields; all scheduling and observations live here.
+var fixture_mode: c_int = 0;
+var fixture_watched: c_uint = 0;
+var fixture_copied: c_uint = 0;
+var fixture_released: c_uint = 0;
+var fixture_set: c_uint = 0;
+var fixture_facts: [4]c_uint = .{ 0, 0, 0, 0 };
+fn op468_configure(mode: c_int, p: c_uint) void {
+    @atomicStore(c_uint, &fixture_watched, p, .seq_cst);
+    @atomicStore(c_int, &fixture_mode, mode, .seq_cst);
+    @atomicStore(c_uint, &fixture_copied, 0, .seq_cst);
+    @atomicStore(c_uint, &fixture_released, 0, .seq_cst);
+    for (&fixture_facts) |*v| @atomicStore(c_uint, v, 0, .seq_cst);
+}
+fn op468_wait_copied() c_int {
+    for (0..3000) |_| {
+        if (@atomicLoad(c_uint, &fixture_copied, .seq_cst) == 1) return 0;
+        _ = c.usleep(1000);
+    }
+    return 1;
+}
+fn op468_release() void {
+    @atomicStore(c_uint, &fixture_released, 1, .seq_cst);
+}
+fn op468_copied_set() c_uint {
+    return @atomicLoad(c_uint, &fixture_set, .seq_cst);
+}
+fn op468_facts(out: *[4]c_uint) void {
+    for (out, &fixture_facts) |*dest, *v| dest.* = @atomicLoad(c_uint, v, .seq_cst);
+}
+pub export fn op468_change(filter: c_int, flags: c_uint, ext0: u64, ext1: u64) void {
+    if (filter == c.EVFILT_MACHPORT and (flags != 0 or ext0 != 0 or ext1 != 0))
+        _ = @atomicRmw(c_uint, &fixture_facts[0], .Add, 1, .seq_cst);
+}
+pub export fn op468_event(filter: c_int, ident: usize) void {
+    if (filter != c.EVFILT_MACHPORT or @atomicLoad(c_int, &fixture_mode, .seq_cst) == 0) return;
+    if (@cmpxchgStrong(c_uint, &fixture_copied, 0, 2, .seq_cst, .seq_cst) != null) return;
+    @atomicStore(c_uint, &fixture_set, @intCast(ident), .seq_cst);
+    @atomicStore(c_uint, &fixture_copied, 1, .seq_cst);
+    while (@atomicLoad(c_uint, &fixture_released, .seq_cst) == 0) _ = c.usleep(1000);
+}
+pub export fn op468_move(p: c_uint) void {
+    if (@atomicLoad(c_uint, &fixture_released, .seq_cst) != 0 and p == @atomicLoad(c_uint, &fixture_watched, .seq_cst))
+        _ = @atomicRmw(c_uint, &fixture_facts[1], .Add, 1, .seq_cst);
+}
+pub export fn op468_deallocate(p: c_uint) void {
+    if (p == @atomicLoad(c_uint, &fixture_watched, .seq_cst))
+        _ = @atomicRmw(c_uint, &fixture_facts[2], .Add, 1, .seq_cst);
+}
+pub export fn op468_notification(task: c_uint, p: c_uint, notify: c_uint) void {
+    if (p != @atomicLoad(c_uint, &fixture_watched, .seq_cst) or notify == 0) return;
+    _ = @atomicRmw(c_uint, &fixture_facts[3], .Add, 1, .seq_cst);
+    if (@cmpxchgStrong(c_int, &fixture_mode, 3, 0, .seq_cst, .seq_cst) == null)
+        _ = c.mach_port_mod_refs(task, p, c.MACH_PORT_RIGHT_RECEIVE, -1);
+}
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 var sem_initialized = false;
 var sem: c.sem_t = undefined;
