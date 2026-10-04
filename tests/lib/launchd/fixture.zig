@@ -28,6 +28,7 @@ extern fn op484_job_runs(Job) u32;
 extern fn op484_send_service(Job, [*:0]const u8, *u32) Job;
 extern fn op484_demand_scan() void;
 extern fn op484_callback_slots() usize;
+extern fn op484_port_index(u32) usize;
 extern fn op484_demand_set() u32;
 extern fn op484_request_size() u32;
 extern fn runtime_add_mport(u32, ?*anyopaque) c_int;
@@ -195,8 +196,8 @@ fn closeUnregistered(reply: *p.Reply) void {
         names[used] = name;
         used += 1;
         if (fixture_error != 0) return;
-        if (name >> 8 < slots) continue;
-        reply.facts[0] = @intFromBool(name >> 8 >= slots);
+        if (op484_port_index(name) < slots) continue;
+        reply.facts[0] = @intFromBool(op484_port_index(name) >= slots);
         errorIf(c.mach_port_move_member(c.mach_task_self(), name, op484_demand_set()) != 0, 31);
         close_port = name;
         detached = false;
