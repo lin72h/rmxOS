@@ -10,6 +10,11 @@ void op484_after_receive(mach_msg_header_t *, unsigned, unsigned, int);
 void op484_attributes(unsigned, int, unsigned);
 void op484_move(unsigned, unsigned, int);
 void op484_close(unsigned, unsigned, int);
+void op484_members(mach_port_name_t *, unsigned);
+void op484_lookup(unsigned, void *);
+struct job_s *__wrap_job_find_by_service_port(mach_port_t);
+kern_return_t __wrap_mach_port_get_set_status(mach_port_t, mach_port_name_t,
+    mach_port_name_array_t *, mach_msg_type_number_t *);
 void __wrap_launchd_runtime_init2(void);
 void *__wrap_calloc(size_t, size_t);
 void __wrap_free(void *);
@@ -73,4 +78,18 @@ kern_return_t __wrap_mach_port_mod_refs(mach_port_t task, mach_port_name_t p,
     mach_port_right_t right, mach_port_delta_t delta) {
     op484_close(p, right, delta);
     return __real_mach_port_mod_refs(task, p, right, delta);
+}
+struct job_s *__real_job_find_by_service_port(mach_port_t);
+struct job_s *__wrap_job_find_by_service_port(mach_port_t p) {
+    struct job_s *j = __real_job_find_by_service_port(p);
+    op484_lookup(p, j);
+    return j;
+}
+kern_return_t __real_mach_port_get_set_status(mach_port_t, mach_port_name_t,
+    mach_port_name_array_t *, mach_msg_type_number_t *);
+kern_return_t __wrap_mach_port_get_set_status(mach_port_t task, mach_port_name_t p,
+    mach_port_name_array_t *members, mach_msg_type_number_t *count) {
+    kern_return_t r = __real_mach_port_get_set_status(task, p, members, count);
+    if (r == KERN_SUCCESS) op484_members(*members, *count);
+    return r;
 }

@@ -86,6 +86,7 @@ LDADD+= ${LAUNCHD_CONSUMER_FIXTURE}/coordination.o ${LAUNCHD_CONSUMER_FIXTURE}/l
 LDFLAGS+= -rdynamic -Wl,--wrap=launchd_runtime_init2 -Wl,--wrap=calloc -Wl,--wrap=free
 LDFLAGS+= -Wl,--wrap=mach_msg -Wl,--wrap=mach_port_get_attributes
 LDFLAGS+= -Wl,--wrap=mach_port_move_member -Wl,--wrap=mach_port_mod_refs
+LDFLAGS+= -Wl,--wrap=mach_port_get_set_status -Wl,--wrap=job_find_by_service_port
 .endif
 
 
