@@ -439,7 +439,7 @@ xpc_pipe_send(xpc_object_t xobj, mach_port_t dst, mach_port_t local,
 	message->size = size;
 	kr = mach_msg_send(&message->header);
 	if (kr != KERN_SUCCESS)
-		err = (kr == KERN_INVALID_TASK) ? EPIPE : EINVAL;
+		err = (kr == KERN_INVALID_TASK || kr == MACH_SEND_INVALID_DEST) ? EPIPE : EINVAL;
 	else
 		err = 0;
 	free(message);
@@ -471,17 +471,20 @@ xpc_pipe_receive(mach_port_t local, mach_port_t *remote, xpc_object_t *result,
 	request->msgh_size = MAX_RECV;
 	request->msgh_local_port = local;
 #ifdef XPC_CONSUMER_TESTING
-	kr = op500_receive(request, MACH_RCV_MSG |
+	kr = op500_receive(request, MACH_RCV_MSG | MACH_RCV_TIMEOUT |
 #else
-	kr = mach_msg(request, MACH_RCV_MSG |
+	kr = mach_msg(request, MACH_RCV_MSG | MACH_RCV_TIMEOUT |
 #endif
 	    MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0) |
 	    MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_AUDIT),
 	    0, request->msgh_size, request->msgh_local_port,
-	    MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
+	    0, MACH_PORT_NULL);
 
-	if (kr != 0)
-		LOG("mach_msg_receive returned %d\n", kr);
+	if (kr != KERN_SUCCESS) {
+		if (kr != MACH_RCV_TIMED_OUT)
+			LOG("mach_msg_receive returned %d\n", kr);
+		return (kr);
+	}
 	*remote = request->msgh_remote_port;
 	*id = message.id;
 	data_size = message.size;

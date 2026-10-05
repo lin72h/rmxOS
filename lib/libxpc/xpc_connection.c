@@ -528,7 +528,10 @@ xpc_send(xpc_connection_t xconn, xpc_object_t message, uint64_t id)
 
 	if (kr != KERN_SUCCESS) {
 		debugf("send failed, kr=%d", kr);
-		xpc_connection_interrupt(conn);
+		if (kr == EPIPE)
+			xpc_connection_cancel(conn);
+		else
+			xpc_connection_interrupt(conn);
 	}
 }
 
@@ -805,7 +808,7 @@ static void
 xpc_connection_remote_dead(void *context)
 {
 
-	xpc_connection_interrupt(context);
+	xpc_connection_cancel(context);
 }
 
 static void
@@ -879,8 +882,12 @@ xpc_connection_recv_message(void *context)
 #ifdef XPC_CONSUMER_TESTING
 	op500_after_receive(conn, kr);
 #endif
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
+		if (kr == MACH_RCV_PORT_DIED || kr == MACH_RCV_INVALID_NAME ||
+		    kr == MACH_RCV_PORT_CHANGED)
+			xpc_connection_cancel(conn);
 		return;
+	}
 	if (conn->xc_cancelled) {
 		xpc_release(result);
 		(void)mach_port_deallocate(mach_task_self(), remote);
