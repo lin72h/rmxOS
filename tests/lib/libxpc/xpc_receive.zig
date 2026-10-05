@@ -281,7 +281,9 @@ fn gone(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const q = start(3);
     send(1);
     need(wait(&entered, 3000), "local handler entered");
-    need(c.mach_port_destroy(c.mach_task_self(), local) == 0, "external local close");
+    // The connection's existing send/dead-name uref reserves this name until
+    // its own cancellation closes it. Revoke the receive right, not the name.
+    need(c.mach_port_mod_refs(c.mach_task_self(), local, c.MACH_PORT_RIGHT_RECEIVE, -1) == 0, "external local receive revocation");
     _ = c.sem_post(&gate);
     need(wait(&after, 3000), "terminal receive returned");
     fence(q);
