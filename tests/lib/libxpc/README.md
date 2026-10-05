@@ -15,6 +15,8 @@ them. Hooks default to inactive, including when PID 1 loads the fixture library.
 - `local_port_gone`: pause a copied source handler, close its actual local receive
   right, then resume. The native invalid-name result remains real. Zeroing the
   failed receive buffer keeps the faulty base's speculative parse bounded.
+  The existing send/dead-name uref reserves the name until owned cancellation;
+  no unrelated allocation can reuse it during the controlled window.
   No EOF or automatic close notification is claimed.
 - `remote_pending`: send two real requests and drain them without replies, then
   destroy the remote receive right. Observe each reply handler's identity,
