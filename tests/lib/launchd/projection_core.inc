@@ -1,4 +1,13 @@
 /* Test-only C ABI projection. Scheduling and observations belong to Zig. */
+unsigned op495_job_port(job_t j) { return j->j_port; }
+int op495_port_for_label(job_t j, char *label, mach_port_t *p) {
+    struct ldcred *cred = runtime_get_caller_creds();
+    struct ldcred saved = *cred;
+    cred->euid = 0;
+    int result = job_mig_port_for_label(j, label, p);
+    *cred = saved;
+    return result;
+}
 void *op484_first_service(job_t j) { return SLIST_FIRST(&j->machservices); }
 unsigned op484_service_port(struct machservice *ms) { return ms->port; }
 int op484_job_pid(job_t j) { return j->p; }

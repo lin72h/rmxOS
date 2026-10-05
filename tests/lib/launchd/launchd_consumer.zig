@@ -57,15 +57,18 @@ fn dead(_: [*c]const c.atf_tc_t) callconv(.c) void {
     observe("late_dead_name", request(.late_dead_name), &.{ 1, 1, 2, 1, 3, 3, 1, 0 });
 }
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-var cases: [3]c.atf_tc_t = undefined;
+fn setupRetry(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    observe("setup_retry", request(.setup_retry), &.{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 });
+}
+var cases: [4]c.atf_tc_t = undefined;
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "25");
     _ = c.atf_tc_set_md_var(t, "require.user", "%s", "root");
 }
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "demand_removed", "late_dead_name", "close_unregistered" };
-    const bodies = .{ &demand, &dead, &unregistered };
-    inline for (0..3) |i| {
+    const names = [_][*:0]const u8{ "demand_removed", "late_dead_name", "close_unregistered", "setup_retry" };
+    const bodies = .{ &demand, &dead, &unregistered, &setupRetry };
+    inline for (0..4) |i| {
         const err = c.atf_tc_init(&cases[i], names[i], &head, bodies[i], null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
         const added = c.atf_tp_add_tc(tp, &cases[i]);

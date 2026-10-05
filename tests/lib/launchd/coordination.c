@@ -2,6 +2,14 @@
 #include <mach/mach.h>
 #include <stdlib.h>
 
+int op495_notify(unsigned, unsigned);
+kern_return_t __real_launchd_mport_notify_req(mach_port_t, mach_msg_id_t);
+kern_return_t __wrap_launchd_mport_notify_req(mach_port_t, mach_msg_id_t);
+kern_return_t __wrap_launchd_mport_notify_req(mach_port_t p, mach_msg_id_t id) {
+    int injected = op495_notify(p, id);
+    return injected ? injected : __real_launchd_mport_notify_req(p, id);
+}
+
 void op484_init(void);
 void op484_allocation(void *, size_t, size_t);
 void op484_free(void *);

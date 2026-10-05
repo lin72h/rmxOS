@@ -16,6 +16,18 @@ const c = @cImport({
     @cInclude("launch.h");
 });
 const Job = ?*anyopaque;
+extern fn op495_job_port(Job) u32;
+extern fn op495_port_for_label(Job, [*:0]const u8, *u32) c_int;
+var setup_active = false;
+var notify_calls: u64 = 0;
+var failed_name: u32 = 0;
+pub export fn op495_notify(name: u32, id: u32) c_int {
+    if (!setup_active or id != c.MACH_NOTIFY_NO_SENDERS) return 0;
+    notify_calls += 1;
+    if (notify_calls != 1) return 0;
+    failed_name = name;
+    return c.KERN_FAILURE;
+}
 extern fn job_import(c.launch_data_t) Job;
 extern fn job_remove(Job) void;
 extern fn job_dispatch(Job, bool) Job;
@@ -256,6 +268,65 @@ fn lateDead(reply: *p.Reply) void {
     _ = c.mach_port_deallocate(c.mach_task_self(), unrelated);
     if (other_after == other_job) job_remove(other_job);
 }
+fn setupRetry(reply: *p.Reply) void {
+    const label = "org.rmx.op495.setup";
+    const job = makeJob(label, null, false);
+    if (job == null) return;
+    notify_calls = 0;
+    failed_name = 0;
+    setup_active = true;
+    defer setup_active = false;
+    var handed: u32 = 0;
+    const first = op495_port_for_label(job, label, &handed);
+    reply.facts[0] = @intFromBool(notify_calls == 1 and failed_name != 0);
+    reply.facts[1] = @intFromBool(op495_job_port(job) == 0);
+    reply.facts[2] = @intFromBool(first != 0 and handed == 0);
+    var kind: c.mach_port_type_t = 0;
+    reply.facts[3] = @intFromBool(c.mach_port_type(c.mach_task_self(), failed_name, &kind) == c.KERN_INVALID_NAME);
+    // Hold allocations until the actual retired name is reused. No injected
+    // name or forged right: retry must leave this unrelated receive right alone.
+    var names: [1024]u32 = undefined;
+    var used: usize = 0;
+    var reused: u32 = 0;
+    defer for (names[0..used]) |name| {
+        _ = c.mach_port_destroy(c.mach_task_self(), name);
+    };
+    while (used < names.len) {
+        const name = port();
+        names[used] = name;
+        used += 1;
+        if (fixture_error != 0) break;
+        if (name == failed_name) {
+            reused = name;
+            break;
+        }
+    }
+    errorIf(reused == 0, 495);
+    if (fixture_error != 0) {
+        job_remove(job);
+        return;
+    }
+    reply.facts[4] = @intFromBool(reused == failed_name);
+    sendRight(reused);
+    handed = 0;
+    const retry = op495_port_for_label(job, label, &handed);
+    reply.facts[5] = @intFromBool(retry == 0 and handed != 0 and handed == op495_job_port(job));
+    reply.facts[6] = @intFromBool(handed != reused);
+    reply.facts[7] = @intFromBool(notify_calls == 2);
+    // Exercise the fresh port's real send/receive path, bounded and empty on exit.
+    sendRight(handed);
+    queue(handed, 49501, 64);
+    var bytes: [512]u8 align(8) = @splat(0);
+    const header: *c.mach_msg_header_t = @ptrCast(&bytes);
+    const received = c.mach_msg(header, c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, bytes.len, handed, 0, 0);
+    reply.facts[8] = @intFromBool(received == 0 and header.msgh_id == 49501);
+    _ = c.mach_port_deallocate(c.mach_task_self(), handed);
+    reply.facts[9] = @intFromBool(refs(reused, c.MACH_PORT_RIGHT_RECEIVE) == 1 and refs(reused, c.MACH_PORT_RIGHT_SEND) == 1);
+    job_remove(job);
+    var count: u32 = 0;
+    reply.facts[10] = @intFromBool(c.mach_port_get_refs(c.mach_task_self(), reused, c.MACH_PORT_RIGHT_RECEIVE, &count) == 0 and count == 1);
+    reply.facts[11] = @intFromBool(c.mach_port_get_refs(c.mach_task_self(), reused, c.MACH_PORT_RIGHT_SEND, &count) == 0 and count == 1);
+}
 fn serve(_: ?*anyopaque, _: *c.struct_kevent) callconv(.c) void {
     const fd = c.accept(listener, null, null);
     if (fd < 0) return;
@@ -269,6 +340,7 @@ fn serve(_: ?*anyopaque, _: *c.struct_kevent) callconv(.c) void {
         .demand_removed => demand(&reply),
         .close_unregistered => closeUnregistered(&reply),
         .late_dead_name => lateDead(&reply),
+        .setup_retry => setupRetry(&reply),
         .drain_start => launchDrain(0, "org.rmx.op484.drain", "org.rmx.op484.drain.service", 0),
         .terminal_start => {
             launchDrain(1, "org.rmx.op484.gone", "org.rmx.op484.gone.service", 1);
