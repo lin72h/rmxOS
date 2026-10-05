@@ -1698,22 +1698,24 @@ job_set_global_on_demand(job_t j, bool val)
 bool
 job_setup_machport(job_t j)
 {
-	if (job_assumes_zero(j, launchd_mport_create_recv(&j->j_port)) != KERN_SUCCESS) {
+	mach_port_t port = MACH_PORT_NULL;
+	j->j_port = MACH_PORT_NULL;
+	if (job_assumes_zero(j, launchd_mport_create_recv(&port)) != KERN_SUCCESS) {
 		goto out_bad;
 	}
 
-	if (job_assumes_zero(j, runtime_add_mport(j->j_port, job_server)) != KERN_SUCCESS) {
+	if (job_assumes_zero(j, runtime_add_mport(port, job_server)) != KERN_SUCCESS) {
 		goto out_bad2;
 	}
 
-	if (job_assumes_zero(j, launchd_mport_notify_req(j->j_port, MACH_NOTIFY_NO_SENDERS)) != KERN_SUCCESS) {
-		(void)job_assumes_zero(j, launchd_mport_close_recv(j->j_port));
-		goto out_bad;
+	if (job_assumes_zero(j, launchd_mport_notify_req(port, MACH_NOTIFY_NO_SENDERS)) != KERN_SUCCESS) {
+		goto out_bad2;
 	}
 
+	j->j_port = port;
 	return true;
 out_bad2:
-	(void)job_assumes_zero(j, launchd_mport_close_recv(j->j_port));
+	(void)job_assumes_zero(j, launchd_mport_close_recv(port));
 out_bad:
 	return false;
 }
@@ -7369,7 +7371,6 @@ machservice_drain_port(struct machservice *ms)
 			mr = mach_msg((mach_msg_header_t *)req_hdr, options, 0, req_size, ms->port, 0, MACH_PORT_NULL);
 			switch (mr) {
 			case MACH_MSG_SUCCESS:
-			case MACH_RCV_BODY_ERROR:
 				mach_msg_destroy((mach_msg_header_t *)req_hdr);
 				break;
 			case MACH_RCV_TIMED_OUT:
@@ -7378,6 +7379,9 @@ machservice_drain_port(struct machservice *ms)
 				launchd_syslog(LOG_WARNING, "Tried to receive message that was larger than %u bytes", req_size);
 				break;
 			default:
+				if ((mr & ~MACH_MSG_MASK) == MACH_RCV_BODY_ERROR) {
+					mach_msg_destroy((mach_msg_header_t *)req_hdr);
+				}
 				break;
 			}
 		}
