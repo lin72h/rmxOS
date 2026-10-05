@@ -35,6 +35,9 @@
 #include <machine/atomic.h>
 #include <Block.h>
 #include "xpc_internal.h"
+#ifdef XPC_CONSUMER_TESTING
+#include "../../tests/lib/libxpc/projection.h"
+#endif
 
 #define XPC_CONNECTION_NEXT_ID(conn) (atomic_fetchadd_int(&conn->xc_last_id, 1))
 
@@ -558,6 +561,9 @@ xpc_connection_invoke_pending(void *context)
 		dispatch_release(call->xp_queue);
 	if (call->xp_remote_port != MACH_PORT_NULL)
 		(void)mach_port_deallocate(mach_task_self(), call->xp_remote_port);
+#ifdef XPC_CONSUMER_TESTING
+	op500_pending_free(call);
+#endif
 	free(call);
 }
 
@@ -670,6 +676,9 @@ xpc_connection_source_cancelled(void *context)
 	struct xpc_connection *conn;
 
 	conn = context;
+#ifdef XPC_CONSUMER_TESTING
+	op500_source_cancelled(conn);
+#endif
 	if (atomic_fetchadd_int(&conn->xc_source_cancel_count, -1) == 1)
 		xpc_release(conn);
 }
@@ -755,10 +764,16 @@ xpc_connection_destroy(struct xpc_connection *conn)
 	}
 	if (conn->xc_owns_remote_port &&
 	    conn->xc_remote_port != MACH_PORT_NULL) {
+#ifdef XPC_CONSUMER_TESTING
+		op500_port_release(conn, conn->xc_remote_port, 1);
+#endif
 		(void)mach_port_deallocate(mach_task_self(), conn->xc_remote_port);
 		conn->xc_remote_port = MACH_PORT_NULL;
 	}
 	if (conn->xc_owns_local_port && conn->xc_local_port != MACH_PORT_NULL) {
+#ifdef XPC_CONSUMER_TESTING
+		op500_port_release(conn, conn->xc_local_port, 2);
+#endif
 		(void)mach_port_destroy(mach_task_self(), conn->xc_local_port);
 		conn->xc_local_port = MACH_PORT_NULL;
 	}
@@ -857,7 +872,13 @@ xpc_connection_recv_message(void *context)
 	debugf("connection=%p", context);
 
 	conn = context;
+#ifdef XPC_CONSUMER_TESTING
+	op500_before_handler(conn);
+#endif
 	kr = xpc_pipe_receive(conn->xc_local_port, &remote, &result, &id);
+#ifdef XPC_CONSUMER_TESTING
+	op500_after_receive(conn, kr);
+#endif
 	if (kr != KERN_SUCCESS)
 		return;
 	if (conn->xc_cancelled) {
@@ -934,3 +955,7 @@ xpc_connection_recv_message(void *context)
 		xpc_release(result);
 	}
 }
+
+#ifdef XPC_CONSUMER_TESTING
+#include "../../tests/lib/libxpc/projection.inc"
+#endif

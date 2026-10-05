@@ -38,6 +38,12 @@ SRCS=	xpc_dictionary.c \
 
 LIBADD=	BlocksRuntime dispatch launch mach bsm nv sbuf
 
+.if defined(XPC_CONSUMER_FIXTURE)
+CFLAGS+= -DXPC_CONSUMER_TESTING
+.PATH: ${.CURDIR}/../../tests/lib/libxpc
+SRCS+= coordination.c
+.endif
+
 INCSDIR= ${INCLUDEDIR}/xpc
 INCS=	activity.h \
 	base.h \

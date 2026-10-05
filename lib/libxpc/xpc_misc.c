@@ -39,6 +39,9 @@
 #include "xpc_internal.h"
 
 #define MAX_RECV 8192
+#ifdef XPC_CONSUMER_TESTING
+#include "../../tests/lib/libxpc/projection.h"
+#endif
 #define XPC_RECV_SIZE			\
     MAX_RECV - 				\
     sizeof(mach_msg_header_t) - 	\
@@ -130,6 +133,9 @@ xpc_unpack(void *buf, size_t size)
 {
 	struct xpc_object *xo;
 	nvlist_t *nv;
+#ifdef XPC_CONSUMER_TESTING
+	op500_unpack(buf, size);
+#endif
 
 	nv = nvlist_unpack(buf, size);
 	if (nv == NULL)
@@ -464,7 +470,11 @@ xpc_pipe_receive(mach_port_t local, mach_port_t *remote, xpc_object_t *result,
 	/* should be size - but what about arbitrary XPC data? */
 	request->msgh_size = MAX_RECV;
 	request->msgh_local_port = local;
+#ifdef XPC_CONSUMER_TESTING
+	kr = op500_receive(request, MACH_RCV_MSG |
+#else
 	kr = mach_msg(request, MACH_RCV_MSG |
+#endif
 	    MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0) |
 	    MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_AUDIT),
 	    0, request->msgh_size, request->msgh_local_port,
