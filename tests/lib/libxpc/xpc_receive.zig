@@ -258,6 +258,7 @@ fn stale(_: [*c]const c.atf_tc_t) callconv(.c) void {
     finish();
     const r = released();
     report("stale_readiness", &.{ 1, 1, c.MACH_RCV_TIMED_OUT, 1, 4, 1, 1, 1, 2 }, &.{ @intFromBool(returned), @intFromBool((options & c.MACH_RCV_TIMEOUT) != 0), result, seen, mask, r[0], r[1], r[2], r[3] });
+    conclude();
 }
 fn failed(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const q = start(2);
@@ -274,6 +275,7 @@ fn failed(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const sum = get(&values);
     finish();
     report("failed_receive", &.{ 1, c.MACH_RCV_INTERRUPTED, 0, 0, 4, 1, 1, 1 }, &.{ injected, kr, p, v, sum, get(&local_releases), get(&remote_releases), get(&finalizers) });
+    conclude();
 }
 fn gone(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const q = start(3);
@@ -289,6 +291,7 @@ fn gone(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const p = get(&parses);
     finish();
     report("local_port_gone", &.{ c.MACH_RCV_INVALID_NAME, c.MACH_RCV_INVALID_NAME, 0, 1, 1, 1, 1, 1, 2 }, &.{ native_result, kr, p, cancelled, terminal_event, get(&invalid), get(&local_releases), get(&remote_releases), get(&source_completions) });
+    conclude();
 }
 fn pending() O {
     const q = dispatch_queue_create("op500.replies", null);
@@ -390,6 +393,7 @@ fn cancelling(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(wait(&finished, 3000), "completion finalizer");
     dispatch_release(replies);
     report("cancel_inflight", &.{ 1, 0, 0, 1, 1, 1, 1, 1, 2, 2, 1, 1, 1, 2 }, &.{ held, early_local, early_remote, alive_local, alive_remote, get(&invalid), get(&slots[0].calls), get(&slots[1].calls), get(&slots[0].invalid) + get(&slots[1].invalid), get(&pending_frees), get(&local_releases), get(&remote_releases), get(&finalizers), get(&source_completions) });
+    conclude();
 }
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 var cases: [5]c.atf_tc_t = undefined;
