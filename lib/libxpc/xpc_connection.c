@@ -188,7 +188,11 @@ xpc_connection_create_mach_service(const char *name, dispatch_queue_t targetq,
 	}
 
 	/* Look up named mach service */
+#ifdef XPC_CONSUMER_TESTING
+	kr = op502_lookup(bootstrap_port, name, &conn->xc_remote_port);
+#else
 	kr = bootstrap_look_up(bootstrap_port, name, &conn->xc_remote_port);
+#endif
 	if (kr != KERN_SUCCESS) {
 		xpc_release(conn);
 		errno = ENOENT;

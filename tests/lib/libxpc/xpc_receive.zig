@@ -12,6 +12,7 @@ const c = @cImport({
 const O = ?*anyopaque;
 const Handler = *const fn (O, O) callconv(.c) void;
 extern fn xpc_connection_create(?[*:0]const u8, O) O;
+extern fn xpc_connection_create_mach_service([*:0]const u8, O, u64) O;
 extern fn xpc_connection_resume(O) void;
 extern fn xpc_connection_suspend(O) void;
 extern fn dispatch_suspend(O) void;
@@ -36,6 +37,8 @@ extern fn op500_cancel_count(O) u32;
 extern fn op500_cancelled(O) u32;
 extern fn op500_send_queue(O) O;
 extern fn op500_recv_queue(O) O;
+extern fn op502_interrupted(O) u32;
+extern fn op502_peer(O) void;
 extern fn op500_pipe_send(O, u32, u32, u64) c_int;
 const Hooks = extern struct {
     before_handler: *const fn (O) callconv(.c) void,
@@ -45,6 +48,7 @@ const Hooks = extern struct {
     source_cancelled: *const fn (O) callconv(.c) void,
     port_release: *const fn (O, u32, u32) callconv(.c) void,
     pending_free: *const fn (O) callconv(.c) void,
+    lookup: ?*const fn (u32, [*:0]const u8, *u32) callconv(.c) c_int = null,
 };
 extern fn op500_install(*const Hooks) void;
 const Slot = struct { calls: u64 = 0, invalid: u64 = 0, interrupted: u64 = 0 };
@@ -80,6 +84,20 @@ var finalizers: u64 = 0;
 var source_completions: u64 = 0;
 var pending_frees: u64 = 0;
 var observation_mismatch = false;
+var lookup_port: u32 = 0;
+var lookup_calls: u64 = 0;
+var retired_releases: u64 = 0;
+var reply_values: u64 = 0;
+var retired_done: c.sem_t = undefined;
+var named_remote = false;
+fn lookup(_: u32, name: [*:0]const u8, out: *u32) callconv(.c) c_int {
+    if (!std.mem.eql(u8, std.mem.span(name), "op502.fixture.service")) return 1102;
+    add(&lookup_calls);
+    if (lookup_port == 0) return 1102;
+    const kr = c.mach_port_mod_refs(c.mach_task_self(), lookup_port, c.MACH_PORT_RIGHT_SEND, 1);
+    if (kr == 0) out.* = lookup_port;
+    return kr;
+}
 fn get(v: *u64) u64 {
     return @atomicLoad(u64, v, .seq_cst);
 }
@@ -147,6 +165,10 @@ fn sourceCancelled(p: O) callconv(.c) void {
 fn portRelease(p: O, _: u32, kind: u32) callconv(.c) void {
     if (p != conn) return;
     if (kind == 1) add(&remote_releases) else if (kind == 2) add(&local_releases);
+    if (kind == 3) {
+        add(&retired_releases);
+        _ = c.sem_post(&retired_done);
+    }
 }
 fn pendingFree(_: O) callconv(.c) void {
     add(&pending_frees);
@@ -165,6 +187,7 @@ fn reply(ctx: O, obj: O) callconv(.c) void {
     add(&slot.calls);
     if (obj == @as(O, @ptrCast(&_xpc_error_connection_invalid))) add(&slot.invalid);
     if (obj == @as(O, @ptrCast(&_xpc_error_connection_interrupted))) add(&slot.interrupted);
+    if (obj != @as(O, @ptrCast(&_xpc_error_connection_invalid)) and obj != @as(O, @ptrCast(&_xpc_error_connection_interrupted)) and xpc_dictionary_get_uint64(obj, "value") == 42) add(&reply_values);
     _ = c.sem_post(&reply_done);
 }
 fn finalize(_: O) callconv(.c) void {
@@ -179,22 +202,26 @@ fn port() u32 {
 }
 fn start(which: u32) O {
     mode = which;
-    for ([_]*c.sem_t{ &entered, &gate, &after, &event_done, &reply_done, &finished, &cancel_entered, &cancel_gate }) |s| need(c.sem_init(s, 0, 0) == 0, "semaphore");
-    const hooks = Hooks{ .before_handler = &beforeHandler, .after_receive = &afterReceive, .receive = &receive, .unpack = &unpack, .source_cancelled = &sourceCancelled, .port_release = &portRelease, .pending_free = &pendingFree };
+    for ([_]*c.sem_t{ &entered, &gate, &after, &event_done, &reply_done, &finished, &cancel_entered, &cancel_gate, &retired_done }) |s| need(c.sem_init(s, 0, 0) == 0, "semaphore");
+    const hooks = Hooks{ .before_handler = &beforeHandler, .after_receive = &afterReceive, .receive = &receive, .unpack = &unpack, .source_cancelled = &sourceCancelled, .port_release = &portRelease, .pending_free = &pendingFree, .lookup = &lookup };
     op500_install(&hooks);
     const target = dispatch_queue_create("op500.target", null);
     need(target != null, "target queue");
-    conn = xpc_connection_create(null, target);
+    remote = port();
+    lookup_port = remote;
+    conn = if (mode == 7 or mode == 8) xpc_connection_create_mach_service("op502.fixture.service", target, 0) else xpc_connection_create(null, target);
     dispatch_release(target);
     need(conn != null, "connection");
     local = op500_local(conn);
-    remote = port();
-    need(c.mach_port_mod_refs(c.mach_task_self(), remote, c.MACH_PORT_RIGHT_SEND, 1) == 0, "owned remote uref");
-    op500_remote(conn, remote);
+    if (mode != 7 and mode != 8) {
+        need(c.mach_port_mod_refs(c.mach_task_self(), remote, c.MACH_PORT_RIGHT_SEND, 1) == 0, "owned remote uref");
+        op500_remote(conn, remote);
+    }
     op500_event_handler(conn, null, &event);
     xpc_connection_set_context(conn, null);
     xpc_connection_set_finalizer_f(conn, &finalize);
     xpc_connection_resume(conn);
+    if (mode == 4 or mode == 6) op502_peer(conn);
     return op500_recv_queue(conn);
 }
 fn send(value: u64) void {
@@ -225,7 +252,7 @@ fn report(name: [*:0]const u8, want: []const u64, got: []const u64) void {
     var kind: c.mach_port_type_t = 0;
     const local_gone = @intFromBool(c.mach_port_type(c.mach_task_self(), local, &kind) == c.KERN_INVALID_NAME);
     var count: u32 = 0;
-    const right: u32 = if (mode == 4 or mode == 6) c.MACH_PORT_RIGHT_DEAD_NAME else c.MACH_PORT_RIGHT_SEND;
+    const right: u32 = if (mode == 4 or mode == 6 or mode == 7 or mode == 8) c.MACH_PORT_RIGHT_DEAD_NAME else c.MACH_PORT_RIGHT_SEND;
     const remaining = if (c.mach_port_get_refs(c.mach_task_self(), remote, right, &count) == 0) count else 0;
     fact(name, want.len, 1, local_gone);
     fact(name, want.len + 1, 1, remaining);
@@ -308,7 +335,7 @@ fn pending() O {
     return q;
 }
 fn remoteDeath(_: [*c]const c.atf_tc_t) callconv(.c) void {
-    const q = start(4);
+    const q = start(if (named_remote) 7 else 4);
     const replies = pending();
     need(c.mach_port_mod_refs(c.mach_task_self(), remote, c.MACH_PORT_RIGHT_RECEIVE, -1) == 0, "remote receive death");
     need(wait(&reply_done, 3000) and wait(&reply_done, 3000), "two remote-death replies");
@@ -319,12 +346,16 @@ fn remoteDeath(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const event_invalid = get(&invalid);
     finish();
     dispatch_release(replies);
-    report("remote_pending", &.{ 1, 1, 1, 1, 0, 0, 1, 1, 2, 1, 1, 1 }, &.{ get(&slots[0].calls), get(&slots[1].calls), get(&slots[0].invalid), get(&slots[1].invalid), get(&slots[0].interrupted), get(&slots[1].interrupted), cancelled, event_invalid, get(&pending_frees), get(&local_releases), get(&remote_releases), get(&finalizers) });
+    report(if (named_remote) "named_pending" else "peer_pending", if (named_remote) &.{ 1, 1, 0, 0, 1, 1, 0, 0, 2, 1, 1, 1 } else &.{ 1, 1, 1, 1, 0, 0, 1, 1, 2, 1, 1, 1 }, &.{ get(&slots[0].calls), get(&slots[1].calls), get(&slots[0].invalid), get(&slots[1].invalid), get(&slots[0].interrupted), get(&slots[1].interrupted), cancelled, event_invalid, get(&pending_frees), get(&local_releases), get(&remote_releases), get(&finalizers) });
     remoteSendError();
     conclude();
 }
+fn namedDeath(t: [*c]const c.atf_tc_t) callconv(.c) void {
+    named_remote = true;
+    remoteDeath(t);
+}
 fn resetPhase() void {
-    for ([_]*c.sem_t{ &entered, &gate, &after, &event_done, &reply_done, &finished, &cancel_entered, &cancel_gate }) |s| _ = c.sem_destroy(s);
+    for ([_]*c.sem_t{ &entered, &gate, &after, &event_done, &reply_done, &finished, &cancel_entered, &cancel_gate, &retired_done }) |s| _ = c.sem_destroy(s);
     slots = @splat(.{});
     conn = null;
     local = 0;
@@ -347,10 +378,13 @@ fn resetPhase() void {
     finalizers = 0;
     source_completions = 0;
     pending_frees = 0;
+    lookup_calls = 0;
+    retired_releases = 0;
+    reply_values = 0;
 }
 fn remoteSendError() void {
     resetPhase();
-    const q = start(6);
+    const q = start(if (named_remote) 8 else 6);
     // Prevent the send-death callback from completing the requests first.
     xpc_connection_suspend(conn);
     const sends = op500_send_queue(conn);
@@ -373,7 +407,66 @@ fn remoteSendError() void {
     const event_invalid = get(&invalid);
     finish();
     dispatch_release(replies);
-    report("remote_send_error", &.{ 1, 1, 1, 1, 0, 0, 1, 1, 2, 1, 1, 1 }, &.{ get(&slots[0].calls), get(&slots[1].calls), get(&slots[0].invalid), get(&slots[1].invalid), get(&slots[0].interrupted), get(&slots[1].interrupted), cancelled, event_invalid, get(&pending_frees), get(&local_releases), get(&remote_releases), get(&finalizers) });
+    report(if (named_remote) "named_send_error" else "peer_send_error", if (named_remote) &.{ 1, 1, 0, 0, 1, 1, 0, 0, 2, 1, 1, 1 } else &.{ 1, 1, 1, 1, 0, 0, 1, 1, 2, 1, 1, 1 }, &.{ get(&slots[0].calls), get(&slots[1].calls), get(&slots[0].invalid), get(&slots[1].invalid), get(&slots[0].interrupted), get(&slots[1].interrupted), cancelled, event_invalid, get(&pending_frees), get(&local_releases), get(&remote_releases), get(&finalizers) });
+}
+
+fn recovery(fail_lookup: bool) void {
+    const q = start(7);
+    const replies = pending();
+    need(c.mach_port_mod_refs(c.mach_task_self(), remote, c.MACH_PORT_RIGHT_RECEIVE, -1) == 0, "first service death");
+    need(wait(&reply_done, 3000) and wait(&reply_done, 3000) and wait(&event_done, 3000), "first death completions");
+    fence(q);
+    fence(replies);
+    const old = remote;
+    var request_seen: u64 = 0;
+    var failure_reply: u64 = 0;
+    if (op500_cancelled(conn) == 0) {
+        slots[0] = .{};
+        lookup_port = if (fail_lookup) 0 else port();
+        const obj = xpc_dictionary_create(null, null, 0);
+        need(obj != null, "recovery request");
+        xpc_dictionary_set_uint64(obj, "value", 42);
+        op500_reply(conn, obj, replies, &slots[0], &reply);
+        xpc_release(obj);
+        fence(op500_send_queue(conn));
+        if (fail_lookup) {
+            need(wait(&reply_done, 3000) and wait(&event_done, 3000), "lookup failure reports interruption");
+            failure_reply = get(&slots[0].interrupted);
+        } else {
+            remote = lookup_port;
+            var bytes: [8192]u8 align(8) = @splat(0);
+            const h: *c.mach_msg_header_t = @ptrCast(&bytes);
+            need(c.mach_msg(h, c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, bytes.len, remote, 3000, 0) == 0, "request on replacement right");
+            const Wire = extern struct { header: c.mach_msg_header_t, size: usize, id: u64 };
+            const wire: *Wire = @ptrCast(&bytes);
+            request_seen = 1;
+            const response = xpc_dictionary_create(null, null, 0);
+            xpc_dictionary_set_uint64(response, "value", 42);
+            need(op500_pipe_send(response, h.msgh_remote_port, remote, wire.id) == 0, "reply over replacement right");
+            xpc_release(response);
+            c.mach_msg_destroy(h);
+            need(wait(&reply_done, 3000), "replacement reply received");
+            need(wait(&retired_done, 3000), "old send source cancellation completed");
+            need(c.mach_port_mod_refs(c.mach_task_self(), remote, c.MACH_PORT_RIGHT_RECEIVE, -1) == 0, "second service death");
+            need(wait(&event_done, 3000), "second interruption");
+        }
+        fence(q);
+        fence(replies);
+    }
+    var refs: u32 = 0;
+    _ = c.mach_port_get_refs(c.mach_task_self(), old, c.MACH_PORT_RIGHT_DEAD_NAME, &refs);
+    const got = [_]u64{ get(&lookup_calls), request_seen, get(&reply_values), get(&interrupted), get(&invalid), op500_cancelled(conn), get(&retired_releases), refs, failure_reply, op502_interrupted(conn) };
+    finish();
+    dispatch_release(replies);
+    report(if (fail_lookup) "lookup_failure" else "reconnect", if (fail_lookup) &.{ 2, 0, 0, 2, 0, 0, 0, 2, 1, 1 } else &.{ 2, 1, 1, 2, 0, 0, 1, 1, 0, 1 }, &got);
+    if (old != remote) _ = c.mach_port_destroy(c.mach_task_self(), old);
+    conclude();
+}
+fn reconnect(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    recovery(false);
+}
+fn lookupFailure(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    recovery(true);
 }
 
 fn cancelling(_: [*c]const c.atf_tc_t) callconv(.c) void {
@@ -398,14 +491,14 @@ fn cancelling(_: [*c]const c.atf_tc_t) callconv(.c) void {
     conclude();
 }
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-var cases: [5]c.atf_tc_t = undefined;
+var cases: [8]c.atf_tc_t = undefined;
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "25");
 }
 fn addTests(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "stale_readiness", "failed_receive", "local_port_gone", "remote_pending", "cancel_inflight" };
-    const bodies = .{ &stale, &failed, &gone, &remoteDeath, &cancelling };
-    inline for (0..5) |i| {
+    const names = [_][*:0]const u8{ "stale_readiness", "failed_receive", "local_port_gone", "named_pending", "peer_pending", "reconnect", "lookup_failure", "cancel_inflight" };
+    const bodies = .{ &stale, &failed, &gone, &namedDeath, &remoteDeath, &reconnect, &lookupFailure, &cancelling };
+    inline for (0..8) |i| {
         const err = c.atf_tc_init(&cases[i], names[i], &head, bodies[i], null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
         const added = c.atf_tp_add_tc(tp, &cases[i]);

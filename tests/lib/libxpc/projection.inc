@@ -6,3 +6,5 @@ unsigned op500_cancelled(struct xpc_connection *c) { return c->xc_cancelled; }
 void *op500_send_queue(struct xpc_connection *c) { return c->xc_send_queue; }
 void *op500_recv_queue(struct xpc_connection *c) { return c->xc_recv_queue; }
 int op500_pipe_send(xpc_object_t o,unsigned dst,unsigned local,uint64_t id) { return xpc_pipe_send(o,dst,local,id); }
+unsigned op502_interrupted(struct xpc_connection *c) { return c->xc_interrupted; }
+void op502_peer(struct xpc_connection *c) { c->xc_parent=c; }

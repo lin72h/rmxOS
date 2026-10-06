@@ -13,6 +13,7 @@ struct op500_hooks {
  void (*source_cancelled)(void *);
  void (*port_release)(void *, unsigned, unsigned);
  void (*pending_free)(void *);
+ kern_return_t (*lookup)(mach_port_t, const char *, mach_port_t *);
 };
 void op500_install(const struct op500_hooks *);
 void op500_before_handler(void *);
@@ -24,4 +25,5 @@ void op500_unpack(void *, size_t);
 void op500_source_cancelled(void *);
 void op500_port_release(void *, unsigned, unsigned);
 void op500_pending_free(void *);
+kern_return_t op502_lookup(mach_port_t, const char *, mach_port_t *);
 #endif

@@ -6,6 +6,7 @@
 #include <xpc/xpc.h>
 #include "xpc_internal.h"
 #include "projection.h"
+#include <servers/bootstrap.h>
 static struct op500_hooks hooks;
 void op500_install(const struct op500_hooks *h) { hooks = *h; }
 void op500_before_handler(void *p) { if (hooks.before_handler) hooks.before_handler(p); }
@@ -19,6 +20,7 @@ void op500_unpack(void *p,size_t n) { if (hooks.unpack) hooks.unpack(p,n); }
 void op500_source_cancelled(void *p) { if (hooks.source_cancelled) hooks.source_cancelled(p); }
 void op500_port_release(void *p,unsigned n,unsigned kind) { if (hooks.port_release) hooks.port_release(p,n,kind); }
 void op500_pending_free(void *p) { if (hooks.pending_free) hooks.pending_free(p); }
+kern_return_t op502_lookup(mach_port_t p,const char *n,mach_port_t *r) { return hooks.lookup ? hooks.lookup(p,n,r) : bootstrap_look_up(p,(char *)n,r); }
 void op500_event_handler(xpc_connection_t,void *,void (*)(void *,xpc_object_t));
 void op500_reply(xpc_connection_t,xpc_object_t,dispatch_queue_t,void *,void (*)(void *,xpc_object_t));
 void op500_event_handler(xpc_connection_t c,void *ctx,void (*f)(void *,xpc_object_t)) {
