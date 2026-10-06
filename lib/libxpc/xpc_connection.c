@@ -58,6 +58,7 @@ static void xpc_connection_recv_message(void *context);
 static void xpc_connection_remote_dead(void *context);
 static void xpc_connection_remote_proc_dead(void *context);
 static void xpc_connection_arm_proc_source(struct xpc_connection *conn);
+static void xpc_connection_retire_proc_source(struct xpc_connection *conn);
 static bool xpc_connection_cancel_sources(struct xpc_connection *conn);
 static void xpc_connection_dispatch_event(struct xpc_connection *conn,
     xpc_object_t event, mach_port_t remote_port);
@@ -717,11 +718,11 @@ xpc_connection_cancel_sources(struct xpc_connection *conn)
 		sources[count++] = conn->xc_send_source;
 		conn->xc_send_source = NULL;
 	}
-	pthread_mutex_unlock(&conn->xc_remote_lock);
 	if (conn->xc_proc_source != NULL) {
 		sources[count++] = conn->xc_proc_source;
 		conn->xc_proc_source = NULL;
 	}
+	pthread_mutex_unlock(&conn->xc_remote_lock);
 	if (count == 0)
 		return (false);
 
@@ -849,8 +850,16 @@ xpc_connection_send_source(struct xpc_connection *conn, mach_port_t port)
 	dispatch_set_context(source, conn);
 	dispatch_source_set_event_handler(source, ^{
 		/* A copied callback from a retired registration is stale. */
-		if (conn->xc_send_source == source &&
-		    conn->xc_remote_port == port && !conn->xc_cancelled)
+		bool current, reconnectable;
+		pthread_mutex_lock(&conn->xc_remote_lock);
+		current = conn->xc_send_source == source &&
+		    conn->xc_remote_port == port && !conn->xc_cancelled;
+		reconnectable = xpc_connection_can_reconnect(conn);
+		if (current && reconnectable)
+			xpc_connection_interrupt(conn);
+		pthread_mutex_unlock(&conn->xc_remote_lock);
+		/* Cancellation takes this lock itself. Peers are never replaced. */
+		if (current && !reconnectable)
 			xpc_connection_remote_dead(conn);
 	});
 	return (source);
@@ -876,63 +885,59 @@ xpc_connection_arm_send_source(struct xpc_connection *conn)
 static bool
 xpc_connection_reconnect(struct xpc_connection *conn)
 {
-	__block bool connected = false;
+	mach_port_t replacement, old_port;
+	dispatch_source_t replacement_source, old_source;
+	kern_return_t kr;
 
-	/* Serialize publication with the receive and send-death callbacks. */
-	dispatch_sync(conn->xc_recv_queue, ^{
-		mach_port_t replacement, old_port;
-		dispatch_source_t replacement_source, old_source;
-		kern_return_t kr;
-
-		if (conn->xc_cancelled || conn->xc_sources_cancelled)
-			return;
+	if (conn->xc_cancelled || conn->xc_sources_cancelled)
+		return (false);
 #ifdef XPC_CONSUMER_TESTING
-		kr = op502_lookup(bootstrap_port, conn->xc_name, &replacement);
+	kr = op502_lookup(bootstrap_port, conn->xc_name, &replacement);
 #else
-		kr = bootstrap_look_up(bootstrap_port, conn->xc_name, &replacement);
+	kr = bootstrap_look_up(bootstrap_port, conn->xc_name, &replacement);
 #endif
-		if (kr != KERN_SUCCESS)
-			return;
-		pthread_mutex_lock(&conn->xc_remote_lock);
-		if (conn->xc_cancelled || conn->xc_sources_cancelled) {
-			pthread_mutex_unlock(&conn->xc_remote_lock);
-			(void)mach_port_deallocate(mach_task_self(), replacement);
-			return;
-		}
-		replacement_source = xpc_connection_send_source(conn, replacement);
-		if (replacement_source == NULL) {
-			pthread_mutex_unlock(&conn->xc_remote_lock);
-			(void)mach_port_deallocate(mach_task_self(), replacement);
-			return;
-		}
-		old_source = conn->xc_send_source;
-		old_port = conn->xc_remote_port;
-		conn->xc_remote_port = replacement;
-		conn->xc_send_source = replacement_source;
-		atomic_store_rel_int(&conn->xc_interrupted, 0);
-		dispatch_resume(replacement_source);
-		if (old_source != NULL) {
-			/* Keep the old name until this registration has detached. */
-			xpc_retain(conn);
-			dispatch_source_set_cancel_handler(old_source, ^{
-#ifdef XPC_CONSUMER_TESTING
-				op500_port_release(conn, old_port, 3);
-#endif
-				(void)mach_port_deallocate(mach_task_self(), old_port);
-				xpc_release(conn);
-			});
-			dispatch_source_cancel(old_source);
-			dispatch_release(old_source);
-		} else if (old_port != MACH_PORT_NULL) {
+	if (kr != KERN_SUCCESS)
+		return (false);
+	pthread_mutex_lock(&conn->xc_remote_lock);
+	if (conn->xc_cancelled || conn->xc_sources_cancelled) {
+		pthread_mutex_unlock(&conn->xc_remote_lock);
+		(void)mach_port_deallocate(mach_task_self(), replacement);
+		return (false);
+	}
+	replacement_source = xpc_connection_send_source(conn, replacement);
+	if (replacement_source == NULL) {
+		pthread_mutex_unlock(&conn->xc_remote_lock);
+		(void)mach_port_deallocate(mach_task_self(), replacement);
+		return (false);
+	}
+	old_source = conn->xc_send_source;
+	old_port = conn->xc_remote_port;
+	xpc_connection_retire_proc_source(conn);
+	conn->xc_remote_pid = 0;
+	conn->xc_remote_port = replacement;
+	conn->xc_send_source = replacement_source;
+	atomic_store_rel_int(&conn->xc_interrupted, 0);
+	dispatch_resume(replacement_source);
+	if (old_source != NULL) {
+		/* Keep the old name until this registration has detached. */
+		xpc_retain(conn);
+		dispatch_source_set_cancel_handler(old_source, ^{
 #ifdef XPC_CONSUMER_TESTING
 			op500_port_release(conn, old_port, 3);
 #endif
 			(void)mach_port_deallocate(mach_task_self(), old_port);
-		}
-		connected = true;
-		pthread_mutex_unlock(&conn->xc_remote_lock);
-	});
-	return (connected);
+			xpc_release(conn);
+		});
+		dispatch_source_cancel(old_source);
+		dispatch_release(old_source);
+	} else if (old_port != MACH_PORT_NULL) {
+#ifdef XPC_CONSUMER_TESTING
+		op500_port_release(conn, old_port, 3);
+#endif
+		(void)mach_port_deallocate(mach_task_self(), old_port);
+	}
+	pthread_mutex_unlock(&conn->xc_remote_lock);
+	return (true);
 }
 
 static void
@@ -943,24 +948,51 @@ xpc_connection_remote_proc_dead(void *context)
 }
 
 static void
+xpc_connection_retire_proc_source(struct xpc_connection *conn)
+{
+	dispatch_source_t source = conn->xc_proc_source;
+
+	/* Caller holds xc_remote_lock; the cancel reference fences retirement. */
+	conn->xc_proc_source = NULL;
+	conn->xc_proc_pid = 0;
+	if (source == NULL)
+		return;
+	xpc_retain(conn);
+	dispatch_source_set_cancel_handler(source, ^{ xpc_release(conn); });
+	dispatch_source_cancel(source);
+	dispatch_release(source);
+}
+
+static void
 xpc_connection_arm_proc_source(struct xpc_connection *conn)
 {
+	dispatch_source_t source;
+	pid_t pid = conn->xc_remote_pid;
 
-	if (conn->xc_cancelled || conn->xc_sources_cancelled ||
-	    conn->xc_proc_source != NULL || conn->xc_remote_pid <= 0 ||
-	    conn->xc_remote_pid == getpid())
+	/* Credentials and source publication share xc_remote_lock. */
+	if (conn->xc_cancelled || conn->xc_sources_cancelled)
+		return;
+	if (conn->xc_proc_source != NULL && conn->xc_proc_pid == pid)
+		return;
+	xpc_connection_retire_proc_source(conn);
+	if (pid <= 0 || pid == getpid())
 		return;
 
-	conn->xc_proc_pid = conn->xc_remote_pid;
-	conn->xc_proc_source = dispatch_source_create(DISPATCH_SOURCE_TYPE_PROC,
-	    conn->xc_proc_pid, DISPATCH_PROC_EXIT, conn->xc_recv_queue);
-	if (conn->xc_proc_source == NULL)
+	source = dispatch_source_create(DISPATCH_SOURCE_TYPE_PROC, pid,
+	    DISPATCH_PROC_EXIT, conn->xc_recv_queue);
+	if (source == NULL)
 		return;
-
-	dispatch_set_context(conn->xc_proc_source, conn);
-	dispatch_source_set_event_handler_f(conn->xc_proc_source,
-	    xpc_connection_remote_proc_dead);
-	dispatch_resume(conn->xc_proc_source);
+	conn->xc_proc_source = source;
+	conn->xc_proc_pid = pid;
+	dispatch_set_context(source, conn);
+	dispatch_source_set_event_handler(source, ^{
+		pthread_mutex_lock(&conn->xc_remote_lock);
+		if (conn->xc_proc_source == source && conn->xc_proc_pid == pid &&
+		    !conn->xc_cancelled)
+			xpc_connection_remote_proc_dead(conn);
+		pthread_mutex_unlock(&conn->xc_remote_lock);
+	});
+	dispatch_resume(source);
 }
 
 static void
@@ -977,11 +1009,13 @@ xpc_connection_set_credentials(struct xpc_connection *conn, audit_token_t *tok)
 	audit_token_to_au32(*tok, NULL, &uid, &gid, NULL, NULL, &pid, &asid,
 	    NULL);
 
+	pthread_mutex_lock(&conn->xc_remote_lock);
 	conn->xc_remote_euid = uid;
 	conn->xc_remote_guid = gid;
 	conn->xc_remote_pid = pid;
 	conn->xc_remote_asid = asid;
 	xpc_connection_arm_proc_source(conn);
+	pthread_mutex_unlock(&conn->xc_remote_lock);
 }
 
 static void
