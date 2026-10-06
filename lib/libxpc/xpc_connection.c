@@ -64,6 +64,9 @@ static void xpc_connection_dispatch_event(struct xpc_connection *conn,
 static void xpc_connection_invoke_event(void *context);
 static void xpc_connection_invoke_pending(void *context);
 static void xpc_connection_interrupt(struct xpc_connection *conn);
+static void xpc_connection_arm_send_source(struct xpc_connection *conn);
+static bool xpc_connection_can_reconnect(struct xpc_connection *conn);
+static bool xpc_connection_reconnect(struct xpc_connection *conn);
 static void xpc_connection_invalidate(struct xpc_connection *conn,
     xpc_object_t error);
 static void xpc_connection_resume_all(struct xpc_connection *conn);
@@ -85,6 +88,11 @@ xpc_connection_create(const char *name, dispatch_queue_t targetq)
 	}
 
 	memset(conn, 0, sizeof(struct xpc_connection));
+	if (pthread_mutex_init(&conn->xc_remote_lock, NULL) != 0) {
+		free(conn);
+		errno = ENOMEM;
+		return (NULL);
+	}
 	conn->xc_object.xo_xpc_type = _XPC_TYPE_CONNECTION;
 	conn->xc_object.xo_refcnt = 1;
 	conn->xc_object.xo_size = sizeof(*conn);
@@ -297,18 +305,7 @@ xpc_connection_resume(xpc_connection_t xconn)
 		}
 	}
 
-	if (conn->xc_send_source == NULL && conn->xc_remote_port !=
-	    MACH_PORT_NULL) {
-		conn->xc_send_source = dispatch_source_create(
-		    DISPATCH_SOURCE_TYPE_MACH_SEND, conn->xc_remote_port,
-		    DISPATCH_MACH_SEND_DEAD, conn->xc_recv_queue);
-		if (conn->xc_send_source != NULL) {
-			dispatch_set_context(conn->xc_send_source, conn);
-			dispatch_source_set_event_handler_f(conn->xc_send_source,
-			    xpc_connection_remote_dead);
-			dispatch_resume(conn->xc_send_source);
-		}
-	}
+	xpc_connection_arm_send_source(conn);
 
 	dispatch_resume(conn->xc_recv_queue);
 }
@@ -527,12 +524,22 @@ xpc_send(xpc_connection_t xconn, xpc_object_t message, uint64_t id)
 	debugf("connection=%p, message=%p, id=%d", xconn, message, id);
 
 	conn = xconn;
+	if (xpc_connection_can_reconnect(conn) &&
+	    atomic_load_acq_int(&conn->xc_interrupted) != 0 &&
+	    !xpc_connection_reconnect(conn)) {
+		if (!conn->xc_cancelled)
+			xpc_connection_invalidate(conn,
+			    XPC_ERROR_CONNECTION_INTERRUPTED);
+		return;
+	}
+	if (conn->xc_cancelled)
+		return;
 	kr = xpc_pipe_send(message, conn->xc_remote_port,
 	    conn->xc_local_port, id);
 
 	if (kr != KERN_SUCCESS) {
 		debugf("send failed, kr=%d", kr);
-		if (kr == EPIPE)
+		if (kr == EPIPE && !xpc_connection_can_reconnect(conn))
 			xpc_connection_cancel(conn);
 		else
 			xpc_connection_interrupt(conn);
@@ -705,10 +712,12 @@ xpc_connection_cancel_sources(struct xpc_connection *conn)
 		sources[count++] = conn->xc_recv_source;
 		conn->xc_recv_source = NULL;
 	}
+	pthread_mutex_lock(&conn->xc_remote_lock);
 	if (conn->xc_send_source != NULL) {
 		sources[count++] = conn->xc_send_source;
 		conn->xc_send_source = NULL;
 	}
+	pthread_mutex_unlock(&conn->xc_remote_lock);
 	if (conn->xc_proc_source != NULL) {
 		sources[count++] = conn->xc_proc_source;
 		conn->xc_proc_source = NULL;
@@ -805,14 +814,125 @@ xpc_connection_destroy(struct xpc_connection *conn)
 	conn->xc_context = NULL;
 	if (finalizer != NULL)
 		finalizer(context);
+	pthread_mutex_destroy(&conn->xc_remote_lock);
 	free(conn);
 }
 
 static void
 xpc_connection_remote_dead(void *context)
 {
+	struct xpc_connection *conn = context;
 
-	xpc_connection_cancel(context);
+	if (xpc_connection_can_reconnect(conn))
+		xpc_connection_interrupt(conn);
+	else
+		xpc_connection_cancel(conn);
+}
+
+static bool
+xpc_connection_can_reconnect(struct xpc_connection *conn)
+{
+	return (conn->xc_parent == NULL && conn->xc_name != NULL &&
+	    conn->xc_owns_remote_port &&
+	    !(conn->xc_flags & XPC_CONNECTION_MACH_SERVICE_LISTENER));
+}
+
+static dispatch_source_t
+xpc_connection_send_source(struct xpc_connection *conn, mach_port_t port)
+{
+	dispatch_source_t source;
+
+	source = dispatch_source_create(DISPATCH_SOURCE_TYPE_MACH_SEND, port,
+	    DISPATCH_MACH_SEND_DEAD, conn->xc_recv_queue);
+	if (source == NULL)
+		return (NULL);
+	dispatch_set_context(source, conn);
+	dispatch_source_set_event_handler(source, ^{
+		/* A copied callback from a retired registration is stale. */
+		if (conn->xc_send_source == source &&
+		    conn->xc_remote_port == port && !conn->xc_cancelled)
+			xpc_connection_remote_dead(conn);
+	});
+	return (source);
+}
+
+static void
+xpc_connection_arm_send_source(struct xpc_connection *conn)
+{
+	pthread_mutex_lock(&conn->xc_remote_lock);
+	if (conn->xc_send_source != NULL ||
+	    conn->xc_remote_port == MACH_PORT_NULL || conn->xc_cancelled ||
+	    conn->xc_sources_cancelled) {
+		pthread_mutex_unlock(&conn->xc_remote_lock);
+		return;
+	}
+	conn->xc_send_source = xpc_connection_send_source(conn,
+	    conn->xc_remote_port);
+	if (conn->xc_send_source != NULL)
+		dispatch_resume(conn->xc_send_source);
+	pthread_mutex_unlock(&conn->xc_remote_lock);
+}
+
+static bool
+xpc_connection_reconnect(struct xpc_connection *conn)
+{
+	__block bool connected = false;
+
+	/* Serialize publication with the receive and send-death callbacks. */
+	dispatch_sync(conn->xc_recv_queue, ^{
+		mach_port_t replacement, old_port;
+		dispatch_source_t replacement_source, old_source;
+		kern_return_t kr;
+
+		if (conn->xc_cancelled || conn->xc_sources_cancelled)
+			return;
+#ifdef XPC_CONSUMER_TESTING
+		kr = op502_lookup(bootstrap_port, conn->xc_name, &replacement);
+#else
+		kr = bootstrap_look_up(bootstrap_port, conn->xc_name, &replacement);
+#endif
+		if (kr != KERN_SUCCESS)
+			return;
+		pthread_mutex_lock(&conn->xc_remote_lock);
+		if (conn->xc_cancelled || conn->xc_sources_cancelled) {
+			pthread_mutex_unlock(&conn->xc_remote_lock);
+			(void)mach_port_deallocate(mach_task_self(), replacement);
+			return;
+		}
+		replacement_source = xpc_connection_send_source(conn, replacement);
+		if (replacement_source == NULL) {
+			pthread_mutex_unlock(&conn->xc_remote_lock);
+			(void)mach_port_deallocate(mach_task_self(), replacement);
+			return;
+		}
+		old_source = conn->xc_send_source;
+		old_port = conn->xc_remote_port;
+		conn->xc_remote_port = replacement;
+		conn->xc_send_source = replacement_source;
+		atomic_store_rel_int(&conn->xc_interrupted, 0);
+		dispatch_resume(replacement_source);
+		if (old_source != NULL) {
+			/* Keep the old name until this registration has detached. */
+			xpc_retain(conn);
+			dispatch_source_set_cancel_handler(old_source, ^{
+#ifdef XPC_CONSUMER_TESTING
+				op500_port_release(conn, old_port, 3);
+#endif
+				(void)mach_port_deallocate(mach_task_self(), old_port);
+				xpc_release(conn);
+			});
+			dispatch_source_cancel(old_source);
+			dispatch_release(old_source);
+		} else if (old_port != MACH_PORT_NULL) {
+#ifdef XPC_CONSUMER_TESTING
+			op500_port_release(conn, old_port, 3);
+#endif
+			(void)mach_port_deallocate(mach_task_self(), old_port);
+		}
+		connected = true;
+		pthread_mutex_unlock(&conn->xc_remote_lock);
+	});
+	return (connected);
 }
 
 static void

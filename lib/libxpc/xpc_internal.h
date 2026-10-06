@@ -30,6 +30,7 @@
 
 #include "nv.h"
 #include "nv_impl.h"
+#include <pthread.h>
 
 #define debugf(...) 				\
     do { 					\
@@ -119,6 +120,7 @@ struct xpc_connection {
 	dispatch_queue_t	xc_recv_queue;
 	dispatch_queue_t	xc_target_queue;
 	dispatch_source_t	xc_send_source;
+	pthread_mutex_t		xc_remote_lock;
 	dispatch_source_t	xc_proc_source;
 	volatile u_int		xc_suspend_count;
 	int			xc_transaction_count;
