@@ -29,3 +29,6 @@ void op500_event_handler(xpc_connection_t c,void *ctx,void (*f)(void *,xpc_objec
 void op500_reply(xpc_connection_t c,xpc_object_t o,dispatch_queue_t q,void *ctx,void (*f)(void *,xpc_object_t)) {
  xpc_connection_send_message_with_reply(c,o,q, ^(xpc_object_t r) { f(ctx,r); });
 }
+void op507_barrier(xpc_connection_t c,void *ctx,void (*f)(void *)) {
+ xpc_connection_send_barrier(c, ^{ f(ctx); });
+}

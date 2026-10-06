@@ -491,14 +491,27 @@ fn cancelling(_: [*c]const c.atf_tc_t) callconv(.c) void {
     conclude();
 }
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-var cases: [8]c.atf_tc_t = undefined;
+const op507 = @import("reconnect.zig");
+fn suspendedBarrier(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    op507.suspended();
+}
+fn handlerBarrier(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    op507.handler();
+}
+fn targetBarrier(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    op507.targetQueue();
+}
+fn procWatcher(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    op507.processWatcher();
+}
+var cases: [12]c.atf_tc_t = undefined;
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "25");
 }
 fn addTests(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "stale_readiness", "failed_receive", "local_port_gone", "named_pending", "peer_pending", "reconnect", "lookup_failure", "cancel_inflight" };
-    const bodies = .{ &stale, &failed, &gone, &namedDeath, &remoteDeath, &reconnect, &lookupFailure, &cancelling };
-    inline for (0..8) |i| {
+    const names = [_][*:0]const u8{ "stale_readiness", "failed_receive", "local_port_gone", "named_pending", "peer_pending", "reconnect", "lookup_failure", "cancel_inflight", "suspended_barrier", "handler_barrier", "target_barrier", "process_watcher" };
+    const bodies = .{ &stale, &failed, &gone, &namedDeath, &remoteDeath, &reconnect, &lookupFailure, &cancelling, &suspendedBarrier, &handlerBarrier, &targetBarrier, &procWatcher };
+    inline for (0..12) |i| {
         const err = c.atf_tc_init(&cases[i], names[i], &head, bodies[i], null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
         const added = c.atf_tp_add_tc(tp, &cases[i]);
