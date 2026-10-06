@@ -398,8 +398,8 @@ fn remoteSendError() void {
     need(c.mach_port_mod_refs(c.mach_task_self(), remote, c.MACH_PORT_RIGHT_RECEIVE, -1) == 0, "death before send");
     dispatch_resume(sends);
     need(wait(&reply_done, 3000) and wait(&reply_done, 3000), "two send-error replies");
-    fence(sends);
     xpc_connection_resume(conn);
+    fence(sends);
     need(wait(&event_done, 3000), "send-error event");
     fence(q);
     fence(replies);
