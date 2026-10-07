@@ -39,9 +39,10 @@ fn wait(a: *Atomic, minimum: u32) bool {
     return true;
 }
 fn kernel() i32 {
-    var info: [52]c_int = @splat(0);
-    var count: u32 = c.TASK_THREAD_TIMES_INFO_COUNT;
-    return c.op547_kernel_info(c.mach_task_self(), c.TASK_THREAD_TIMES_INFO, &info, &count);
+    var port: u32 = 0;
+    const rc = c.op547_kernel_special(c.mach_task_self(), c.TASK_DEBUG_CONTROL_PORT, &port);
+    if (port != 0) _ = c.mach_port_deallocate(c.mach_task_self(), port);
+    return rc;
 }
 pub export fn op547_server_op547_echo_call(_: u32, token: c_int, observed: *c_int) c_int {
     observed.* = token ^ 0x547;
