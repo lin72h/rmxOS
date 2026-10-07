@@ -107,6 +107,7 @@
 #include <sys/event.h>
 #include <sys/malloc.h>
 #include <sys/taskqueue.h>
+#include <sys/kernel.h>
 
 
 
@@ -192,18 +193,32 @@ ipc_pset_work(void *context __unused, int pending __unused)
 int
 ipc_pset_work_init(void)
 {
-	int error;
-
 	mtx_init(&ipc_pset_work_lock, "Mach pset work", NULL, MTX_DEF);
 	TASK_INIT(&ipc_pset_work_task, 0, ipc_pset_work, NULL);
 	ipc_pset_work_queue = taskqueue_create("mach_pset", M_WAITOK,
 	    taskqueue_thread_enqueue, &ipc_pset_work_queue);
+	return (0);
+}
+
+static void
+ipc_pset_work_start(void *arg __unused)
+{
+	int error;
+
+	/* Module initialization may have failed and freed the queue. */
+	if (ipc_pset_work_queue == NULL)
+		return;
+	/* Pending work remains queued until this thread can run. */
 	error = taskqueue_start_threads(&ipc_pset_work_queue, 1, PI_SOFT,
 	    "Mach pset notification");
 	if (error != 0)
-		ipc_pset_work_fini();
-	return (error);
+		panic("Mach pset notification worker start failed: %d", error);
+	printf("Mach pset notification worker started\n");
 }
+
+/* Also executed in subsystem order by the linker for a runtime KLD load. */
+SYSINIT(mach_pset_work, SI_SUB_TASKQ, SI_ORDER_SECOND,
+    ipc_pset_work_start, NULL);
 
 void
 ipc_pset_work_fini(void)
