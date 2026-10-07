@@ -43,6 +43,7 @@
 #include <sys/mach/ipc/ipc_entry.h>
 #include <sys/mach/ipc/ipc_port.h>
 #include <sys/mach/ipc/ipc_space.h>
+#include <sys/mach/ipc/ipc_pset.h>
 
 
 int mach_debug_enable;
@@ -266,13 +267,19 @@ mach_mod_init(void)
 		printf("mach services can only be loaded at boot time\n");
 		return (EINVAL);
 	}
+	/* Work exists before any producer syscall/filter hook is published. */
+	if ((err = ipc_pset_work_init()) != 0)
+		return (err);
 
 	if ((err = syscall_helper_register(osx_syscalls, SY_THR_STATIC_KLD))) {
 		printf("failed to register osx calls: %d\n", err);
+		ipc_pset_work_fini();
 		return (EINVAL);
 	}
 	if (kqueue_add_filteropts(EVFILT_MACHPORT, &machport_filtops)) {
 		printf("failed to register machport_filtops\n");
+		syscall_helper_unregister(osx_syscalls);
+		ipc_pset_work_fini();
 		return (EINVAL);
 	}
 	return (0);

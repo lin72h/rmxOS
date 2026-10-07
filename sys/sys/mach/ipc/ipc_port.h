@@ -251,6 +251,10 @@ struct ipc_port {
 		ip_pad:26;
 	mach_vm_address_t ip_context;
 	uint64_t ip_receive_epoch;
+	/* Readiness linkage is protected by port -> pset locks. */
+	TAILQ_ENTRY(ipc_port) ip_ready_link;
+	boolean_t ip_on_ready_list;
+	boolean_t ip_readiness_revoked;
 };
 
 

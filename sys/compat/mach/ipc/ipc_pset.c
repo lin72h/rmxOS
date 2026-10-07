@@ -106,6 +106,7 @@
 #include <sys/types.h>
 #include <sys/event.h>
 #include <sys/malloc.h>
+#include <sys/taskqueue.h>
 
 
 
@@ -146,17 +147,129 @@ sx_assert_locked(void *arg, int what)
 	sx_assert((struct sx *)arg, what);
 }
 
-static int
-filt_machport_direct_receive(struct knote *kn)
+static struct taskqueue *ipc_pset_work_queue;
+static struct task ipc_pset_work_task;
+static struct mtx ipc_pset_work_lock;
+static TAILQ_HEAD(, ipc_pset) ipc_pset_pending =
+    TAILQ_HEAD_INITIALIZER(ipc_pset_pending);
+
+/* The task lives in the module, never in a set that this worker can free. */
+static void
+ipc_pset_work(void *context __unused, int pending __unused)
 {
-	/*
-	 * libdispatch's readiness flag DISPATCH_MACH_RECV_MESSAGE has the same
-	 * numeric value as MACH_RCV_MSG.  Only treat MACH_RCV_MSG as a direct
-	 * receive request when the knote also carries the receive buffer that a
-	 * direct receive needs.
-	 */
-	return ((kn->kn_sfflags & MACH_RCV_MSG) != 0 &&
-	    kn->kn_kevent.ext[0] != 0 && kn->kn_kevent.ext[1] != 0);
+	ipc_pset_t pset;
+	uint64_t dirty;
+
+	for (;;) {
+		mtx_lock(&ipc_pset_work_lock);
+		pset = TAILQ_FIRST(&ipc_pset_pending);
+		if (pset == IPS_NULL) {
+			mtx_unlock(&ipc_pset_work_lock);
+			return;
+		}
+		dirty = pset->ips_work_dirty;
+		mtx_unlock(&ipc_pset_work_lock);
+
+		/* No Mach object, space, task or work mutex is held here. */
+		KNOTE_UNLOCKED(&pset->ips_note, 0);
+
+		mtx_lock(&ipc_pset_work_lock);
+		if (dirty != pset->ips_work_dirty) {
+			/* Rotate dirty work; other sets must also make progress. */
+			TAILQ_REMOVE(&ipc_pset_pending, pset, ips_work_link);
+			TAILQ_INSERT_TAIL(&ipc_pset_pending, pset, ips_work_link);
+			mtx_unlock(&ipc_pset_work_lock);
+			continue;
+		}
+		TAILQ_REMOVE(&ipc_pset_pending, pset, ips_work_link);
+		pset->ips_work_queued = FALSE;
+		mtx_unlock(&ipc_pset_work_lock);
+		/* Last access to this set; all its work has completed. */
+		ips_release(pset);
+	}
+}
+
+int
+ipc_pset_work_init(void)
+{
+	int error;
+
+	mtx_init(&ipc_pset_work_lock, "Mach pset work", NULL, MTX_DEF);
+	TASK_INIT(&ipc_pset_work_task, 0, ipc_pset_work, NULL);
+	ipc_pset_work_queue = taskqueue_create("mach_pset", M_WAITOK,
+	    taskqueue_thread_enqueue, &ipc_pset_work_queue);
+	error = taskqueue_start_threads(&ipc_pset_work_queue, 1, PI_SOFT,
+	    "Mach pset notification");
+	if (error != 0)
+		ipc_pset_work_fini();
+	return (error);
+}
+
+void
+ipc_pset_work_fini(void)
+{
+	/* Only after producers/hooks are unavailable, outside all Mach locks. */
+	taskqueue_drain_all(ipc_pset_work_queue);
+	taskqueue_free(ipc_pset_work_queue);
+	ipc_pset_work_queue = NULL;
+	mtx_destroy(&ipc_pset_work_lock);
+}
+
+void
+ipc_pset_signal(ipc_pset_t pset)
+{
+	/* Caller holds a storage reference, usually membership + the set lock. */
+	mtx_lock(&ipc_pset_work_lock);
+	pset->ips_work_dirty++;
+	if (!pset->ips_work_queued) {
+		ips_reference(pset);
+		pset->ips_work_queued = TRUE;
+		TAILQ_INSERT_TAIL(&ipc_pset_pending, pset, ips_work_link);
+		taskqueue_enqueue(ipc_pset_work_queue, &ipc_pset_work_task);
+	}
+	mtx_unlock(&ipc_pset_work_lock);
+}
+
+static void
+ipc_pset_publish(ipc_pset_t pset)
+{
+	ipc_port_t first;
+	uint64_t snapshot;
+
+	MPASS(ips_lock_owned(pset));
+	first = TAILQ_FIRST(&pset->ips_ready);
+	snapshot = ips_active(pset) && !pset->ips_readiness_revoked &&
+	    first != IP_NULL ? (UINT64_C(1) << 32) | first->ip_receiver_name : 0;
+	atomic_store_rel_64(&pset->ips_ready_snapshot, snapshot);
+	ipc_pset_signal(pset);
+}
+
+void
+ipc_pset_port_ready(ipc_pset_t pset, ipc_port_t port, boolean_t rotate)
+{
+	boolean_t ready;
+
+	MPASS(io_lock_owned((ipc_object_t)port) && ips_lock_owned(pset));
+	MPASS(port->ip_pset == pset);
+	ready = ip_active(port) && !port->ip_readiness_revoked &&
+	    port->ip_msgcount != 0;
+	if (port->ip_on_ready_list && (!ready || rotate)) {
+		TAILQ_REMOVE(&pset->ips_ready, port, ip_ready_link);
+		port->ip_on_ready_list = FALSE;
+	}
+	if (ready && !port->ip_on_ready_list) {
+		TAILQ_INSERT_TAIL(&pset->ips_ready, port, ip_ready_link);
+		port->ip_on_ready_list = TRUE;
+	}
+	ipc_pset_publish(pset);
+}
+
+void
+ipc_pset_revoke(ipc_pset_t pset)
+{
+	MPASS(ips_lock_owned(pset));
+	pset->ips_readiness_revoked = TRUE;
+	ipc_pset_publish(pset);
 }
 
 void
@@ -167,6 +280,8 @@ io_validate(ipc_object_t io)
 		assert(!ip_active((ipc_port_t)io));
 	} else {
 		MPASS(TAILQ_EMPTY(&((ipc_pset_t)io)->ips_ports));
+		MPASS(TAILQ_EMPTY(&((ipc_pset_t)io)->ips_ready));
+		MPASS(!((ipc_pset_t)io)->ips_work_queued);
 	}
 
 }
@@ -215,6 +330,7 @@ ipc_pset_alloc(
 
 	pset->ips_local_name = name;
 	TAILQ_INIT(&pset->ips_ports);
+	TAILQ_INIT(&pset->ips_ready);
 	sx_init(&pset->ips_note_lock, "pset knote lock");
 	knlist_init(&pset->ips_note, &pset->ips_note_lock,
 				kn_sx_lock, kn_sx_unlock, sx_assert_locked);
@@ -257,6 +373,7 @@ ipc_pset_alloc_name(
 
 	pset->ips_local_name = name;
 	TAILQ_INIT(&pset->ips_ports);
+	TAILQ_INIT(&pset->ips_ready);
 	sx_init(&pset->ips_note_lock, "pset knote lock");
 	knlist_init(&pset->ips_note, &pset->ips_note_lock,
 				kn_sx_lock, kn_sx_unlock, sx_assert_locked);
@@ -288,6 +405,7 @@ ipc_pset_add(
 	port->ip_pset = pset;
 	ips_reference(pset);
 	TAILQ_INSERT_TAIL(&pset->ips_ports, port, ip_next);
+	ipc_pset_port_ready(pset, port, FALSE);
 	if (port->ip_msgcount != 0)
 		wakeup(pset);
 }
@@ -310,11 +428,16 @@ ipc_pset_remove(
 	assert(ip_active(port));
 	assert(port->ip_pset == pset);
 
+	if (port->ip_on_ready_list) {
+		TAILQ_REMOVE(&pset->ips_ready, port, ip_ready_link);
+		port->ip_on_ready_list = FALSE;
+	}
 	port->ip_pset = IPS_NULL;
 	port->ip_receive_epoch++;
 	wakeup(port);
 	wakeup(pset);
 	TAILQ_REMOVE(&pset->ips_ports, port, ip_next);
+	ipc_pset_publish(pset);
 }
 
 /*
@@ -339,7 +462,6 @@ ipc_pset_move(
 {
 	ipc_pset_t oset;
 	int active;
-	int knotify;
 	/*
 	 *	While we've got the space locked, it holds refs for
 	 *	the port and nset (because of the entries).  Also,
@@ -350,7 +472,6 @@ ipc_pset_move(
 	ip_lock(port);
 	assert(ip_active(port));
 
-	knotify = FALSE;
 	oset = port->ip_pset;
 
 	if (oset == nset) {
@@ -366,8 +487,6 @@ ipc_pset_move(
 
 		ipc_pset_add(nset, port);
 		ipc_pset_port_changed(port, MACH_RCV_PORT_CHANGED);
-		if (port->ip_msgcount != 0)
-			knotify = TRUE;
 		ips_unlock(nset);
 	} else if (nset == IPS_NULL) {
 		/* just remove port from the old set */
@@ -398,23 +517,14 @@ ipc_pset_move(
 		ipc_pset_remove(oset, port);
 		ipc_pset_add(nset, port);
 
-		if (port->ip_msgcount != 0)
-			knotify = TRUE;
 
 		ips_unlock(nset);
 		ips_unlock(oset);	/* KERN_NOT_IN_SET not a possibility */
 		ips_release(oset);
 	}
 
-	/* Retain notification storage independently of port membership. */
-	if (knotify == TRUE)
-		ips_reference(nset);
 	ip_unlock(port);
 
-	if (knotify == TRUE) {
-		ipc_pset_signal(nset);
-		ips_release(nset);
-	}
 	return (((nset == IPS_NULL) && (oset == IPS_NULL)) ?
 		KERN_NOT_IN_SET : KERN_SUCCESS);
 }
@@ -480,6 +590,7 @@ ipc_pset_destroy(
 	ipc_port_t port;
 
 	pset->ips_object.io_bits &= ~IO_BITS_ACTIVE;
+	ipc_pset_publish(pset);
 	while (!TAILQ_EMPTY(&pset->ips_ports)) {
 		port = TAILQ_FIRST(&pset->ips_ports);
 		MPASS(port->ip_pset == pset);
@@ -494,19 +605,13 @@ ipc_pset_destroy(
 				ip_release(port);
 				continue;
 			}
-			TAILQ_REMOVE(&pset->ips_ports, port, ip_next);
-			port->ip_pset = IPS_NULL;
-			port->ip_receive_epoch++;
-			wakeup(port);
+			ipc_pset_remove(pset, port);
 			ip_unlock(port);
 			ip_release(port);
 			ips_release(pset);
 			continue;
 		}
-		TAILQ_REMOVE(&pset->ips_ports, port, ip_next);
-		port->ip_pset = NULL;
-		port->ip_receive_epoch++;
-		wakeup(port);
+		ipc_pset_remove(pset, port);
 		ip_unlock(port);
 		ips_release(pset);
 	}
@@ -523,47 +628,6 @@ ipc_pset_destroy(
 #include <sys/file.h>
 #include <sys/selinfo.h>
 #include <sys/eventvar.h>
-
-void 	knote_enqueue(struct knote *kn);
-
-#define KQ_LOCK(kq) do {						\
-	mtx_lock(&(kq)->kq_lock);					\
-} while (0)
-#define KQ_UNLOCK(kq) do {						\
-	mtx_unlock(&(kq)->kq_lock);					\
-} while (0)
-
-void
-ipc_pset_signal(ipc_pset_t pset)
-{
-	struct kqueue *kq, *kq_prev;
-	struct knote *kn;
-	struct knlist *list;
-
-	sx_slock(&pset->ips_note_lock);
-	if (KNLIST_EMPTY(&pset->ips_note)) {
-		sx_sunlock(&pset->ips_note_lock);
-		return;
-	}
-	list = &pset->ips_note;
-	kq = kq_prev = NULL;
-	SLIST_FOREACH(kn, &list->kl_list, kn_selnext) {
-		kq = kn->kn_kq;
-		if (kq != kq_prev) {
-			if (kq_prev)
-				KQ_UNLOCK(kq_prev);
-			KQ_LOCK(kq);
-		}
-		(kn)->kn_status |= KN_ACTIVE;
-		if (((kn)->kn_status & (KN_QUEUED | KN_DISABLED)) == 0)
-			knote_enqueue(kn);
-		kq_prev = kq;
-	}
-	MPASS(kq != NULL);
-	KQ_UNLOCK(kq);
-	sx_sunlock(&pset->ips_note_lock);
-}
-
 
 static int      filt_machportattach(struct knote *kn);
 static void     filt_machportdetach(struct knote *kn);
@@ -589,6 +653,9 @@ filt_machportattach(struct knote *kn)
 
 	if (kn->kn_fp->f_type != DTYPE_MACH_IPC)
 		return (ENOTSUP);
+	if ((kn->kn_sfflags & MACH_RCV_MSG) != 0 &&
+	    kn->kn_kevent.ext[0] != 0 && kn->kn_kevent.ext[1] != 0)
+		return (ENOTSUP);
 	note = malloc(sizeof(*note), M_MACH_IPC_ENTRY, M_WAITOK | M_ZERO);
 	is_read_lock(space);
 	entry = ipc_entry_lookup(space, (mach_port_name_t)kn->kn_kevent.ident);
@@ -608,7 +675,6 @@ filt_machportattach(struct knote *kn)
 	return (0);
 }
 
-extern void kdb_backtrace(void);
 
 static void
 filt_machportdetach(struct knote *kn)
@@ -624,102 +690,17 @@ filt_machportdetach(struct knote *kn)
 
 
 static int
-filt_machport(struct knote *kn, long hint)
+filt_machport(struct knote *kn, long hint __unused)
 {
-
-	mach_port_name_t        name = (mach_port_name_t)kn->kn_kevent.ident;
 	struct machport_note *note = kn->kn_hook;
-	ipc_pset_t              pset = note->pset;
-	thread_t				self = current_thread();
-	kern_return_t           kr;
-	mach_msg_option_t	option;
-	mach_msg_size_t		size;
+	uint64_t snapshot;
 
-	if (hint == EV_EOF) {
-		kn->kn_data = 0;
-		kn->kn_flags |= (EV_EOF | EV_ONESHOT);
-		return (1);
-	} else if (hint == 0) {
-
-		ips_lock(pset);
-		if (!ips_active(pset)) {
-			ips_unlock(pset);
-			if (mach_debug_enable) {
-				kdb_backtrace();
-				printf("%s: filt_machport inactive name=%d\n", curproc->p_comm, name);
-			}
-			kn->kn_data = 0;
-			kn->kn_flags |= (EV_EOF | EV_ONESHOT);
-			return (1);
-		}
-
-		ips_reference(pset);
-		ips_unlock(pset);
-
-	} else
-		panic("invalid hint %ld\n", hint);
-
-
-	if (filt_machport_direct_receive(kn)) {
-		option = kn->kn_sfflags & (MACH_RCV_MSG|MACH_RCV_LARGE|MACH_RCV_LARGE_IDENTITY|
-					   MACH_RCV_TRAILER_MASK|MACH_RCV_VOUCHER);
-		self->ith_msg_addr = (mach_vm_address_t)kn->kn_kevent.ext[0];
-		size = (mach_msg_size_t)kn->kn_kevent.ext[1];
-#ifdef DEBUG_KEVENT
-		printf("%s:%d: filt_machport option: %d \n", curproc->p_comm, curproc->p_pid, option);
-#endif
-	} else {
-		option = MACH_RCV_LARGE;
-		self->ith_msg_addr = 0;
-		size = 0;
-	}
-
-	self->ith_object = (ipc_object_t)pset;
-	self->ith_msize = size;
-	self->ith_option = option;
-	self->ith_scatter_list_size = 0;
-	self->ith_receiver_name = MACH_PORT_NAME_NULL;
-	option |= MACH_RCV_TIMEOUT;
-	self->ith_state = MACH_RCV_IN_PROGRESS;
-
-
-	ips_lock(pset);
-	self->ith_receive_epoch = pset->ips_receive_epoch;
-	kr = ipc_mqueue_pset_receive(MACH_PORT_TYPE_PORT_SET, option, size,
-					0/* immediate timeout */, self);
-	(void)kr;
-
-	ips_unlock(pset);
-	assert(kr == THREAD_NOT_WAITING);
-	assert(self->ith_state != MACH_RCV_IN_PROGRESS);
-	ips_release(pset);
-
-	if (self->ith_state == MACH_RCV_TIMED_OUT) {
-		return (0);
-	}
-	if ((option & MACH_RCV_MSG) != MACH_RCV_MSG) {
-		assert(self->ith_state == MACH_RCV_TOO_LARGE);
-		assert(self->ith_kmsg == IKM_NULL);
-		kn->kn_data = self->ith_receiver_name;
-#if defined(__LP64__) && defined(DEBUG_KEVENT)
-		printf("%s:%d, receiver_name %ld\n", curproc->p_comm, curproc->p_pid, kn->kn_data);
-#endif
-		return (1);
-	}
-
-	assert(option & MACH_RCV_MSG);
-	kn->kn_kevent.ext[1] = self->ith_msize;
-	kn->kn_data = MACH_PORT_NAME_NULL;
-#if defined(__LP64__) && defined(DEBUG_KEVENT)
-	printf("%s:%d receive result size: %d to: %lx \n", curproc->p_comm, curproc->p_pid, self->ith_msize, self->ith_msg_addr);
-#endif
-	kn->kn_fflags = mach_msg_receive_results(self);
-
-    if ((kn->kn_fflags == MACH_RCV_TOO_LARGE) &&
-	    (option & MACH_RCV_LARGE_IDENTITY))
-	    kn->kn_data = self->ith_receiver_name;
-
-	return (1);
+	/* A coherent hint, not a reservation. No Mach locks or thread state. */
+	snapshot = atomic_load_acq_64(&note->pset->ips_ready_snapshot);
+	kn->kn_data = (snapshot >> 32) != 0 ? (uint32_t)snapshot : 0;
+	kn->kn_fflags = 0;
+	bzero(kn->kn_kevent.ext, sizeof(kn->kn_kevent.ext));
+	return ((snapshot >> 32) != 0);
 }
 
 #if	MACH_KDB

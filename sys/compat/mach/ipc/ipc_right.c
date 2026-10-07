@@ -521,15 +521,10 @@ ipc_right_clean(
 		break;
 
 	    case MACH_PORT_TYPE_PORT_SET: {
-		ipc_pset_t pset = (ipc_pset_t) entry->ie_object;
-
 		assert(entry->ie_request == 0);
-		assert(pset != IPS_NULL);
-		assert(ips_active(pset));
+		assert(entry->ie_object != IO_NULL);
+		assert(ips_active((ipc_pset_t)entry->ie_object));
 
-		sx_slock(&pset->ips_note_lock);
-		KNOTE(&pset->ips_note, EV_EOF, KNF_LISTLOCKED);
-		sx_sunlock(&pset->ips_note_lock);
 		ipc_entry_close(space, name);
 		break;
 	    }
@@ -2063,7 +2058,13 @@ ipc_right_rename(
 		assert(port->ip_receiver_name == oname);
 		assert(port->ip_receiver == space);
 
+		if (port->ip_pset != IPS_NULL)
+			ips_lock(port->ip_pset);
 		port->ip_receiver_name = nname;
+		if (port->ip_pset != IPS_NULL) {
+			ipc_pset_port_ready(port->ip_pset, port, FALSE);
+			ips_unlock(port->ip_pset);
+		}
 		port->ip_receive_epoch++;
 		wakeup(port);
 		ip_unlock(port);

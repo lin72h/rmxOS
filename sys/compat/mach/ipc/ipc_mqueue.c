@@ -431,17 +431,10 @@ ipc_mqueue_deliver(
 	if (pset) {
 		ips_lock(pset);
 		wakeup(pset);
+		ipc_pset_port_ready(pset, port, FALSE);
 		ips_unlock(pset);
 	}
-	/* Membership may disappear as soon as the port is unlocked. */
-	if (pset)
-		ips_reference(pset);
 	ip_unlock(port);
-
-	if (pset) {
-		ipc_pset_signal(pset);
-		ips_release(pset);
-	}
 
 	TR_IPC_MQEX("exit: queued 0x%x", port);
 	return MACH_MSG_SUCCESS;
@@ -579,6 +572,15 @@ ipc_mqueue_post_on_thread(
 	ipc_kmsg_rmqueue_first_macro(&mqueue->imq_messages, kmsg);
 	assert(port->ip_msgcount > 0);
 	port->ip_msgcount--;
+	if (port->ip_pset != IPS_NULL) {
+		ipc_pset_t pset = port->ip_pset;
+		boolean_t held = ips_lock_owned(pset);
+		if (!held)
+			ips_lock(pset);
+		ipc_pset_port_ready(pset, port, TRUE);
+		if (!held)
+			ips_unlock(pset);
+	}
 
 	thread->ith_object = (ipc_object_t)port;
 	thread->ith_seqno = port->ip_seqno++;
@@ -613,7 +615,7 @@ restart:
 		return THREAD_NOT_WAITING;
 	}
 	port_ref = FALSE;
-	TAILQ_FOREACH(port, &pset->ips_ports, ip_next) {
+	TAILQ_FOREACH(port, &pset->ips_ready, ip_ready_link) {
 		mtx_assert(&port->port_comm.rcd_io_lock_data, MA_NOTOWNED);
 		assert (port->ip_msgcount >= 0);
 		if (port->ip_msgcount != 0) {

@@ -296,6 +296,17 @@ mach_port_fdclose(struct file *fp, int fd __unused, struct thread *td __unused)
         if (entry->ie_close_object != IO_NULL &&
             (entry->ie_close_bits & (MACH_PORT_TYPE_RECEIVE | MACH_PORT_TYPE_PORT_SET))) {
             io_lock(entry->ie_close_object);
+            if (entry->ie_close_bits & MACH_PORT_TYPE_PORT_SET) {
+                ipc_pset_revoke((ipc_pset_t)entry->ie_close_object);
+            } else {
+                ipc_port_t port = (ipc_port_t)entry->ie_close_object;
+                port->ip_readiness_revoked = TRUE;
+                if (port->ip_pset != IPS_NULL) {
+                    ips_lock(port->ip_pset);
+                    ipc_pset_port_ready(port->ip_pset, port, FALSE);
+                    ips_unlock(port->ip_pset);
+                }
+            }
             wakeup(entry->ie_close_object);
             io_unlock(entry->ie_close_object);
         }

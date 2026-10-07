@@ -111,6 +111,13 @@ typedef struct ipc_pset {
 	struct sx				ips_note_lock;
 	TAILQ_HEAD(_ips_ports, ipc_port) ips_ports;
 	uint64_t ips_receive_epoch;
+	TAILQ_HEAD(_ips_ready, ipc_port) ips_ready;
+	volatile uint64_t ips_ready_snapshot;
+	boolean_t ips_readiness_revoked;
+	/* Module work mutex protects these preallocated links and dirty state. */
+	TAILQ_ENTRY(ipc_pset) ips_work_link;
+	uint64_t ips_work_dirty;
+	boolean_t ips_work_queued;
 } *ipc_pset_t;
 
 #define ips_object		pset_comm.rcd_comm.icd_object
@@ -159,6 +166,10 @@ extern void ipc_pset_destroy(
 
 extern void ipc_pset_signal(
 	ipc_pset_t pset);
+extern int ipc_pset_work_init(void);
+extern void ipc_pset_work_fini(void);
+extern void ipc_pset_port_ready(ipc_pset_t, ipc_port_t, boolean_t);
+extern void ipc_pset_revoke(ipc_pset_t);
 
 #define	ipc_pset_reference(pset)	\
 		ipc_object_reference(&(pset)->ips_object)
