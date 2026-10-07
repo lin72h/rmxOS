@@ -244,3 +244,9 @@ The recovered right is then transferred by an ordinary MOVE_RECEIVE message and
 tested again. Base `0facf74b`: FAIL, no ready hint, set receives time out, and
 direct draining proves the messages remain. Fixed: PASS, all set receives succeed
 and direct drains find no residual messages. Every receive has a finite timeout.
+
+`mach_child_setters_test`: `special`, `exception`, `refused`, `stale_exit`,
+`stale_exec` observe launchd-style child task capability setters, caller isolation,
+exact launchd exception storage, typed dispatch, foreign allowlist and refusal
+right balance. On the pre-D2 base, special/exception/refused are expected to fail;
+exit/setid stale controls may already be rejected by batch-3 teardown.

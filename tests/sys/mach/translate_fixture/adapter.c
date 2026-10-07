@@ -452,3 +452,8 @@ static int mig_control_sysctl(SYSCTL_HANDLER_ARGS) {
 }
 SYSCTL_PROC(_debug,OID_AUTO,rmx_mig_control,CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE,
  NULL,0,mig_control_sysctl,"I","Poison a real MIG routine reply before producer trailer initialization");
+
+extern int rmx_child_send_count(uint32_t, struct observation *);
+SYSCTL_PROC(_debug, OID_AUTO, rmx_child_send_count,
+    CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, rmx_child_send_count, 0,
+    observe_sysctl, "S,observation", "Mach send-right count for refusal ownership tests");

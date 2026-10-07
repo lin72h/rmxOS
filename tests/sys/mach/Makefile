@@ -38,3 +38,9 @@ mach_recovered_readiness_test: ${.CURDIR}/mach_recovered_readiness.zig
 
 mach_entry_knote_test: ${.CURDIR}/revocation.zig
 mach_identity_test: ${.CURDIR}/reply_audit.zig
+
+SCRIPTS+= mach_child_setters_test
+mach_child_setters_test: ${.CURDIR}/mach_child_setters.zig
+	${ZIG} build-exe ${.ALLSRC} ${MACH_SO} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc -lpthread \
+	    --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf \
+	    -I${SRCTOP}/sys -femit-bin=${.TARGET}

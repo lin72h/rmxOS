@@ -429,3 +429,15 @@ export fn rmx_mig_control(command: u32, out: *u32) c_int {
     }
     return 0;
 }
+
+export fn rmx_child_send_count(name: u32, out: *Observation) c_int {
+    var object: ?*anyopaque = null;
+    out.result = ipc_object_translate(rmx_fixture_space(), name, 1, &object);
+    if (out.result != 0) return 0;
+    const port = object orelse return 22;
+    rmx_fixture_port_hold(port);
+    rmx_fixture_unlock(port);
+    out.owned = @intCast(rmx_fixture_send_count(port));
+    rmx_fixture_port_drop(port);
+    return 0;
+}
