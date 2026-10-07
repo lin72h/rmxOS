@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
-/* The task_info wire ID/types, with test-only bounded send and receive waits. */
-subsystem op547_kernel 3405;
+/* task_get_special_port wire ID/types, with bounded send/receive waits. */
+subsystem op547_kernel 3409;
 #include <sys/mach/std_types.defs>
 #include <sys/mach/mach_types.defs>
 waittime 2000;
 sendtime 2000;
-routine op547_kernel_info(target_task: task_name_t; flavor: task_flavor_t;
-    out task_info_out: task_info_t, CountInOut);
+routine op547_kernel_special(target_task: task_t; which_port: int;
+    out special_port: mach_port_t);
