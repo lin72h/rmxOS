@@ -55,9 +55,35 @@
 
 #include <mach/mach.h>
 #include <mach/mach_traps.h>
+#include <pthread.h>
+#include <stdint.h>
 #include "externs.h"
 
-static mach_port_t	mig_reply_port = MACH_PORT_NULL;
+static pthread_once_t mig_reply_once = PTHREAD_ONCE_INIT;
+static pthread_key_t mig_reply_key;
+static int mig_reply_key_error;
+
+static void
+mig_reply_destroy(void *value)
+{
+	/* libthr clears the key before calling its destructor.  This direct
+	 * trap does not allocate a new MIG reply port while releasing this one. */
+	(void)mach_port_mod_refs(mach_task_self(), (mach_port_t)(uintptr_t)value,
+	    MACH_PORT_RIGHT_RECEIVE, -1);
+}
+
+static void
+mig_reply_key_create(void)
+{
+	mig_reply_key_error = pthread_key_create(&mig_reply_key, mig_reply_destroy);
+}
+
+static int
+mig_reply_key_ready(void)
+{
+	return (pthread_once(&mig_reply_once, mig_reply_key_create) == 0 &&
+	    mig_reply_key_error == 0);
+}
 
 /*****************************************************
  *  Called by mach_init. This is necessary after
@@ -67,7 +93,10 @@ static mach_port_t	mig_reply_port = MACH_PORT_NULL;
 void
 mig_init(void * arg __unused)
 {
-	mig_reply_port = MACH_PORT_NULL;
+	/* The child's task/space is new: discard the inherited thread slot,
+	 * rather than trying to release a parent's name in the child's space. */
+	if (mig_reply_key_ready())
+		(void)pthread_setspecific(mig_reply_key, NULL);
 }
 
 /********************************************************
@@ -78,10 +107,20 @@ mig_init(void * arg __unused)
 mach_port_t
 mig_get_reply_port()
 {
-	if (mig_reply_port == MACH_PORT_NULL)
-		mig_reply_port = mach_reply_port();
+	mach_port_t port;
 
-	return mig_reply_port;
+	if (!mig_reply_key_ready())
+		return (MACH_PORT_NULL);
+	port = (mach_port_t)(uintptr_t)pthread_getspecific(mig_reply_key);
+	if (port == MACH_PORT_NULL) {
+		port = mach_reply_port();
+		if (port != MACH_PORT_NULL && pthread_setspecific(mig_reply_key,
+		    (void *)(uintptr_t)port) != 0) {
+			mig_reply_destroy((void *)(uintptr_t)port);
+			return (MACH_PORT_NULL);
+		}
+	}
+	return (port);
 }
 
 /*************************************************************
@@ -95,11 +134,14 @@ mig_dealloc_reply_port(
 {
 	mach_port_t port;
 
-	port = mig_reply_port;
-	mig_reply_port = MACH_PORT_NULL;
-
-	(void) mach_port_mod_refs(mach_task_self(), port,
-				  MACH_PORT_RIGHT_RECEIVE, -1);
+	if (!mig_reply_key_ready())
+		return;
+	port = (mach_port_t)(uintptr_t)pthread_getspecific(mig_reply_key);
+	if (port == MACH_PORT_NULL)
+		return;
+	/* Clear first: neither a later MIG call nor the exit destructor owns it. */
+	if (pthread_setspecific(mig_reply_key, NULL) == 0)
+		mig_reply_destroy((void *)(uintptr_t)port);
 }
 
 /*************************************************************
