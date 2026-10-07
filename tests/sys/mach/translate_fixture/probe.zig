@@ -441,3 +441,11 @@ export fn rmx_child_send_count(name: u32, out: *Observation) c_int {
     rmx_fixture_port_drop(port);
     return 0;
 }
+
+const ChildAction = extern struct { present: u32, behavior: i32, flavor: i32 };
+extern fn rmx_fixture_child_action(u32, *ChildAction) void;
+export fn rmx_child_crash(index: u32, out: *ChildAction) c_int {
+    if (index == 0 or index >= 13) return 22;
+    rmx_fixture_child_action(index, out);
+    return 0;
+}

@@ -19,7 +19,8 @@ const c = @cImport({
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 const Port = extern struct { name: u32, pad: u32 = 0, pad2: u16 = 0, disposition: u8, kind: u8 = c.MACH_MSG_PORT_DESCRIPTOR };
 const Packet = extern struct { header: c.mach_msg_header_t, count: u32, port: Port, trailer: [128]u8 = @splat(0) };
-const Projection = extern struct { special: [3]u32 = @splat(0), mask: u32 = 0, behavior: i32 = 0, flavor: i32 = 0, exception: u32 = 0 };
+const Action = extern struct { present: u32 = 0, behavior: i32 = 0, flavor: i32 = 0 };
+const Projection = extern struct { special: [3]u32 = @splat(0), mask: u32 = 0, behavior: i32 = 0, flavor: i32 = 0, exception: u32 = 0, crash: Action = .{} };
 const selectors = [_]i32{ c.TASK_SEATBELT_PORT, c.TASK_ACCESS_PORT, c.TASK_DEBUG_CONTROL_PORT };
 const launch_mask: u32 = c.EXC_MASK_CRASH | c.EXC_MASK_GUARD | c.EXC_MASK_RESOURCE;
 const launch_behavior: i32 = @bitCast(@as(u32, c.EXCEPTION_STATE_IDENTITY) | c.MACH_EXCEPTION_CODES);
@@ -75,6 +76,9 @@ fn project() Projection {
             result.flavor = flavors[i];
         }
     }
+    var crash_index: u32 = c.EXC_CRASH;
+    var crash_size: usize = @sizeOf(Action);
+    setup(c.sysctlbyname("debug.rmx_child_crash", &result.crash, &crash_size, &crash_index, @sizeOf(u32)) == 0 and crash_size == @sizeOf(Action));
     return result;
 }
 fn sendTask(destination: u32) void {
@@ -116,6 +120,16 @@ fn child() Child {
             c._exit(99);
         }
         const projection = project();
+        for (projection.special, 0..) |port, i| {
+            if (port != 0) {
+                var message = std.mem.zeroes(c.mach_msg_header_t);
+                message.msgh_bits = c.MACH_MSG_TYPE_COPY_SEND;
+                message.msgh_remote_port = port;
+                message.msgh_size = @sizeOf(c.mach_msg_header_t);
+                message.msgh_id = @intCast(51600 + i);
+                setup(c.mach_msg(&message, c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, message.msgh_size, 0, 0, 1000, 0) == 0);
+            }
+        }
         setup(c.write(result[1], &projection, @sizeOf(Projection)) == @sizeOf(Projection));
         c._exit(0);
     }
@@ -140,6 +154,9 @@ fn unchanged(before: Projection, after: Projection) void {
     fact(before.exception, after.exception);
     fact(before.behavior, after.behavior);
     fact(before.flavor, after.flavor);
+    fact(before.crash.present, after.crash.present);
+    fact(before.crash.behavior, after.crash.behavior);
+    fact(before.crash.flavor, after.crash.flavor);
 }
 fn done() void {
     if (mismatch) c.atf_tc_fail("child task setter observations differ");
@@ -156,12 +173,24 @@ fn special(t: [*c]const c.atf_tc_t) callconv(.c) void {
         ports[i] = alloc();
         fact(0, c.task_set_special_port(kid.task, selector, ports[i]));
     }
+    const seatbelt_before = refs(ports[0]);
     fact(c.KERN_NO_ACCESS, c.task_set_special_port(kid.task, c.TASK_SEATBELT_PORT, ports[0]));
+    fact(seatbelt_before, refs(ports[0]));
+    const access_before = refs(ports[1]);
     fact(c.KERN_NO_ACCESS, c.task_set_special_port(kid.task, c.TASK_ACCESS_PORT, ports[1]));
+    fact(access_before, refs(ports[1]));
+
     const observed = finish(kid, 'p');
     // Names belong to the child space; non-null state is the projection,
     // parent input-right counts establish the held configuration rights.
-    for (0..3) |i| fact(1, @intFromBool(observed.special[i] != 0));
+    for (0..3) |i| {
+        fact(1, @intFromBool(observed.special[i] != 0));
+        var received: Packet = undefined;
+        const rc = c.mach_msg(&received.header, c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, @sizeOf(Packet), ports[i], 100, 0);
+        fact(0, rc);
+        fact(@intCast(51600 + i), if (rc == 0) received.header.msgh_id else 0);
+    }
+
     unchanged(before, project());
     done();
 }
@@ -173,12 +202,17 @@ fn exception(t: [*c]const c.atf_tc_t) callconv(.c) void {
     const before = project();
     const kid = child();
     const port = alloc();
+    const right_before = refs(port);
     fact(0, c.task_set_exception_ports(kid.task, launch_mask, port, launch_behavior, c.x86_THREAD_STATE));
+    fact(right_before + 3, refs(port));
     const observed = finish(kid, 'p');
     fact(c.EXC_MASK_GUARD | c.EXC_MASK_RESOURCE, observed.mask);
     fact(1, @intFromBool(observed.exception != 0));
     fact(launch_behavior, observed.behavior);
     fact(c.x86_THREAD_STATE, observed.flavor);
+    fact(1, observed.crash.present);
+    fact(launch_behavior, observed.crash.behavior);
+    fact(c.x86_THREAD_STATE, observed.crash.flavor);
     unchanged(before, project());
     done();
 }
@@ -196,6 +230,8 @@ fn refused(t: [*c]const c.atf_tc_t) callconv(.c) void {
     fact(c.KERN_NOT_SUPPORTED, c.task_set_special_port(kid.task, c.TASK_BOOTSTRAP_PORT, port));
     fact(count, refs(port));
     fact(c.KERN_INVALID_ARGUMENT, c.task_set_exception_ports(kid.task, 0x40000000, port, launch_behavior, c.x86_THREAD_STATE));
+    fact(count, refs(port));
+    fact(c.KERN_INVALID_ARGUMENT, c.task_set_exception_ports(kid.task, launch_mask, port, 0x1234, c.x86_THREAD_STATE));
     fact(count, refs(port));
     fact(c.KERN_INVALID_ARGUMENT, c.task_set_exception_ports(kid.task, launch_mask, port, launch_behavior, 999));
     fact(count, refs(port));

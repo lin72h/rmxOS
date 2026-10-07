@@ -457,3 +457,27 @@ extern int rmx_child_send_count(uint32_t, struct observation *);
 SYSCTL_PROC(_debug, OID_AUTO, rmx_child_send_count,
     CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, rmx_child_send_count, 0,
     observe_sysctl, "S,observation", "Mach send-right count for refusal ownership tests");
+
+/* Field projection only: the Zig observer owns iteration and result records. */
+struct child_action { uint32_t present; int behavior; int flavor; };
+void rmx_fixture_child_action(uint32_t, struct child_action *);
+void rmx_fixture_child_action(uint32_t index, struct child_action *out) {
+    task_t task = current_task();
+    itk_lock(task);
+    out->present = IP_VALID(task->exc_actions[index].port);
+    out->behavior = task->exc_actions[index].behavior;
+    out->flavor = task->exc_actions[index].flavor;
+    itk_unlock(task);
+}
+extern int rmx_child_crash(uint32_t, struct child_action *);
+static int child_crash_sysctl(SYSCTL_HANDLER_ARGS) {
+    uint32_t index = 0;
+    struct child_action observed = {0};
+    int error = SYSCTL_IN(req, &index, sizeof(index));
+    if (error == 0) error = rmx_child_crash(index, &observed);
+    if (error == 0) error = SYSCTL_OUT(req, &observed, sizeof(observed));
+    return (error);
+}
+SYSCTL_PROC(_debug, OID_AUTO, rmx_child_crash,
+    CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0,
+    child_crash_sysctl, "S,child_action", "Stored task exception action projection");
