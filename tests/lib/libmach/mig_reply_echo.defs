@@ -1,0 +1,7 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+subsystem op547_echo 254700;
+#include <sys/mach/std_types.defs>
+waittime 2000;
+sendtime 2000;
+serverprefix op547_server_;
+routine op547_echo_call(server: mach_port_t; token: integer_t; out observed: integer_t);
