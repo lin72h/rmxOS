@@ -96,7 +96,7 @@ fn nativeModes() void {
         send(p, 51512);
         change(q, s, c.EV_ADD | mode);
         event(q, p, true);
-        event(q, 0, false);
+        if (mode != c.EV_CLEAR) event(q, 0, false);
         if (mode == c.EV_DISPATCH) {
             change(q, s, c.EV_ENABLE);
             event(q, p, true);
