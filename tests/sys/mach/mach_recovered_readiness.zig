@@ -78,8 +78,11 @@ fn body(_: [*c]const c.atf_tc_t) callconv(.c) void {
     if (setup != 0 or previous != 0) c.atf_tc_fail("port-destroyed request setup failed");
     // Native close exercises the revocation path; mod_refs bypasses it.
     fact(0, c.close(@intCast(owner)));
-    const guard = c.open("/dev/null", c.O_RDONLY);
-    if (guard < 0) c.atf_tc_fail("retired-name guard failed");
+    const temporary = c.open("/dev/null", c.O_RDONLY);
+    if (temporary < 0) c.atf_tc_fail("retired-name guard failed");
+    const guard = c.dup2(temporary, @intCast(owner));
+    if (temporary != owner) _ = c.close(temporary);
+    if (guard != owner) c.atf_tc_fail("retired-name reservation failed");
     defer _ = c.close(guard);
     fact(1, @intFromBool(guard == owner));
     var notification: Packet = undefined;
