@@ -421,7 +421,7 @@ static int revoke_sysctl(SYSCTL_HANDLER_ARGS) {
 }
 SYSCTL_PROC(_debug, OID_AUTO, rmx_revoke_control, CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE,
  NULL,0,revoke_sysctl,"S,revocation","Admitted receive entry revocation before postclose");
-/* MIG table ABI projection: reserve an otherwise unused test routine. */
+/* MIG table ABI projection: temporarily replace a known task-family routine. */
 #include <sys/mach/mig_errors.h>
 struct fixture_mig_hash { mach_msg_id_t num; mig_routine_t routine; int size;
 #if MACH_COUNTERS
@@ -436,10 +436,15 @@ void *rmx_mig_trailer(void *);
 uint32_t rmx_mig_trailer_size(void);
 void rmx_mig_success(void *);
 int rmx_mig_slot_num(uint32_t i) { return (mig_buckets[i].num); }
+static struct fixture_mig_hash saved_mig_slot;
 void rmx_mig_slot_set(uint32_t i, uint32_t id) {
- mig_buckets[i].routine = id ? rmx_poison_reply : NULL;
- mig_buckets[i].size = id ? sizeof(mig_reply_error_t) : 0;
- mig_buckets[i].num = id;
+ if (id) {
+  saved_mig_slot = mig_buckets[i];
+  mig_buckets[i].routine = rmx_poison_reply;
+  mig_buckets[i].size = sizeof(mig_reply_error_t);
+ } else {
+  mig_buckets[i] = saved_mig_slot;
+ }
 }
 void *rmx_mig_trailer(void *p) { mach_msg_header_t *m=p; return ((char *)p+round_msg(m->msgh_size)); }
 uint32_t rmx_mig_trailer_size(void) { return (MAX_TRAILER_SIZE); }
