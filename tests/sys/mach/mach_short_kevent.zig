@@ -10,6 +10,7 @@ const c = @cImport({
     @cInclude("pthread.h");
     @cInclude("time.h");
     @cInclude("signal.h");
+    @cInclude("errno.h");
     @cInclude("sys/mach/message.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
@@ -33,7 +34,7 @@ comptime {
 var tc: c.atf_tc_t = undefined;
 var boundary: [7]c.atf_tc_t = undefined;
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
-    _ = c.atf_tc_set_md_var(t, "descr", "%s", "Direct kevent short receive cleans up the saved message");
+    _ = c.atf_tc_set_md_var(t, "descr", "%s", "mach_msg receive boundaries and readiness-only kevent attach");
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "10");
 }
 fn body(_: [*c]const c.atf_tc_t) callconv(.c) void {
@@ -51,13 +52,14 @@ fn body(_: [*c]const c.atf_tc_t) callconv(.c) void {
     defer _ = c.close(kq);
     // Reserve trailer space while advertising only a short receive size.
     var received: [128]u8 = undefined;
-    var change = c.struct_kevent{ .ident = pset, .filter = c.EVFILT_MACHPORT, .flags = c.EV_ADD | c.EV_ONESHOT, .fflags = 2, .data = 0, .udata = null, .ext = .{ @intFromPtr(&received), @sizeOf(Header), 0, 0 } };
+    var change = c.struct_kevent{ .ident = pset, .filter = c.EVFILT_MACHPORT, .flags = c.EV_ADD | c.EV_RECEIPT, .fflags = 2, .data = 0, .udata = null, .ext = .{ @intFromPtr(&received), @sizeOf(Header), 0, 0 } };
     var event: c.struct_kevent = undefined;
     var immediate = c.struct_timespec{ .tv_sec = 0, .tv_nsec = 0 };
     const count = c.kevent(kq, &change, 1, &event, 1, &immediate);
-    _ = c.printf("kevent expected_count=1 observed_count=%d expected_result=0x10004004 observed_result=0x%x\n", count, if (count == 1) event.fflags else @as(c_uint, 0));
-    if (count != 1) c.atf_tc_fail("expected one kevent observed=%d", count);
-    if (event.filter != c.EVFILT_MACHPORT or event.ident != pset or event.flags & c.EV_ERROR != 0 or event.fflags != 0x10004004) c.atf_tc_fail("unexpected direct receive event");
+    const short = c.syscall(c.SYS_mach_msg_trap, &received, @as(c_uint, 0x102), @as(c_uint, 0), @as(c_uint, @sizeOf(Header)), pset, @as(c_uint, 0), @as(c_uint, 0));
+    const empty = c.syscall(c.SYS_mach_msg_trap, &received, @as(c_uint, 0x102), @as(c_uint, 0), @as(c_uint, received.len), pset, @as(c_uint, 0), @as(c_uint, 0));
+    _ = c.printf("short515 expected_attach=%d observed_attach=%lld expected_receive=0x10004004 observed_receive=0x%lx expected_empty=0x10004003 observed_empty=0x%lx\n", @as(c_int, c.ENOTSUP), @as(c_longlong, if (count == 1) event.data else -1), short, empty);
+    if (count != 1 or event.flags & c.EV_ERROR == 0 or event.data != c.ENOTSUP or short != 0x10004004 or empty != 0x10004003) c.atf_tc_fail("readiness attach or destructive short receive differs");
 }
 fn addTests(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     const err = c.atf_tc_init(&tc, "short_buffer", &head, &body, null, c.atf_tp_get_config(tp));

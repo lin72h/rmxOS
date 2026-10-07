@@ -1,5 +1,26 @@
 # Mach fix regressions
 
+## op-515 readiness-only C1
+
+`mach_readiness_test` adds `scans`, `native_modes`, `members`,
+`attach_enqueue`, `buffers`, and `silent_close`. Base is `2de5f1d4` plus
+these tests; fixed requires a pure readiness snapshot and deferred public
+KNOTE. `members` expects failure on base because its set selector keeps
+choosing busy A before B. `buffers` expects failure because base accepts
+and consumes through a receive-buffer registration/update. The other
+cases check retained behavior and may pass on base. `attach_enqueue` is
+32 bounded scheduling races, not a controlled interleaving claim.
+
+Only the earlier `mach_short_kevent_test:short_buffer` directly received
+through kevent. It now requires initial buffered attach ENOTSUP, then
+checks the same destructive short receive and subsequent empty queue
+through `mach_msg`. The LARGE, audit/context, queued-reply, waiting and
+queued-member cases already use `mach_msg` and are unchanged.
+`send_pin`/`move_pin` retain their reference-count checks; their ABI
+projection now observes shared or exclusive native sx waiters, because
+public KNOTE takes the note-list lock exclusively. All expectations are
+source-derived until a run is recorded.
+
 ## Batch 3 (op-426)
 
 Continuation op-427 adds `mach_lifetime_test` before the lifetime fixes:

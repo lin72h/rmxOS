@@ -285,7 +285,7 @@ void rmx_fixture_note_lock(void *p) { sx_xlock(&((ipc_pset_t)p)->ips_note_lock);
 void rmx_fixture_note_unlock(void *p) { sx_xunlock(&((ipc_pset_t)p)->ips_note_lock); }
 int rmx_fixture_note_waiter(void *p) {
  return ((atomic_load_acq_ptr(&((ipc_pset_t)p)->ips_note_lock.sx_lock) &
-     SX_LOCK_SHARED_WAITERS) != 0);
+     (SX_LOCK_SHARED_WAITERS | SX_LOCK_EXCLUSIVE_WAITERS)) != 0);
 }
 uint32_t rmx_fixture_pset_refs(void *p) {
  return (atomic_load_acq_int(&((ipc_pset_t)p)->ips_object.io_references));

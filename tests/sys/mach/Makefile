@@ -8,11 +8,12 @@ SCRIPTS+= mach_entry_test
 SCRIPTS+= mach_entry_lock_test
 SCRIPTS+= mach_entry_knote_test
 SCRIPTS+= mach_entry_dup_test
+SCRIPTS+= mach_readiness_test
 ZIG?= zig
 ZIG_SYSROOT?= ${SYSROOT}
 ATF_C_ARCHIVE?= ${SYSROOT}/usr/lib/libprivateatf-c.a
 
-.for _test in fileops swtch short_kevent dead_name named_pset translate file_lifetime passable proc_info filecaps timeout clock timebase entry entry_lock entry_knote entry_dup lifetime
+.for _test in fileops swtch short_kevent dead_name named_pset translate file_lifetime passable proc_info filecaps timeout clock timebase entry entry_lock entry_knote entry_dup lifetime readiness
 mach_${_test}_test: ${.CURDIR}/mach_${_test}.zig ${.CURDIR}/file_message.zig
 	${ZIG} build-exe ${.CURDIR}/mach_${_test}.zig -target x86_64-freebsd -lc -lpthread \
 	    --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf \
