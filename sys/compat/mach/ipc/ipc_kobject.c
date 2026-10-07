@@ -135,6 +135,8 @@
 #include <sys/mach/ipc/ipc_kmsg.h>
 #include <sys/mach/ipc/ipc_port.h>
 #include <sys/mach/ipc/ipc_thread.h>
+#include <sys/mach/task.h>
+#include <sys/mach/thread.h>
 
 #define vm_object_destroy(a)
 
@@ -159,6 +161,7 @@ ipc_kobject_notify(
 typedef struct {
         mach_msg_id_t num;
         mig_routine_t routine;
+        rpc_subsystem_t family;
 	int size;
 #if	MACH_COUNTERS
 	mach_counter_t callcount;
@@ -255,6 +258,7 @@ mig_init(void)
 	
 	mig_buckets[pos].num = nentry;
 	mig_buckets[pos].routine = mig_e[i]->routine[j].stub_routine;
+	mig_buckets[pos].family = mig_e[i];
 	if (mig_e[i]->routine[j].max_reply_msg)
 		mig_buckets[pos].size = mig_e[i]->routine[j].max_reply_msg;
 	else
@@ -275,6 +279,51 @@ mig_init(void)
  *	Conditions:
  *		Nothing locked.
  */
+
+/* A routine number alone never authorizes conversion of its destination. */
+static kern_return_t
+ipc_kobject_task_gate(mig_hash_t *routine, ipc_port_t destination,
+    mach_msg_id_t id)
+{
+    ipc_kobject_type_t type;
+    task_t task;
+    kern_return_t result;
+    boolean_t task_family;
+
+    ip_lock(destination);
+    if (!ip_active(destination)) {
+        ip_unlock(destination);
+        return (KERN_INVALID_TASK);
+    }
+    type = ip_kotype(destination);
+    ip_unlock(destination);
+    task_family = routine->family == (rpc_subsystem_t)&task_subsystem ||
+        routine->family == (rpc_subsystem_t)&mach_port_subsystem ||
+        routine->family == (rpc_subsystem_t)&mach_vm_subsystem ||
+        routine->family == (rpc_subsystem_t)&vm_map_subsystem;
+    if (task_family) {
+        if (type != IKOT_TASK)
+            return (MIG_BAD_ID);
+        task = convert_port_to_task(destination);
+        if (task == TASK_NULL)
+            return (KERN_INVALID_TASK);
+        result = KERN_SUCCESS;
+        if (task != current_task() &&
+            !(routine->family == (rpc_subsystem_t)&task_subsystem &&
+            (id == 3410 || id == 3413)))
+            result = KERN_NOT_SUPPORTED;
+        task_deallocate(task);
+        return (result);
+    }
+    if (routine->family == (rpc_subsystem_t)&mach_host_subsystem)
+        return (type == IKOT_HOST || type == IKOT_HOST_PRIV ?
+            KERN_SUCCESS : MIG_BAD_ID);
+    if (routine->family == (rpc_subsystem_t)&host_priv_subsystem)
+        return (type == IKOT_HOST_PRIV ? KERN_SUCCESS : MIG_BAD_ID);
+    if (routine->family == (rpc_subsystem_t)&clock_subsystem)
+        return (type == IKOT_CLOCK ? KERN_SUCCESS : MIG_BAD_ID);
+    return (MIG_BAD_ID);
+}
 
 ipc_kmsg_t
 ipc_kobject_server(ipc_kmsg_t	request)
@@ -342,8 +391,16 @@ ipc_kobject_server(ipc_kmsg_t	request)
  * to perform the kernel function
  */
 	{
-	    if (ptr)	
-			(*ptr->routine)(request->ikm_header, reply->ikm_header);
+        if (ptr) {
+            kr = ipc_kobject_task_gate(ptr,
+                (ipc_port_t)request->ikm_header->msgh_remote_port,
+                request->ikm_header->msgh_id);
+            if (kr == KERN_SUCCESS)
+                (*ptr->routine)(request->ikm_header, reply->ikm_header);
+            else
+                ((mig_reply_error_t *)reply->ikm_header)->RetCode = kr;
+        }
+
 	    else {
 			if (!ipc_kobject_notify(request->ikm_header, reply->ikm_header)){
 #if	MACH_IPC_TEST

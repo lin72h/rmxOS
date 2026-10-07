@@ -135,6 +135,11 @@
 
 #define THR_ACT_NULL NULL
 
+/* Self-only kernel APIs; MIG uses the checked destination-preserving entries. */
+kern_return_t task_set_special_port(task_t, int, ipc_port_t);
+kern_return_t task_set_exception_ports(task_t, exception_mask_t, ipc_port_t,
+    exception_behavior_t, thread_state_flavor_t);
+
 
 
 /*
@@ -691,6 +696,140 @@ task_get_special_port(
  *		KERN_INVALID_ARGUMENT	Invalid special port.
  */
 
+/* Pin task and space separately. Never nest a space lock inside task IPC.
+ * Success returns binding + IPC locked; caller releases rights after unlock. */
+static kern_return_t
+task_setter_lock(ipc_port_t destination, task_t *taskp, ipc_space_t *spacep)
+{
+    task_t task;
+    ipc_space_t space;
+    boolean_t active;
+
+    *taskp = TASK_NULL;
+    *spacep = IS_NULL;
+    task = convert_port_to_task(destination);
+    if (task == TASK_NULL)
+        return (KERN_INVALID_TASK);
+    if (task == current_task())
+        (void)mach_task_space(task);
+    mtx_lock(&task->itk_binding_lock);
+    if (task->itk_binding_state != MACH_BIND_ALIVE) {
+        mtx_unlock(&task->itk_binding_lock);
+        task_deallocate(task);
+        return (KERN_INVALID_TASK);
+    }
+    space = task->itk_space;
+    is_reference(space);
+    mtx_unlock(&task->itk_binding_lock);
+    is_read_lock(space);
+    active = space->is_active;
+    is_read_unlock(space);
+    mtx_lock(&task->itk_binding_lock);
+    itk_lock(task);
+    if (!active || task->itk_binding_state != MACH_BIND_ALIVE ||
+        task->itk_space != space || task->itk_self != destination) {
+        itk_unlock(task);
+        mtx_unlock(&task->itk_binding_lock);
+        is_release(space);
+        task_deallocate(task);
+        return (KERN_INVALID_TASK);
+    }
+    *taskp = task;
+    *spacep = space;
+    return (KERN_SUCCESS);
+}
+
+static void
+task_setter_unlock(task_t task, ipc_space_t space)
+{
+    itk_unlock(task);
+    mtx_unlock(&task->itk_binding_lock);
+    is_release(space);
+    task_deallocate(task);
+}
+
+kern_return_t
+task_set_special_port_checked(ipc_port_t destination, int which, ipc_port_t port)
+{
+    task_t task;
+    ipc_space_t space;
+    ipc_port_t *slot, old;
+    kern_return_t result;
+
+    result = task_setter_lock(destination, &task, &space);
+    if (result != KERN_SUCCESS)
+        return (result);
+    switch (which) {
+    case TASK_KERNEL_PORT: slot = &task->itk_sself; break;
+    case TASK_HOST_PORT: slot = &task->itk_host; break;
+    case TASK_BOOTSTRAP_PORT: slot = &task->itk_bootstrap; break;
+    case TASK_SEATBELT_PORT: slot = &task->itk_seatbelt; break;
+    case TASK_ACCESS_PORT: slot = &task->itk_task_access; break;
+    case TASK_DEBUG_CONTROL_PORT: slot = &task->itk_debug_control; break;
+    default:
+        task_setter_unlock(task, space);
+        return (KERN_INVALID_ARGUMENT);
+    }
+    if (task != current_task() && which != TASK_SEATBELT_PORT &&
+        which != TASK_ACCESS_PORT && which != TASK_DEBUG_CONTROL_PORT) {
+        task_setter_unlock(task, space);
+        return (KERN_NOT_SUPPORTED);
+    }
+    if ((which == TASK_SEATBELT_PORT || which == TASK_ACCESS_PORT) &&
+        IP_VALID(*slot)) {
+        task_setter_unlock(task, space);
+        return (KERN_NO_ACCESS);
+    }
+    old = *slot;
+    *slot = port;
+    task_setter_unlock(task, space);
+    if (IP_VALID(old))
+        ipc_port_release_send(old);
+    /* Success consumes input; errors leave it for kobject request destruction. */
+    return (KERN_SUCCESS);
+}
+
+kern_return_t
+task_set_exception_ports_checked(ipc_port_t destination,
+    exception_mask_t mask, ipc_port_t port, exception_behavior_t behavior,
+    thread_state_flavor_t flavor)
+{
+    task_t task;
+    ipc_space_t space;
+    ipc_port_t old[EXC_TYPES_COUNT];
+    kern_return_t result;
+    int i;
+
+    result = task_setter_lock(destination, &task, &space);
+    if (result != KERN_SUCCESS)
+        return (result);
+    if ((mask & ~(EXC_MASK_ALL | EXC_MASK_CRASH)) != 0 ||
+        (behavior != EXCEPTION_DEFAULT && behavior != EXCEPTION_STATE &&
+        behavior != EXCEPTION_STATE_IDENTITY &&
+        (uint32_t)behavior != (EXCEPTION_STATE_IDENTITY | MACH_EXCEPTION_CODES)) ||
+        (flavor != THREAD_STATE_NONE && flavor != x86_THREAD_STATE &&
+        flavor != x86_THREAD_STATE32 && flavor != x86_THREAD_STATE64)) {
+        task_setter_unlock(task, space);
+        return (KERN_INVALID_ARGUMENT);
+    }
+    for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
+        old[i] = IP_NULL;
+        if ((mask & (1U << i)) != 0) {
+            old[i] = task->exc_actions[i].port;
+            task->exc_actions[i].port = ipc_port_copy_send(port);
+            task->exc_actions[i].behavior = behavior;
+            task->exc_actions[i].flavor = flavor;
+        }
+    }
+    task_setter_unlock(task, space);
+    for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++)
+        if (IP_VALID(old[i]))
+            ipc_port_release_send(old[i]);
+    if (IP_VALID(port))
+        ipc_port_release_send(port);
+    return (KERN_SUCCESS);
+}
+
 kern_return_t
 task_set_special_port(
 	task_t		task,
@@ -703,9 +842,10 @@ task_set_special_port(
 #if VERBOSE_DEBUGGING
 	printf("task_set_special_port(task=%p, which=%d, port=%p)\n",task, which, port);
 #endif
-	/* we only support the current task */
 	if (task == TASK_NULL)
-		return KERN_INVALID_ARGUMENT;
+		return KERN_INVALID_TASK;
+	if (task != current_task())
+		return KERN_NOT_SUPPORTED;
 
 	switch (which) {
 	case TASK_KERNEL_PORT:
@@ -905,12 +1045,6 @@ convert_port_to_task(
 	boolean_t r;
 	task_t task = TASK_NULL;
 
-	/* D2 still defers task-call dispatch; preserve caller-task semantics. */
-	task = current_task();
-	if (task == TASK_NULL || atomic_load_acq_int(&task->itk_binding_state) != MACH_BIND_ALIVE)
-		return (TASK_NULL);
-	task_reference(task);
-	return (task);
 
 	r = FALSE;
 	while (!r && IP_VALID(port)) {
@@ -1018,6 +1152,10 @@ convert_port_to_map(
 
 	if (task == TASK_NULL)
 		return VM_MAP_NULL;
+	if (task != current_task()) {
+		task_deallocate(task);
+		return (VM_MAP_NULL);
+	}
 
 	map = &task->itk_p->p_vmspace->vm_map;
 	task_deallocate(task);
@@ -1227,6 +1365,9 @@ task_set_exception_ports(
 {
 	register int	i;
 	ipc_port_t	old_port[EXC_TYPES_COUNT];
+
+	if (task != TASK_NULL && task != current_task())
+		return (KERN_NOT_SUPPORTED);
 
 	if (task == TASK_NULL) {
 		return KERN_INVALID_ARGUMENT;

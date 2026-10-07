@@ -1,7 +1,7 @@
 /*
  * IDENTIFICATION:
- * stub generated Thu Jun 11 18:17:45 2015
- * with a MiG generated Thu Jun 11 16:16:11 PDT 2015 by kmacy@serenity
+ * stub generated Wed Oct  7 18:52:55 2026
+ * with a MiG generated Tue Sep 22 19:11:28 NZST 2026 by me@bdw-fx15-x64z
  * OPTIONS: 
  *	KernelServer
  */
@@ -32,6 +32,7 @@
 
 #include <sys/mach/std_types.h>
 #include <sys/mach/mig.h>
+#include <sys/mach/thread_status.h>
 #include <sys/mach/ipc_sync.h>
 #include <sys/mach/ipc/ipc_voucher.h>
 #include <sys/mach/ipc_host.h>
@@ -285,7 +286,7 @@
 		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		int which_port;
-	} __Request__task_set_special_port_t;
+	} __Request__task_set_special_port_checked_t;
 #ifdef  __MigPackStructs
 #pragma pack()
 #endif
@@ -333,7 +334,7 @@
 		exception_mask_t exception_mask;
 		exception_behavior_t behavior;
 		thread_state_flavor_t new_flavor;
-	} __Request__task_set_exception_ports_t;
+	} __Request__task_set_exception_ports_checked_t;
 #ifdef  __MigPackStructs
 #pragma pack()
 #endif
@@ -826,7 +827,7 @@
 		mach_msg_header_t Head;
 		NDR_record_t NDR;
 		kern_return_t RetCode;
-	} __Reply__task_set_special_port_t;
+	} __Reply__task_set_special_port_checked_t;
 #ifdef  __MigPackStructs
 #pragma pack()
 #endif
@@ -866,7 +867,7 @@
 		mach_msg_header_t Head;
 		NDR_record_t NDR;
 		kern_return_t RetCode;
-	} __Reply__task_set_exception_ports_t;
+	} __Reply__task_set_exception_ports_checked_t;
 #ifdef  __MigPackStructs
 #pragma pack()
 #endif
@@ -1189,10 +1190,10 @@ union __ReplyUnion__task_subsystem {
 	__Reply__task_suspend_t Reply_task_suspend;
 	__Reply__task_resume_t Reply_task_resume;
 	__Reply__task_get_special_port_t Reply_task_get_special_port;
-	__Reply__task_set_special_port_t Reply_task_set_special_port;
+	__Reply__task_set_special_port_checked_t Reply_task_set_special_port_checked;
 	__Reply__thread_create_from_user_t Reply_thread_create_from_user;
 	__Reply__thread_create_running_from_user_t Reply_thread_create_running_from_user;
-	__Reply__task_set_exception_ports_t Reply_task_set_exception_ports;
+	__Reply__task_set_exception_ports_checked_t Reply_task_set_exception_ports_checked;
 	__Reply__task_get_exception_ports_t Reply_task_get_exception_ports;
 	__Reply__task_swap_exception_ports_t Reply_task_swap_exception_ports;
 	__Reply__semaphore_create_t Reply_semaphore_create;
@@ -1250,7 +1251,7 @@ mig_internal novalue _Xtask_resume
 mig_internal novalue _Xtask_get_special_port
 	(mach_msg_header_t *InHeadP, mach_msg_header_t *OutHeadP);
 
-mig_internal novalue _Xtask_set_special_port
+mig_internal novalue _Xtask_set_special_port_checked
 	(mach_msg_header_t *InHeadP, mach_msg_header_t *OutHeadP);
 
 mig_internal novalue _Xthread_create_from_user
@@ -1259,7 +1260,7 @@ mig_internal novalue _Xthread_create_from_user
 mig_internal novalue _Xthread_create_running_from_user
 	(mach_msg_header_t *InHeadP, mach_msg_header_t *OutHeadP);
 
-mig_internal novalue _Xtask_set_exception_ports
+mig_internal novalue _Xtask_set_exception_ports_checked
 	(mach_msg_header_t *InHeadP, mach_msg_header_t *OutHeadP);
 
 mig_internal novalue _Xtask_get_exception_ports
@@ -2609,13 +2610,13 @@ mig_internal novalue _Xtask_get_special_port
 
 #if ( __MigTypeCheck )
 #if __MIG_check__Request__task_subsystem__
-#if !defined(__MIG_check__Request__task_set_special_port_t__defined)
-#define __MIG_check__Request__task_set_special_port_t__defined
+#if !defined(__MIG_check__Request__task_set_special_port_checked_t__defined)
+#define __MIG_check__Request__task_set_special_port_checked_t__defined
 
-mig_internal kern_return_t __MIG_check__Request__task_set_special_port_t(__attribute__((__unused__)) __Request__task_set_special_port_t *In0P)
+mig_internal kern_return_t __MIG_check__Request__task_set_special_port_checked_t(__attribute__((__unused__)) __Request__task_set_special_port_checked_t *In0P)
 {
 
-	typedef __Request__task_set_special_port_t __Request;
+	typedef __Request__task_set_special_port_checked_t __Request;
 #if	__MigTypeCheck
 	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->msgh_body.msgh_descriptor_count != 1) ||
@@ -2631,34 +2632,34 @@ mig_internal kern_return_t __MIG_check__Request__task_set_special_port_t(__attri
 
 	return MACH_MSG_SUCCESS;
 }
-#endif /* !defined(__MIG_check__Request__task_set_special_port_t__defined) */
+#endif /* !defined(__MIG_check__Request__task_set_special_port_checked_t__defined) */
 #endif /* __MIG_check__Request__task_subsystem__ */
 #endif /* ( __MigTypeCheck ) */
 
 
-/* Routine task_set_special_port */
+/* Routine task_set_special_port_checked */
 #ifdef	mig_external
 mig_external
 #else
 extern
 #endif	/* mig_external */
-kern_return_t task_set_special_port
+kern_return_t task_set_special_port_checked
 #if	defined(LINTLIBRARY)
     (task, which_port, special_port)
-	task_t task;
+	ipc_port_t task;
 	int which_port;
 	mach_port_t special_port;
-{ return task_set_special_port(task, which_port, special_port); }
+{ return task_set_special_port_checked(task, which_port, special_port); }
 #else
 (
-	task_t task,
+	ipc_port_t task,
 	int which_port,
 	mach_port_t special_port
 );
 #endif	/* defined(LINTLIBRARY) */
 
-/* Routine task_set_special_port */
-mig_internal novalue _Xtask_set_special_port
+/* Routine task_set_special_port_checked */
+mig_internal novalue _Xtask_set_special_port_checked
 	(mach_msg_header_t *InHeadP, mach_msg_header_t *OutHeadP)
 {
 
@@ -2678,8 +2679,8 @@ mig_internal novalue _Xtask_set_special_port
 #ifdef  __MigPackStructs
 #pragma pack()
 #endif
-	typedef __Request__task_set_special_port_t __Request;
-	typedef __Reply__task_set_special_port_t Reply;
+	typedef __Request__task_set_special_port_checked_t __Request;
+	typedef __Reply__task_set_special_port_checked_t Reply;
 
 	/*
 	 * typedef struct {
@@ -2691,36 +2692,31 @@ mig_internal novalue _Xtask_set_special_port
 
 	Request *In0P = (Request *) InHeadP;
 	Reply *OutP = (Reply *) OutHeadP;
-#ifdef	__MIG_check__Request__task_set_special_port_t__defined
+#ifdef	__MIG_check__Request__task_set_special_port_checked_t__defined
 	kern_return_t check_result;
-#endif	/* __MIG_check__Request__task_set_special_port_t__defined */
+#endif	/* __MIG_check__Request__task_set_special_port_checked_t__defined */
 
 #if	__MigKernelSpecificCode
 #else
 #endif /* __MigKernelSpecificCode */
-	task_t task;
-
-	__DeclareRcvRpc(3410, "task_set_special_port")
-	__BeforeRcvRpc(3410, "task_set_special_port")
+	__DeclareRcvRpc(3410, "task_set_special_port_checked")
+	__BeforeRcvRpc(3410, "task_set_special_port_checked")
 /* RetCArg=0x0 rtSimpleRequest=0 */
 
-#if	defined(__MIG_check__Request__task_set_special_port_t__defined)
-	check_result = __MIG_check__Request__task_set_special_port_t((__Request *)In0P);
+#if	defined(__MIG_check__Request__task_set_special_port_checked_t__defined)
+	check_result = __MIG_check__Request__task_set_special_port_checked_t((__Request *)In0P);
 	if (check_result != MACH_MSG_SUCCESS)
 		{ MIG_RETURN_ERROR(OutP, check_result); }
-#endif	/* defined(__MIG_check__Request__task_set_special_port_t__defined) */
+#endif	/* defined(__MIG_check__Request__task_set_special_port_checked_t__defined) */
 
-	task = convert_port_to_task(In0P->Head.msgh_request_port);
-
-	OutP->RetCode = task_set_special_port(task, In0P->which_port, In0P->special_port.name);
-	task_deallocate(task);
+	OutP->RetCode = task_set_special_port_checked(In0P->Head.msgh_request_port, In0P->which_port, In0P->special_port.name);
 #if	__MigKernelSpecificCode
 #endif /* __MigKernelSpecificCode */
 
 	OutP->NDR = NDR_record;
 
 
-	__AfterRcvRpc(3410, "task_set_special_port")
+	__AfterRcvRpc(3410, "task_set_special_port_checked")
 }
 
 #if ( __MigTypeCheck )
@@ -3032,13 +3028,13 @@ mig_internal novalue _Xthread_create_running_from_user
 
 #if ( __MigTypeCheck )
 #if __MIG_check__Request__task_subsystem__
-#if !defined(__MIG_check__Request__task_set_exception_ports_t__defined)
-#define __MIG_check__Request__task_set_exception_ports_t__defined
+#if !defined(__MIG_check__Request__task_set_exception_ports_checked_t__defined)
+#define __MIG_check__Request__task_set_exception_ports_checked_t__defined
 
-mig_internal kern_return_t __MIG_check__Request__task_set_exception_ports_t(__attribute__((__unused__)) __Request__task_set_exception_ports_t *In0P)
+mig_internal kern_return_t __MIG_check__Request__task_set_exception_ports_checked_t(__attribute__((__unused__)) __Request__task_set_exception_ports_checked_t *In0P)
 {
 
-	typedef __Request__task_set_exception_ports_t __Request;
+	typedef __Request__task_set_exception_ports_checked_t __Request;
 #if	__MigTypeCheck
 	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->msgh_body.msgh_descriptor_count != 1) ||
@@ -3054,29 +3050,29 @@ mig_internal kern_return_t __MIG_check__Request__task_set_exception_ports_t(__at
 
 	return MACH_MSG_SUCCESS;
 }
-#endif /* !defined(__MIG_check__Request__task_set_exception_ports_t__defined) */
+#endif /* !defined(__MIG_check__Request__task_set_exception_ports_checked_t__defined) */
 #endif /* __MIG_check__Request__task_subsystem__ */
 #endif /* ( __MigTypeCheck ) */
 
 
-/* Routine task_set_exception_ports */
+/* Routine task_set_exception_ports_checked */
 #ifdef	mig_external
 mig_external
 #else
 extern
 #endif	/* mig_external */
-kern_return_t task_set_exception_ports
+kern_return_t task_set_exception_ports_checked
 #if	defined(LINTLIBRARY)
     (task, exception_mask, new_port, behavior, new_flavor)
-	task_t task;
+	ipc_port_t task;
 	exception_mask_t exception_mask;
 	mach_port_t new_port;
 	exception_behavior_t behavior;
 	thread_state_flavor_t new_flavor;
-{ return task_set_exception_ports(task, exception_mask, new_port, behavior, new_flavor); }
+{ return task_set_exception_ports_checked(task, exception_mask, new_port, behavior, new_flavor); }
 #else
 (
-	task_t task,
+	ipc_port_t task,
 	exception_mask_t exception_mask,
 	mach_port_t new_port,
 	exception_behavior_t behavior,
@@ -3084,8 +3080,8 @@ kern_return_t task_set_exception_ports
 );
 #endif	/* defined(LINTLIBRARY) */
 
-/* Routine task_set_exception_ports */
-mig_internal novalue _Xtask_set_exception_ports
+/* Routine task_set_exception_ports_checked */
+mig_internal novalue _Xtask_set_exception_ports_checked
 	(mach_msg_header_t *InHeadP, mach_msg_header_t *OutHeadP)
 {
 
@@ -3107,8 +3103,8 @@ mig_internal novalue _Xtask_set_exception_ports
 #ifdef  __MigPackStructs
 #pragma pack()
 #endif
-	typedef __Request__task_set_exception_ports_t __Request;
-	typedef __Reply__task_set_exception_ports_t Reply;
+	typedef __Request__task_set_exception_ports_checked_t __Request;
+	typedef __Reply__task_set_exception_ports_checked_t Reply;
 
 	/*
 	 * typedef struct {
@@ -3120,36 +3116,31 @@ mig_internal novalue _Xtask_set_exception_ports
 
 	Request *In0P = (Request *) InHeadP;
 	Reply *OutP = (Reply *) OutHeadP;
-#ifdef	__MIG_check__Request__task_set_exception_ports_t__defined
+#ifdef	__MIG_check__Request__task_set_exception_ports_checked_t__defined
 	kern_return_t check_result;
-#endif	/* __MIG_check__Request__task_set_exception_ports_t__defined */
+#endif	/* __MIG_check__Request__task_set_exception_ports_checked_t__defined */
 
 #if	__MigKernelSpecificCode
 #else
 #endif /* __MigKernelSpecificCode */
-	task_t task;
-
-	__DeclareRcvRpc(3413, "task_set_exception_ports")
-	__BeforeRcvRpc(3413, "task_set_exception_ports")
+	__DeclareRcvRpc(3413, "task_set_exception_ports_checked")
+	__BeforeRcvRpc(3413, "task_set_exception_ports_checked")
 /* RetCArg=0x0 rtSimpleRequest=0 */
 
-#if	defined(__MIG_check__Request__task_set_exception_ports_t__defined)
-	check_result = __MIG_check__Request__task_set_exception_ports_t((__Request *)In0P);
+#if	defined(__MIG_check__Request__task_set_exception_ports_checked_t__defined)
+	check_result = __MIG_check__Request__task_set_exception_ports_checked_t((__Request *)In0P);
 	if (check_result != MACH_MSG_SUCCESS)
 		{ MIG_RETURN_ERROR(OutP, check_result); }
-#endif	/* defined(__MIG_check__Request__task_set_exception_ports_t__defined) */
+#endif	/* defined(__MIG_check__Request__task_set_exception_ports_checked_t__defined) */
 
-	task = convert_port_to_task(In0P->Head.msgh_request_port);
-
-	OutP->RetCode = task_set_exception_ports(task, In0P->exception_mask, In0P->new_port.name, In0P->behavior, In0P->new_flavor);
-	task_deallocate(task);
+	OutP->RetCode = task_set_exception_ports_checked(In0P->Head.msgh_request_port, In0P->exception_mask, In0P->new_port.name, In0P->behavior, In0P->new_flavor);
 #if	__MigKernelSpecificCode
 #endif /* __MigKernelSpecificCode */
 
 	OutP->NDR = NDR_record;
 
 
-	__AfterRcvRpc(3413, "task_set_exception_ports")
+	__AfterRcvRpc(3413, "task_set_exception_ports_checked")
 }
 
 #if ( __MigTypeCheck )
@@ -6272,13 +6263,13 @@ const struct task_subsystem {
           { (mig_impl_routine_t) 0,
             (mig_stub_routine_t) _Xtask_get_special_port, 3, 0, (routine_arg_descriptor_t)0, (mach_msg_size_t)sizeof(__Reply__task_get_special_port_t) },
           { (mig_impl_routine_t) 0,
-            (mig_stub_routine_t) _Xtask_set_special_port, 3, 0, (routine_arg_descriptor_t)0, (mach_msg_size_t)sizeof(__Reply__task_set_special_port_t) },
+            (mig_stub_routine_t) _Xtask_set_special_port_checked, 3, 0, (routine_arg_descriptor_t)0, (mach_msg_size_t)sizeof(__Reply__task_set_special_port_checked_t) },
           { (mig_impl_routine_t) 0,
             (mig_stub_routine_t) _Xthread_create_from_user, 2, 0, (routine_arg_descriptor_t)0, (mach_msg_size_t)sizeof(__Reply__thread_create_from_user_t) },
           { (mig_impl_routine_t) 0,
             (mig_stub_routine_t) _Xthread_create_running_from_user, 5, 0, (routine_arg_descriptor_t)0, (mach_msg_size_t)sizeof(__Reply__thread_create_running_from_user_t) },
           { (mig_impl_routine_t) 0,
-            (mig_stub_routine_t) _Xtask_set_exception_ports, 5, 0, (routine_arg_descriptor_t)0, (mach_msg_size_t)sizeof(__Reply__task_set_exception_ports_t) },
+            (mig_stub_routine_t) _Xtask_set_exception_ports_checked, 5, 0, (routine_arg_descriptor_t)0, (mach_msg_size_t)sizeof(__Reply__task_set_exception_ports_checked_t) },
           { (mig_impl_routine_t) 0,
             (mig_stub_routine_t) _Xtask_get_exception_ports, 7, 0, (routine_arg_descriptor_t)0, (mach_msg_size_t)sizeof(__Reply__task_get_exception_ports_t) },
           { (mig_impl_routine_t) 0,

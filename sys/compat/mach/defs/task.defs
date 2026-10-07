@@ -72,8 +72,14 @@ subsystem
 #include <sys/mach/mach_types.defs>
 #include <sys/mach_debug/mach_debug_types.defs>
 
-#ifdef _KERNEL
+#ifdef KERNEL_SERVER
 import <sys/mach/task.h>;
+#endif
+
+/* Server-only raw destination preserves the control capability across conversion.
+ * Its wire representation is still the task request port. */
+#if KERNEL_SERVER
+type task_setter_port_t = mach_port_t cservertype: ipc_port_t;
 #endif
 
 /*
@@ -166,8 +172,14 @@ routine task_get_special_port(
  *	Set one of the special ports associated with the
  *	target task.
  */
+#if KERNEL_SERVER
+routine task_set_special_port_checked(
+        task            : task_setter_port_t;
+#else
 routine task_set_special_port(
-		task		: task_t;
+        task            : task_t;
+#endif
+
 		which_port	: int;
 		special_port	: mach_port_t);
 
@@ -209,8 +221,14 @@ thread_create_running(
  * no thread-specific exception handlers or those handlers returned an
  * error.
  */
-routine	task_set_exception_ports(
-		task		: task_t;
+#if KERNEL_SERVER
+routine task_set_exception_ports_checked(
+        task            : task_setter_port_t;
+#else
+routine task_set_exception_ports(
+        task            : task_t;
+#endif
+
 		exception_mask	: exception_mask_t;
 		new_port	: mach_port_t;
 		behavior	: exception_behavior_t;
@@ -465,4 +483,3 @@ routine task_swap_mach_voucher(
 	inout	old_voucher	: ipc_voucher_t);
 
 /* vim: set ft=c : */
-

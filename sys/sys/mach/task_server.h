@@ -3,8 +3,6 @@
 
 /* Module task */
 
-#pragma GCC diagnostic ignored "-Wredundant-decls"
-
 #include <sys/cdefs.h>
 #include <sys/types.h>
 #ifdef _KERNEL
@@ -43,6 +41,7 @@ typedef function_table_entry   *function_table_t;
 
 #include <sys/mach/std_types.h>
 #include <sys/mach/mig.h>
+#include <sys/mach/thread_status.h>
 #include <sys/mach/ipc_sync.h>
 #include <sys/mach/ipc/ipc_voucher.h>
 #include <sys/mach/ipc_host.h>
@@ -51,6 +50,7 @@ typedef function_table_entry   *function_table_t;
 #include <sys/mach/mig.h>
 #include <sys/mach/mach_types.h>
 #include <sys/mach_debug/mach_debug_types.h>
+#include <sys/mach/task.h>
 
 #ifdef __BeforeMigServerHeader
 __BeforeMigServerHeader
@@ -263,22 +263,22 @@ kern_return_t task_get_special_port
 );
 #endif	/* defined(LINTLIBRARY) */
 
-/* Routine task_set_special_port */
+/* Routine task_set_special_port_checked */
 #ifdef	mig_external
 mig_external
 #else
 extern
 #endif	/* mig_external */
-kern_return_t task_set_special_port
+kern_return_t task_set_special_port_checked
 #if	defined(LINTLIBRARY)
     (task, which_port, special_port)
-	task_t task;
+	ipc_port_t task;
 	int which_port;
 	mach_port_t special_port;
-{ return task_set_special_port(task, which_port, special_port); }
+{ return task_set_special_port_checked(task, which_port, special_port); }
 #else
 (
-	task_t task,
+	ipc_port_t task,
 	int which_port,
 	mach_port_t special_port
 );
@@ -328,24 +328,24 @@ kern_return_t thread_create_running_from_user
 );
 #endif	/* defined(LINTLIBRARY) */
 
-/* Routine task_set_exception_ports */
+/* Routine task_set_exception_ports_checked */
 #ifdef	mig_external
 mig_external
 #else
 extern
 #endif	/* mig_external */
-kern_return_t task_set_exception_ports
+kern_return_t task_set_exception_ports_checked
 #if	defined(LINTLIBRARY)
     (task, exception_mask, new_port, behavior, new_flavor)
-	task_t task;
+	ipc_port_t task;
 	exception_mask_t exception_mask;
 	mach_port_t new_port;
 	exception_behavior_t behavior;
 	thread_state_flavor_t new_flavor;
-{ return task_set_exception_ports(task, exception_mask, new_port, behavior, new_flavor); }
+{ return task_set_exception_ports_checked(task, exception_mask, new_port, behavior, new_flavor); }
 #else
 (
-	task_t task,
+	ipc_port_t task,
 	exception_mask_t exception_mask,
 	mach_port_t new_port,
 	exception_behavior_t behavior,
@@ -1059,22 +1059,22 @@ kern_return_t task_get_special_port
 );
 #endif	/* defined(LINTLIBRARY) */
 
-/* Routine task_set_special_port */
+/* Routine task_set_special_port_checked */
 #ifdef	mig_external
 mig_external
 #else
 extern
 #endif	/* mig_external */
-kern_return_t task_set_special_port
+kern_return_t task_set_special_port_checked
 #if	defined(LINTLIBRARY)
     (task, which_port, special_port)
-	task_t task;
+	ipc_port_t task;
 	int which_port;
 	mach_port_t special_port;
-{ return task_set_special_port(task, which_port, special_port); }
+{ return task_set_special_port_checked(task, which_port, special_port); }
 #else
 (
-	task_t task,
+	ipc_port_t task,
 	int which_port,
 	mach_port_t special_port
 );
@@ -1124,24 +1124,24 @@ kern_return_t thread_create_running_from_user
 );
 #endif	/* defined(LINTLIBRARY) */
 
-/* Routine task_set_exception_ports */
+/* Routine task_set_exception_ports_checked */
 #ifdef	mig_external
 mig_external
 #else
 extern
 #endif	/* mig_external */
-kern_return_t task_set_exception_ports
+kern_return_t task_set_exception_ports_checked
 #if	defined(LINTLIBRARY)
     (task, exception_mask, new_port, behavior, new_flavor)
-	task_t task;
+	ipc_port_t task;
 	exception_mask_t exception_mask;
 	mach_port_t new_port;
 	exception_behavior_t behavior;
 	thread_state_flavor_t new_flavor;
-{ return task_set_exception_ports(task, exception_mask, new_port, behavior, new_flavor); }
+{ return task_set_exception_ports_checked(task, exception_mask, new_port, behavior, new_flavor); }
 #else
 (
-	task_t task,
+	ipc_port_t task,
 	exception_mask_t exception_mask,
 	mach_port_t new_port,
 	exception_behavior_t behavior,
@@ -1840,7 +1840,7 @@ extern const struct task_subsystem {
 		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		int which_port;
-	} __Request__task_set_special_port_t;
+	} __Request__task_set_special_port_checked_t;
 #ifdef  __MigPackStructs
 #pragma pack()
 #endif
@@ -1888,7 +1888,7 @@ extern const struct task_subsystem {
 		exception_mask_t exception_mask;
 		exception_behavior_t behavior;
 		thread_state_flavor_t new_flavor;
-	} __Request__task_set_exception_ports_t;
+	} __Request__task_set_exception_ports_checked_t;
 #ifdef  __MigPackStructs
 #pragma pack()
 #endif
@@ -2251,10 +2251,10 @@ union __RequestUnion__task_subsystem {
 	__Request__task_suspend_t Request_task_suspend;
 	__Request__task_resume_t Request_task_resume;
 	__Request__task_get_special_port_t Request_task_get_special_port;
-	__Request__task_set_special_port_t Request_task_set_special_port;
+	__Request__task_set_special_port_checked_t Request_task_set_special_port_checked;
 	__Request__thread_create_from_user_t Request_thread_create_from_user;
 	__Request__thread_create_running_from_user_t Request_thread_create_running_from_user;
-	__Request__task_set_exception_ports_t Request_task_set_exception_ports;
+	__Request__task_set_exception_ports_checked_t Request_task_set_exception_ports_checked;
 	__Request__task_get_exception_ports_t Request_task_get_exception_ports;
 	__Request__task_swap_exception_ports_t Request_task_swap_exception_ports;
 	__Request__semaphore_create_t Request_semaphore_create;
@@ -2425,7 +2425,7 @@ union __RequestUnion__task_subsystem {
 		mach_msg_header_t Head;
 		NDR_record_t NDR;
 		kern_return_t RetCode;
-	} __Reply__task_set_special_port_t;
+	} __Reply__task_set_special_port_checked_t;
 #ifdef  __MigPackStructs
 #pragma pack()
 #endif
@@ -2465,7 +2465,7 @@ union __RequestUnion__task_subsystem {
 		mach_msg_header_t Head;
 		NDR_record_t NDR;
 		kern_return_t RetCode;
-	} __Reply__task_set_exception_ports_t;
+	} __Reply__task_set_exception_ports_checked_t;
 #ifdef  __MigPackStructs
 #pragma pack()
 #endif
@@ -2788,10 +2788,10 @@ union __ReplyUnion__task_subsystem {
 	__Reply__task_suspend_t Reply_task_suspend;
 	__Reply__task_resume_t Reply_task_resume;
 	__Reply__task_get_special_port_t Reply_task_get_special_port;
-	__Reply__task_set_special_port_t Reply_task_set_special_port;
+	__Reply__task_set_special_port_checked_t Reply_task_set_special_port_checked;
 	__Reply__thread_create_from_user_t Reply_thread_create_from_user;
 	__Reply__thread_create_running_from_user_t Reply_thread_create_running_from_user;
-	__Reply__task_set_exception_ports_t Reply_task_set_exception_ports;
+	__Reply__task_set_exception_ports_checked_t Reply_task_set_exception_ports_checked;
 	__Reply__task_get_exception_ports_t Reply_task_get_exception_ports;
 	__Reply__task_swap_exception_ports_t Reply_task_swap_exception_ports;
 	__Reply__semaphore_create_t Reply_semaphore_create;
@@ -2829,10 +2829,10 @@ union __ReplyUnion__task_subsystem {
     { "task_suspend", 3407 },\
     { "task_resume", 3408 },\
     { "task_get_special_port", 3409 },\
-    { "task_set_special_port", 3410 },\
+    { "task_set_special_port_checked", 3410 },\
     { "thread_create_from_user", 3411 },\
     { "thread_create_running_from_user", 3412 },\
-    { "task_set_exception_ports", 3413 },\
+    { "task_set_exception_ports_checked", 3413 },\
     { "task_get_exception_ports", 3414 },\
     { "task_swap_exception_ports", 3415 },\
     { "semaphore_create", 3418 },\
