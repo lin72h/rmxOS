@@ -9,6 +9,7 @@ SCRIPTS+= mach_entry_lock_test
 SCRIPTS+= mach_entry_knote_test
 SCRIPTS+= mach_entry_dup_test
 SCRIPTS+= mach_readiness_test
+SCRIPTS+= mach_recovered_readiness_test
 ZIG?= zig
 ZIG_SYSROOT?= ${SYSROOT}
 ATF_C_ARCHIVE?= ${SYSROOT}/usr/lib/libprivateatf-c.a
@@ -28,6 +29,12 @@ mach_identity_test: ${.CURDIR}/mach_identity.zig ${.CURDIR}/file_message.zig
 	    -I${SRCTOP}/sys ${ATF_C_ARCHIVE} -femit-bin=${.TARGET}
 
 .include <bsd.test.mk>
+
+MACH_SO?= ${SYSROOT}/usr/lib/libmach.so.5
+mach_recovered_readiness_test: ${.CURDIR}/mach_recovered_readiness.zig
+	${ZIG} build-exe ${.ALLSRC} ${MACH_SO} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc -lpthread \
+	    --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf \
+	    -I${SRCTOP}/sys -femit-bin=${.TARGET}
 
 mach_entry_knote_test: ${.CURDIR}/revocation.zig
 mach_identity_test: ${.CURDIR}/reply_audit.zig

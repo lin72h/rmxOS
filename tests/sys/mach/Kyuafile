@@ -20,3 +20,4 @@ atf_test_program{name="mach_entry_lock_test"}
 atf_test_program{name="mach_entry_knote_test"}
 atf_test_program{name="mach_entry_dup_test"}
 atf_test_program{name="mach_readiness_test"}
+atf_test_program{name="mach_recovered_readiness_test"}

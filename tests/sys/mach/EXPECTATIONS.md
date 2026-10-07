@@ -234,3 +234,13 @@ poisons the allocated reply trailer before ipc_kobject_server initializes it.
 The reply is queued and received with AUDIT via mach_msg. Base FAIL: audit
 contains 0xa5. Fixed PASS: every word equals KERNEL_AUDIT_TOKEN (all zero).
 An observed routine marker prevents zeroed allocation hiding the omission.
+
+## op524 recovered receive readiness
+`mach_recovered_readiness_test:recovered_receive`: native close returns a live
+receive right in a port-destroyed notification to a backup endpoint. Its retired
+name is occupied by an ordinary descriptor before copyout. Messages queued
+before and after set join must produce readiness and be received through the set.
+The recovered right is then transferred by an ordinary MOVE_RECEIVE message and
+tested again. Base `0facf74b`: FAIL, no ready hint, set receives time out, and
+direct draining proves the messages remain. Fixed: PASS, all set receives succeed
+and direct drains find no residual messages. Every receive has a finite timeout.
