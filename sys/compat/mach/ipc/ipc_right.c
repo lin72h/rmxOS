@@ -1933,6 +1933,8 @@ ipc_right_copyout(
 
 		port->ip_receiver_name = name;
 		port->ip_receiver = space;
+		/* Revocation belongs to the retired receive entry, not its backup. */
+		port->ip_readiness_revoked = FALSE;
 
 		assert((bits & MACH_PORT_TYPE_RECEIVE) == 0);
 
