@@ -479,5 +479,5 @@ static int child_crash_sysctl(SYSCTL_HANDLER_ARGS) {
     return (error);
 }
 SYSCTL_PROC(_debug, OID_AUTO, rmx_child_crash,
-    CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0,
+    CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_MPSAFE, NULL, 0,
     child_crash_sysctl, "S,child_action", "Stored task exception action projection");
