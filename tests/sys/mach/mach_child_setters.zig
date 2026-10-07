@@ -239,7 +239,12 @@ fn refused(t: [*c]const c.atf_tc_t) callconv(.c) void {
     fact(c.KERN_NOT_SUPPORTED, c.task_get_special_port(kid.task, c.TASK_DEBUG_CONTROL_PORT, &got));
     var kind: u32 = 0;
     fact(c.KERN_NOT_SUPPORTED, c.mach_port_type(kid.task, port, &kind));
+    var allocated: u32 = 0;
+    fact(c.KERN_NOT_SUPPORTED, c.mach_port_allocate(kid.task, c.MACH_PORT_RIGHT_RECEIVE, &allocated));
+    fact(0, @intFromBool(allocated != 0));
+    if (allocated != 0) _ = c.mach_port_destroy(c.mach_task_self(), allocated);
     var address: c.mach_vm_address_t = 0;
+
     fact(c.KERN_NOT_SUPPORTED, c.mach_vm_allocate(kid.task, &address, 4096, 1));
     // Raw host-family request on a task destination must fail before any
     // converter; a complex descriptor also checks refusal right ownership.

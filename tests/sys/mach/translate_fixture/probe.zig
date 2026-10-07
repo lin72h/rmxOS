@@ -409,9 +409,9 @@ export fn rmx_mig_control(command: u32, out: *u32) c_int {
             if (mig_slot != null) return 16;
             for (0..1024) |i| {
                 const slot: u32 = @intCast(i);
-                if (rmx_mig_slot_num(slot) == 0) {
+                if (rmx_mig_slot_num(slot) == 3405) {
                     mig_slot = slot;
-                    const id = 461 * 1024 + slot;
+                    const id: u32 = 3405;
                     rmx_mig_slot_set(slot, id);
                     out.* = id;
                     @atomicStore(u32, &mig_poisoned, 0, .release);

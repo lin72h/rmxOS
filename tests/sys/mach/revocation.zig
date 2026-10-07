@@ -47,7 +47,19 @@ pub fn body(t: anytype) void {
     }
     _ = control(1, receive);
     _ = control(2, port);
-    const before = control(4, 0);
+    var before = control(4, 0);
+    // A set has one entry, one membership and one fixture reference.
+    // Membership notification adds a temporary worker reference; let it drain
+    // before comparing storage references, without relaxing the final equality.
+    if (set) {
+        for (0..1000) |_| {
+            if (before[3] <= 3) break;
+            _ = c.usleep(1000);
+            before = control(4, 0);
+        }
+        if (before[3] != 3) c.atf_tc_fail("set notification reference did not drain before enrollment");
+    }
+
     @atomicStore(u32, &done, 0, .release);
     var thread: c.pthread_t = undefined;
     if (c.pthread_create(&thread, null, &worker, null) != 0) c.atf_tc_fail("receive thread failed");
@@ -71,7 +83,15 @@ pub fn body(t: anytype) void {
     }
     _ = control(6, 0);
     if (c.pthread_join(thread, null) != 0) c.atf_tc_fail("receive join failed");
-    const held = control(4, 0);
+    var held = control(4, 0);
+    if (set) {
+        for (0..1000) |_| {
+            if (held[3] <= before[3]) break;
+            _ = c.usleep(1000);
+            held = control(4, 0);
+        }
+    }
+
     _ = control(7, 0);
     if (set) _ = c.syscall(c.SYS__kernelrpc_mach_port_destroy_trap, @as(c_uint, 0), port);
     const after = control(4, 0);
