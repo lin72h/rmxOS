@@ -161,7 +161,6 @@ ipc_kobject_notify(
 typedef struct {
         mach_msg_id_t num;
         mig_routine_t routine;
-        rpc_subsystem_t family;
 	int size;
 #if	MACH_COUNTERS
 	mach_counter_t callcount;
@@ -176,6 +175,8 @@ typedef struct {
 #endif /* max */
 
 mig_hash_t mig_buckets[MAX_MIG_ENTRIES];
+/* Keep the existing bucket ABI used by the test fixture. */
+static rpc_subsystem_t mig_families[MAX_MIG_ENTRIES];
 int mig_table_max_displ;
 mach_msg_size_t mig_reply_size;
 
@@ -258,7 +259,7 @@ mig_init(void)
 	
 	mig_buckets[pos].num = nentry;
 	mig_buckets[pos].routine = mig_e[i]->routine[j].stub_routine;
-	mig_buckets[pos].family = mig_e[i];
+	mig_families[pos] = mig_e[i];
 	if (mig_e[i]->routine[j].max_reply_msg)
 		mig_buckets[pos].size = mig_e[i]->routine[j].max_reply_msg;
 	else
@@ -289,6 +290,7 @@ ipc_kobject_task_gate(mig_hash_t *routine, ipc_port_t destination,
     task_t task;
     kern_return_t result;
     boolean_t task_family;
+    rpc_subsystem_t family = mig_families[routine - mig_buckets];
 
     ip_lock(destination);
     if (!ip_active(destination)) {
@@ -297,10 +299,10 @@ ipc_kobject_task_gate(mig_hash_t *routine, ipc_port_t destination,
     }
     type = ip_kotype(destination);
     ip_unlock(destination);
-    task_family = routine->family == (rpc_subsystem_t)&task_subsystem ||
-        routine->family == (rpc_subsystem_t)&mach_port_subsystem ||
-        routine->family == (rpc_subsystem_t)&mach_vm_subsystem ||
-        routine->family == (rpc_subsystem_t)&vm_map_subsystem;
+    task_family = family == (rpc_subsystem_t)&task_subsystem ||
+        family == (rpc_subsystem_t)&mach_port_subsystem ||
+        family == (rpc_subsystem_t)&mach_vm_subsystem ||
+        family == (rpc_subsystem_t)&vm_map_subsystem;
     if (task_family) {
         if (type != IKOT_TASK)
             return (MIG_BAD_ID);
@@ -309,18 +311,18 @@ ipc_kobject_task_gate(mig_hash_t *routine, ipc_port_t destination,
             return (KERN_INVALID_TASK);
         result = KERN_SUCCESS;
         if (task != current_task() &&
-            !(routine->family == (rpc_subsystem_t)&task_subsystem &&
+            !(family == (rpc_subsystem_t)&task_subsystem &&
             (id == 3410 || id == 3413)))
             result = KERN_NOT_SUPPORTED;
         task_deallocate(task);
         return (result);
     }
-    if (routine->family == (rpc_subsystem_t)&mach_host_subsystem)
+    if (family == (rpc_subsystem_t)&mach_host_subsystem)
         return (type == IKOT_HOST || type == IKOT_HOST_PRIV ?
             KERN_SUCCESS : MIG_BAD_ID);
-    if (routine->family == (rpc_subsystem_t)&host_priv_subsystem)
+    if (family == (rpc_subsystem_t)&host_priv_subsystem)
         return (type == IKOT_HOST_PRIV ? KERN_SUCCESS : MIG_BAD_ID);
-    if (routine->family == (rpc_subsystem_t)&clock_subsystem)
+    if (family == (rpc_subsystem_t)&clock_subsystem)
         return (type == IKOT_CLOCK ? KERN_SUCCESS : MIG_BAD_ID);
     return (MIG_BAD_ID);
 }

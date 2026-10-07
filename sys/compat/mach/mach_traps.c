@@ -69,6 +69,10 @@ __FBSDID("$FreeBSD$");
 #include <sys/mach/mach_types.h>
 
 #include <sys/mach/ipc/ipc_types.h>
+#include <sys/mach/ipc/ipc_object.h>
+#include <sys/mach/ipc/ipc_port.h>
+#include <sys/mach/task.h>
+#include <sys/mach/ipc_tt.h>
 #include <sys/mach/ipc/ipc_kmsg.h>
 #include <sys/mach/ipc/mach_msg.h>
 #include <sys/mach/thread.h>
@@ -224,9 +228,38 @@ sys_host_self_trap(struct thread *td, struct host_self_trap_args *uap)
 	return (0);
 }
 
+/* Raw legacy callers use target zero for their own task. A named target must
+ * identify a live task; direct VM/port traps never substitute the caller. */
+static kern_return_t
+mach_trap_task_target(mach_port_name_t name)
+{
+    ipc_object_t object;
+    task_t task;
+    kern_return_t result;
+
+    if (name == 0)
+        return (KERN_SUCCESS);
+    result = ipc_object_translate(current_space(), name, MACH_PORT_RIGHT_SEND,
+        &object);
+    if (result != KERN_SUCCESS)
+        return (KERN_INVALID_TASK);
+    (void)ref_task_port_locked((ipc_port_t)object, &task); /* unlocks port */
+    if (task == TASK_NULL)
+        return (KERN_INVALID_TASK);
+    result = task == current_task() ? KERN_SUCCESS : KERN_NOT_SUPPORTED;
+    task_deallocate(task);
+    return (result);
+}
+
 int
 sys__kernelrpc_mach_port_allocate_trap(struct thread *td __unused, struct _kernelrpc_mach_port_allocate_trap_args *uap)
 {
+	kern_return_t target_result = mach_trap_task_target(uap->target);
+	if (target_result != KERN_SUCCESS) {
+		td->td_retval[0] = target_result;
+		return (0);
+	}
+
 	ipc_space_t space = current_space();
 	mach_port_name_t name;
 	int error;
@@ -240,6 +273,12 @@ sys__kernelrpc_mach_port_allocate_trap(struct thread *td __unused, struct _kerne
 int
 sys__kernelrpc_mach_port_deallocate_trap(struct thread *td, struct _kernelrpc_mach_port_deallocate_trap_args *uap)
 {
+	kern_return_t target_result = mach_trap_task_target(uap->target);
+	if (target_result != KERN_SUCCESS) {
+		td->td_retval[0] = target_result;
+		return (0);
+	}
+
 	ipc_space_t space = current_space();
 
 	td->td_retval[0] = mach_port_deallocate(space, uap->name);
@@ -249,6 +288,12 @@ sys__kernelrpc_mach_port_deallocate_trap(struct thread *td, struct _kernelrpc_ma
 int
 sys__kernelrpc_mach_port_insert_right_trap(struct thread *td, struct _kernelrpc_mach_port_insert_right_trap_args *uap)
 {
+	kern_return_t target_result = mach_trap_task_target(uap->target);
+	if (target_result != KERN_SUCCESS) {
+		td->td_retval[0] = target_result;
+		return (0);
+	}
+
 	ipc_space_t space = current_space(); /* current task only */
 	ipc_port_t port;
 	mach_msg_type_name_t disp;
@@ -267,6 +312,12 @@ done:
 int
 sys__kernelrpc_mach_port_mod_refs_trap(struct thread *td, struct _kernelrpc_mach_port_mod_refs_trap_args *uap)
 {
+	kern_return_t target_result = mach_trap_task_target(uap->target);
+	if (target_result != KERN_SUCCESS) {
+		td->td_retval[0] = target_result;
+		return (0);
+	}
+
 	ipc_space_t space = current_space();
 	/*
 	  mach_port_name_t target = uap->target;
@@ -281,6 +332,12 @@ sys__kernelrpc_mach_port_mod_refs_trap(struct thread *td, struct _kernelrpc_mach
 int
 sys__kernelrpc_mach_port_move_member_trap(struct thread *td, struct _kernelrpc_mach_port_move_member_trap_args *uap)
 {
+	kern_return_t target_result = mach_trap_task_target(uap->target);
+	if (target_result != KERN_SUCCESS) {
+		td->td_retval[0] = target_result;
+		return (0);
+	}
+
 	ipc_space_t space = current_space();
 
 	td->td_retval[0] = mach_port_move_member(space, uap->member, uap->after);
@@ -290,6 +347,12 @@ sys__kernelrpc_mach_port_move_member_trap(struct thread *td, struct _kernelrpc_m
 int
 sys__kernelrpc_mach_port_insert_member_trap(struct thread *td, struct _kernelrpc_mach_port_insert_member_trap_args *uap)
 {
+	kern_return_t target_result = mach_trap_task_target(uap->target);
+	if (target_result != KERN_SUCCESS) {
+		td->td_retval[0] = target_result;
+		return (0);
+	}
+
 	ipc_space_t space = current_space();
 
 	td->td_retval[0] = mach_port_move_member(space, uap->name, uap->pset);
@@ -299,6 +362,12 @@ sys__kernelrpc_mach_port_insert_member_trap(struct thread *td, struct _kernelrpc
 int
 sys__kernelrpc_mach_port_extract_member_trap(struct thread *td, struct _kernelrpc_mach_port_extract_member_trap_args *uap)
 {
+	kern_return_t target_result = mach_trap_task_target(uap->target);
+	if (target_result != KERN_SUCCESS) {
+		td->td_retval[0] = target_result;
+		return (0);
+	}
+
 	ipc_space_t space = current_space();
 
 	td->td_retval[0] = mach_port_move_member(space, uap->name, MACH_PORT_NAME_NULL);
@@ -316,6 +385,12 @@ sys__kernelrpc_mach_port_destruct_trap(struct thread *td, struct _kernelrpc_mach
 int
 sys__kernelrpc_mach_port_destroy_trap(struct thread *td, struct _kernelrpc_mach_port_destroy_trap_args *uap)
 {
+	kern_return_t target_result = mach_trap_task_target(uap->target);
+	if (target_result != KERN_SUCCESS) {
+		td->td_retval[0] = target_result;
+		return (0);
+	}
+
 	ipc_space_t space = current_space();
 
 	return (mach_port_destroy(space, uap->name));
@@ -333,6 +408,12 @@ sys__kernelrpc_mach_port_unguard_trap(struct thread *td, struct _kernelrpc_mach_
 int
 sys__kernelrpc_mach_vm_map_trap(struct thread *td, struct _kernelrpc_mach_vm_map_trap_args *uap)
 {
+	kern_return_t target_result = mach_trap_task_target(uap->target);
+	if (target_result != KERN_SUCCESS) {
+		td->td_retval[0] = target_result;
+		return (0);
+	}
+
 	int error;
 	vm_offset_t addr;
 
@@ -348,6 +429,12 @@ sys__kernelrpc_mach_vm_map_trap(struct thread *td, struct _kernelrpc_mach_vm_map
 int
 sys__kernelrpc_mach_vm_allocate_trap(struct thread *td, struct _kernelrpc_mach_vm_allocate_trap_args *uap)
 {
+	kern_return_t target_result = mach_trap_task_target(uap->target);
+	if (target_result != KERN_SUCCESS) {
+		td->td_retval[0] = target_result;
+		return (0);
+	}
+
 	/* mach_port_name_t target = uap->target; current task only */
 	mach_vm_offset_t *address = uap->address;
 	mach_vm_offset_t uaddr;
@@ -369,6 +456,12 @@ sys__kernelrpc_mach_vm_allocate_trap(struct thread *td, struct _kernelrpc_mach_v
 int
 sys__kernelrpc_mach_vm_deallocate_trap(struct thread *td, struct _kernelrpc_mach_vm_deallocate_trap_args *uap)
 {
+	kern_return_t target_result = mach_trap_task_target(uap->target);
+	if (target_result != KERN_SUCCESS) {
+		td->td_retval[0] = target_result;
+		return (0);
+	}
+
 	/* mach_port_name_t target = uap->target; current task only */
 
 	return (mach_vm_deallocate(&td->td_proc->p_vmspace->vm_map, uap->address, uap->size));
@@ -377,6 +470,12 @@ sys__kernelrpc_mach_vm_deallocate_trap(struct thread *td, struct _kernelrpc_mach
 int
 sys__kernelrpc_mach_vm_protect_trap(struct thread *td, struct _kernelrpc_mach_vm_protect_trap_args *uap)
 {
+	kern_return_t target_result = mach_trap_task_target(uap->target);
+	if (target_result != KERN_SUCCESS) {
+		td->td_retval[0] = target_result;
+		return (0);
+	}
+
 	/* mach_port_name_t target = uap->target */
 	/* int set_maximum = uap->set_maximum */
 
