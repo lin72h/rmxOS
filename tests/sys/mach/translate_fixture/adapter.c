@@ -32,6 +32,16 @@ extern kern_return_t mach_port_get_refs(ipc_space_t, mach_port_name_t,
     mach_port_right_t, mach_port_urefs_t *);
 
 struct observation { int result; int owned; };
+struct clock_pointer { int result; uint32_t sec; int nsec; uint64_t guard; };
+extern void rmx_clock_pointer_observe(struct clock_pointer *);
+static int clock_pointer_sysctl(SYSCTL_HANDLER_ARGS) {
+    struct clock_pointer observed;
+    rmx_clock_pointer_observe(&observed);
+    return (SYSCTL_OUT(req, &observed, sizeof(observed)));
+}
+SYSCTL_PROC(_debug, OID_AUTO, rmx_clock_pointer,
+    CTLTYPE_OPAQUE | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, 0,
+    clock_pointer_sysctl, "S,clock_pointer", "Clock MIG kernel reply field");
 extern int rmx_lifetime_observe(uint32_t, struct observation *);
 extern void rmx_lifetime_clear(void);
 void *rmx_fixture_task(void);

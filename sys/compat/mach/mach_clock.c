@@ -114,7 +114,10 @@ clock_get_time(clock_serv_t clock_serv, mach_timespec_t *cur_time)
 
 	nanotime(&ts);
 
-	return (copyout(&ts, cur_time, sizeof(ts)));
+	/* MIG supplies a kernel reply field, not a user address. */
+	cur_time->tv_sec = ts.tv_sec;
+	cur_time->tv_nsec = ts.tv_nsec;
+	return (KERN_SUCCESS);
 }
 
 int

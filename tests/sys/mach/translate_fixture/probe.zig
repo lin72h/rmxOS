@@ -8,6 +8,16 @@ extern fn rmx_fixture_owned(*anyopaque) c_int;
 extern fn rmx_fixture_unlock(*anyopaque) void;
 extern fn ipc_object_translate(?*anyopaque, u32, u32, *?*anyopaque) c_int;
 const Observation = extern struct { result: c_int, owned: c_int };
+const MachTimespec = extern struct { sec: u32, nsec: c_int };
+const ClockPointer = extern struct { result: c_int, sec: u32, nsec: c_int, guard: u64 };
+extern fn clock_get_time(?*anyopaque, *MachTimespec) c_int;
+export fn rmx_clock_pointer_observe(out: *ClockPointer) void {
+    var reply: extern struct { time: MachTimespec, guard: u64 } = .{ .time = .{ .sec = 0, .nsec = -1 }, .guard = 0x569569569569569 };
+    out.result = clock_get_time(null, &reply.time);
+    out.sec = reply.time.sec;
+    out.nsec = reply.time.nsec;
+    out.guard = reply.guard;
+}
 extern fn rmx_fixture_task() *anyopaque;
 extern fn rmx_fixture_control_port(c_int) *anyopaque;
 extern fn rmx_fixture_port_active(*anyopaque) c_int;

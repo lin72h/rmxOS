@@ -447,8 +447,8 @@ mach_vm_machine_attribute(vm_map_t target_task, mach_vm_address_t addr, mach_vm_
 	vm_machine_attribute_val_t value;
 
 	
-	if ((error = copyin(valuep, &value, sizeof(value))))
-		return (KERN_PROTECTION_FAILURE);
+	/* Both VM MIG families supply their kernel request field here. */
+	value = *valuep;
 
 	switch (attribute) {
 	case MATTR_CACHE:
@@ -484,7 +484,8 @@ mach_vm_machine_attribute(vm_map_t target_task, mach_vm_address_t addr, mach_vm_
 	if (error)
 		return (KERN_FAILURE);
 
-	return (copyout(&value, valuep, sizeof(value)));
+	*valuep = value;
+	return (KERN_SUCCESS);
 }
 
 /*

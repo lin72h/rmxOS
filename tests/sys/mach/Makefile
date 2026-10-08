@@ -31,6 +31,11 @@ mach_identity_test: ${.CURDIR}/mach_identity.zig ${.CURDIR}/file_message.zig
 .include <bsd.test.mk>
 
 MACH_SO?= ${SYSROOT}/usr/lib/libmach.so.5
+SCRIPTS+= mach_mig_pointers_test
+mach_mig_pointers_test: ${.CURDIR}/mach_mig_pointers.zig
+	${ZIG} build-exe ${.ALLSRC} ${MACH_SO} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc -lpthread \
+	    --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf \
+	    -I${SRCTOP}/sys -femit-bin=${.TARGET}
 mach_recovered_readiness_test: ${.CURDIR}/mach_recovered_readiness.zig
 	${ZIG} build-exe ${.ALLSRC} ${MACH_SO} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc -lpthread \
 	    --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf \
