@@ -94,6 +94,30 @@ struct mach_msg_overwrite_tail {
 	uint32_t scatter_list_size;
 };
 
+/* Mach results are values, not native syscall errno returns. */
+static int
+mach_trap_return(struct thread *td, kern_return_t result)
+{
+	td->td_retval[0] = result;
+	return (0);
+}
+
+static kern_return_t
+mach_trap_vm_error(int error)
+{
+	switch (error) {
+	case 0: return (KERN_SUCCESS);
+	case EFAULT: return (KERN_INVALID_ADDRESS);
+	case EINVAL: return (KERN_INVALID_ARGUMENT);
+	case ENOMEM: return (KERN_NO_SPACE);
+	case EACCES: case EPERM: return (KERN_PROTECTION_FAILURE);
+	default: return (KERN_FAILURE);
+	}
+}
+
+#define MACH_TRAP_UNSUPPORTED \
+	{ return (mach_trap_return(td, KERN_NOT_SUPPORTED)); }
+
 int
 sys_clock_sleep_trap(struct thread *td __unused, struct clock_sleep_trap_args *uap)
 {
@@ -106,7 +130,8 @@ int
 sys_mach_timebase_info(struct thread *td __unused, struct mach_timebase_info_args *uap)
 {
 
-	return (mach_timebase_info(uap->info));
+	return (mach_trap_return(td, mach_timebase_info(uap->info) == 0 ?
+	    KERN_SUCCESS : KERN_INVALID_ADDRESS));
 }
 
 int
@@ -144,32 +169,33 @@ sys_mach_msg_trap(struct thread *td __unused, struct mach_msg_trap_args *uap)
 	
 int
 sys_semaphore_wait_trap(struct thread *td, struct semaphore_wait_trap_args *uap)
-	UNSUPPORTED;
+	MACH_TRAP_UNSUPPORTED;
 
 int
 sys_semaphore_signal_trap(struct thread *td, struct semaphore_signal_trap_args *uap)
-	UNSUPPORTED;
+	MACH_TRAP_UNSUPPORTED;
 int
 sys_semaphore_wait_signal_trap(struct thread *td, struct semaphore_wait_signal_trap_args *uap)
-	UNSUPPORTED;
+	MACH_TRAP_UNSUPPORTED;
 
 int
 sys_semaphore_signal_thread_trap(struct thread *td, struct semaphore_signal_thread_trap_args *uap)
-	UNSUPPORTED;
+	MACH_TRAP_UNSUPPORTED;
 
 int
 sys_semaphore_signal_all_trap(struct thread *td, struct semaphore_signal_all_trap_args *uap)
-	UNSUPPORTED;
+	MACH_TRAP_UNSUPPORTED;
 
 int
 sys_task_for_pid(struct thread *td, struct task_for_pid_args *uap)
-	UNSUPPORTED;
+	MACH_TRAP_UNSUPPORTED;
 
 int
 sys_thread_switch(struct thread *td __unused, struct thread_switch_args *uap)
 {
 
-	return (mach_thread_switch(uap->thread_name, uap->option, uap->option_time));
+	return (mach_trap_return(td,
+	    mach_thread_switch(uap->thread_name, uap->option, uap->option_time)));
 }	
 
 static int
@@ -264,10 +290,13 @@ sys__kernelrpc_mach_port_allocate_trap(struct thread *td __unused, struct _kerne
 	mach_port_name_t name;
 	int error;
 
-	if ((error = mach_port_allocate(space, uap->right, &name)) != 0)
-		return (error);
-	
-	return (copyout(&name, uap->name, sizeof(*uap->name)));
+	error = mach_port_allocate(space, uap->right, &name);
+	if (error == KERN_SUCCESS &&
+	    copyout(&name, uap->name, sizeof(*uap->name)) != 0) {
+		(void)mach_port_destroy(space, name);
+		error = KERN_INVALID_ADDRESS;
+	}
+	return (mach_trap_return(td, error));
 }
 
 int
@@ -376,11 +405,11 @@ sys__kernelrpc_mach_port_extract_member_trap(struct thread *td, struct _kernelrp
 
 int
 sys__kernelrpc_mach_port_construct_trap(struct thread *td, struct _kernelrpc_mach_port_construct_trap_args *uap)
-	UNSUPPORTED;
+	MACH_TRAP_UNSUPPORTED;
 
 int
 sys__kernelrpc_mach_port_destruct_trap(struct thread *td, struct _kernelrpc_mach_port_destruct_trap_args *uap)
-	UNSUPPORTED;
+	MACH_TRAP_UNSUPPORTED;
 
 int
 sys__kernelrpc_mach_port_destroy_trap(struct thread *td, struct _kernelrpc_mach_port_destroy_trap_args *uap)
@@ -393,17 +422,17 @@ sys__kernelrpc_mach_port_destroy_trap(struct thread *td, struct _kernelrpc_mach_
 
 	ipc_space_t space = current_space();
 
-	return (mach_port_destroy(space, uap->name));
+	return (mach_trap_return(td, mach_port_destroy(space, uap->name)));
 }
 
 int
 sys__kernelrpc_mach_port_guard_trap(struct thread *td, struct _kernelrpc_mach_port_guard_trap_args *uap)
-	UNSUPPORTED;
+	MACH_TRAP_UNSUPPORTED;
 
 
 int
 sys__kernelrpc_mach_port_unguard_trap(struct thread *td, struct _kernelrpc_mach_port_unguard_trap_args *uap)
-	UNSUPPORTED;
+	MACH_TRAP_UNSUPPORTED;
 
 int
 sys__kernelrpc_mach_vm_map_trap(struct thread *td, struct _kernelrpc_mach_vm_map_trap_args *uap)
@@ -418,12 +447,16 @@ sys__kernelrpc_mach_vm_map_trap(struct thread *td, struct _kernelrpc_mach_vm_map
 	vm_offset_t addr;
 
 	if ((error = copyin(uap->address, &addr, sizeof(addr))) != 0)
-		return (error);
+		return (mach_trap_return(td, KERN_INVALID_ADDRESS));
 	error = mach_vm_map(&curthread->td_proc->p_vmspace->vm_map, &addr, uap->size, uap->mask, uap->flags, NULL, 0, 0, uap->cur_protection,
 						VM_PROT_ALL, VM_INHERIT_NONE);
 	if (error)
-		return (error);
-	return (copyout(&addr, uap->address, sizeof(addr)));
+		return (mach_trap_return(td, mach_trap_vm_error(error)));
+	if (copyout(&addr, uap->address, sizeof(addr)) != 0) {
+		(void)mach_vm_deallocate(current_map(), addr, uap->size);
+		return (mach_trap_return(td, KERN_INVALID_ADDRESS));
+	}
+	return (mach_trap_return(td, KERN_SUCCESS));
 }
 
 int
@@ -443,14 +476,16 @@ sys__kernelrpc_mach_vm_allocate_trap(struct thread *td, struct _kernelrpc_mach_v
 	int error;
 
 	if ((error = copyin(address, &uaddr, sizeof(mach_vm_offset_t))))
-		return (error);
+		return (mach_trap_return(td, KERN_INVALID_ADDRESS));
 
 	if ((error = mach_vm_allocate(&td->td_proc->p_vmspace->vm_map,
 								  &uaddr, size, flags)))
-		return (error);
-	if ((error = copyout(&uaddr, address, sizeof(mach_vm_offset_t))))
-		return (error);
-	return (0);
+		return (mach_trap_return(td, mach_trap_vm_error(error)));
+	if ((error = copyout(&uaddr, address, sizeof(mach_vm_offset_t)))) {
+		(void)mach_vm_deallocate(current_map(), uaddr, size);
+		return (mach_trap_return(td, KERN_INVALID_ADDRESS));
+	}
+	return (mach_trap_return(td, KERN_SUCCESS));
 }
 
 int
@@ -464,7 +499,8 @@ sys__kernelrpc_mach_vm_deallocate_trap(struct thread *td, struct _kernelrpc_mach
 
 	/* mach_port_name_t target = uap->target; current task only */
 
-	return (mach_vm_deallocate(&td->td_proc->p_vmspace->vm_map, uap->address, uap->size));
+	return (mach_trap_return(td, mach_trap_vm_error(mach_vm_deallocate(
+	    &td->td_proc->p_vmspace->vm_map, uap->address, uap->size))));
 }
 
 int
@@ -479,5 +515,8 @@ sys__kernelrpc_mach_vm_protect_trap(struct thread *td, struct _kernelrpc_mach_vm
 	/* mach_port_name_t target = uap->target */
 	/* int set_maximum = uap->set_maximum */
 
-	return (mach_vm_protect(&td->td_proc->p_vmspace->vm_map, uap->address, uap->size, FALSE, uap->new_protection));
+	int error = mach_vm_protect(&td->td_proc->p_vmspace->vm_map,
+	    uap->address, uap->size, FALSE, uap->new_protection);
+	return (mach_trap_return(td, error == ENOMEM ? KERN_INVALID_ADDRESS :
+	    mach_trap_vm_error(error)));
 }
