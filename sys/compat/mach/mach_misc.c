@@ -167,8 +167,8 @@ int
 sys_mk_timer_create(struct thread *td, struct mk_timer_create_args *uap)
 {
 	MDPRINTF(("sys_mach_timer_create();\n"));
-	td->td_retval[0] = KERN_NOT_SUPPORTED;
-	return (0);
+	/* This trap returns a port name, not kern_return_t. */
+	return (ENOSYS);
 }
 
 
@@ -222,6 +222,5 @@ sys_macx_backing_store_recovery(struct thread *td, struct macx_backing_store_rec
 	td->td_retval[0] = KERN_NOT_SUPPORTED;
 	return (0);
 }
-
 
 
