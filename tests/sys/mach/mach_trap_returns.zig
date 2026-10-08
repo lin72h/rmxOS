@@ -49,7 +49,8 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
         if (!check("vm_map", c.SYS__kernelrpc_mach_vm_map_trap, .{ 0, 4, 4096, 0, 1, 3 }, 1)) failed += 1;
         if (!check("vm_allocate", c.SYS__kernelrpc_mach_vm_allocate_trap, .{ 0, 4, 4096, 1, 0, 0 }, 1)) failed += 1;
         if (!check("vm_deallocate", c.SYS__kernelrpc_mach_vm_deallocate_trap, .{ 0, 4, 4096, 0, 0, 0 }, 4)) failed += 1;
-        if (!check("vm_protect", c.SYS__kernelrpc_mach_vm_protect_trap, .{ 0, 4, 4096, 0, 3, 0 }, 4)) failed += 1;
+        // FreeBSD mprotect accepts holes; an invalid protection bit forces EINVAL.
+        if (!check("vm_protect", c.SYS__kernelrpc_mach_vm_protect_trap, .{ 0, 4, 4096, 0, 0x40000000, 0 }, 4)) failed += 1;
         if (!check("timebase_copyout", c.SYS_mach_timebase_info, .{ 4, 0, 0, 0, 0, 0 }, 1)) failed += 1;
         // thread_switch currently has no error path; observe its success value.
         if (!check("thread_switch", c.SYS_thread_switch, .{ 0, 0, 0, 0, 0, 0 }, 0)) failed += 1;
