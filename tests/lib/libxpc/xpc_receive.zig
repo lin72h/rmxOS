@@ -253,7 +253,27 @@ fn report(name: [*:0]const u8, want: []const u64, got: []const u64) void {
     const local_gone = @intFromBool(c.mach_port_type(c.mach_task_self(), local, &kind) == c.KERN_INVALID_NAME);
     var count: u32 = 0;
     const right: u32 = if (mode == 4 or mode == 6 or mode == 7 or mode == 8) c.MACH_PORT_RIGHT_DEAD_NAME else c.MACH_PORT_RIGHT_SEND;
-    const remaining = if (c.mach_port_get_refs(c.mach_task_self(), remote, right, &count) == 0) count else 0;
+    var remaining = if (c.mach_port_get_refs(c.mach_task_self(), remote, right, &count) == 0) count else 0;
+    if (right == c.MACH_PORT_RIGHT_DEAD_NAME) {
+        // Connection queues/finalization do not fence the dispatch manager's
+        // dead-name notification. It carries one uref until its MIG handler
+        // returns from mach_port_deallocate. Keep our own uref (and thus this
+        // name) alive until that independent cleanup settles. A persistent
+        // extra right, a lost name or any count other than 1 still fails.
+        const first = remaining;
+        var begin: c.timespec = undefined;
+        var now: c.timespec = undefined;
+        need(c.clock_gettime(c.CLOCK_MONOTONIC, &begin) == 0, "reference wait clock");
+        var elapsed_ms: u64 = 0;
+        while (remaining == 2 and elapsed_ms < 3000) {
+            _ = c.usleep(1000);
+            remaining = if (c.mach_port_get_refs(c.mach_task_self(), remote, right, &count) == 0) count else 0;
+            need(c.clock_gettime(c.CLOCK_MONOTONIC, &now) == 0, "reference wait clock");
+            const ns = (@as(i128, now.tv_sec) - begin.tv_sec) * 1_000_000_000 + now.tv_nsec - begin.tv_nsec;
+            elapsed_ms = @intCast(@divTrunc(ns, 1_000_000));
+        }
+        _ = c.printf("xpc refs case=%s first=%u remaining=%u limit_ms=3000 elapsed_ms=%llu\n", name, first, remaining, elapsed_ms);
+    }
     fact(name, want.len, 1, local_gone);
     fact(name, want.len + 1, 1, remaining);
     differs = differs or local_gone != 1 or remaining != 1;
