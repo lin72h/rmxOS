@@ -600,9 +600,10 @@ static void
 ipc_host_sysinit(void *arg __unused)
 {
 
+	if (!cold)
+		return;
 	ipc_host_init();
 }
 
 /* before SI_SUB_INTRINSIC and after SI_SUB_KLD where zones are initialized */
 SYSINIT(ipc_host, SI_SUB_CPU, SI_ORDER_ANY, ipc_host_sysinit, NULL);
-

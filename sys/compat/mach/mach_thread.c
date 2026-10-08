@@ -308,6 +308,9 @@ mach_thread_dtor(void *arg __unused, struct thread *td)
 static void
 thread_sysinit(void *arg __unused)
 {
+	/* A runtime load is refused by mach_mod_init; publish no callbacks. */
+	if (!cold)
+		return;
 	thread_shuttle_zone = uma_zcreate("thread_shuttle_zone",
 	    sizeof(struct thread_shuttle), NULL, NULL, NULL, NULL, UMA_ALIGN_PTR, 0);
 	EVENTHANDLER_REGISTER(thread_init, mach_thread_init, NULL, EVENTHANDLER_PRI_ANY);

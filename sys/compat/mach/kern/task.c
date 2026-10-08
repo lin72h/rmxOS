@@ -1218,6 +1218,9 @@ mach_task_exec_committed(void *arg __unused, struct proc *p,
 static void
 task_sysinit(void *arg __unused)
 {
+	/* A runtime load is refused by mach_mod_init; publish no callbacks. */
+	if (!cold)
+		return;
 	task_zone = uma_zcreate("mach_task_zone", sizeof(struct mach_task),
 	    NULL, NULL, NULL, NULL, UMA_ALIGN_PTR, 0);
 	EVENTHANDLER_REGISTER(process_init, mach_task_init, NULL, EVENTHANDLER_PRI_ANY);

@@ -205,6 +205,8 @@ ipc_pset_work_start(void *arg __unused)
 {
 	int error;
 
+	if (!cold)
+		return;
 	/* Module initialization may have failed and freed the queue. */
 	if (ipc_pset_work_queue == NULL)
 		return;

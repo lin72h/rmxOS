@@ -174,6 +174,9 @@ extern void mig_init(void);
 static void
 ipc_bootstrap_sysinit(void *arg __unused)
 {
+	/* SYSINITs also run during the runtime loads mach_mod_init refuses. */
+	if (!cold)
+		return;
 	ipc_port_multiple_lock_init();
 
 	ipc_port_timestamp_lock_init();
