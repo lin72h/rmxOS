@@ -20,6 +20,8 @@
 #include <sys/capsicum.h>
 #include <sys/rwlock.h>
 #include <sys/time.h>
+#include <vm/vm.h>
+#include <vm/vm_map.h>
 /* Observe the attachment ABI common to both images, without a new symbol. */
 #undef current_space
 #define current_space() current_task()->itk_space
@@ -32,6 +34,17 @@ extern kern_return_t mach_port_get_refs(ipc_space_t, mach_port_name_t,
     mach_port_right_t, mach_port_urefs_t *);
 
 struct observation { int result; int owned; };
+static int map_size_sysctl(SYSCTL_HANDLER_ARGS) {
+    vm_map_t map = current_map();
+    uint64_t size;
+    vm_map_lock_read(map);
+    size = map->size;
+    vm_map_unlock_read(map);
+    return (SYSCTL_OUT(req, &size, sizeof(size)));
+}
+SYSCTL_PROC(_debug, OID_AUTO, rmx_map_size,
+    CTLTYPE_U64 | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, 0,
+    map_size_sysctl, "QU", "Current task mapped byte count");
 struct clock_pointer { int result; uint32_t sec; int nsec; uint64_t guard; };
 extern void rmx_clock_pointer_observe(struct clock_pointer *);
 static int clock_pointer_sysctl(SYSCTL_HANDLER_ARGS) {

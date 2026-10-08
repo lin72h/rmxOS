@@ -36,6 +36,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/proc.h>
 #include <sys/mman.h>
 #include <sys/malloc.h>
+#include <sys/fail.h>
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/exec.h>
@@ -619,11 +620,14 @@ vm_map_copyout_kernel_buffer(
 	 * Copyout the data from the kernel buffer to the target map.
 	 */
 	if (current_map() == map) {
+		KFAIL_POINT_CODE(DEBUG_FP, mach_ool_copyout,
+		    kr = KERN_INVALID_ADDRESS;
+		);
 		/*
 		 * If the target map is the current map, just do
 		 * the copy.
 		 */
-		if (copyout((char *)copy->cpy_kdata, (char *)*addr,
+		if (kr == KERN_SUCCESS && copyout((char *)copy->cpy_kdata, (char *)*addr,
 				copy->size)) {
 			kr = KERN_INVALID_ADDRESS;
 		}
@@ -652,7 +656,13 @@ vm_map_copyout_kernel_buffer(
 		kr = KERN_NOT_SUPPORTED;
 	}
 
-	free(copy, M_MACH_VM);
+	if (kr == KERN_SUCCESS) {
+		free(copy, M_MACH_VM);
+	} else if (!overwrite) {
+		/* Failure retains copy for the caller; undo only our allocation. */
+		(void)vm_map_remove(map, *addr, *addr + round_page(copy->size));
+		*addr = 0;
+	}
 
 	return(kr);
 }
