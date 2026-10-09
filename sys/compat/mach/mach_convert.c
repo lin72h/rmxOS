@@ -51,7 +51,8 @@ convert_clock_to_port(mach_clock_t clock)
 vm_map_t
 convert_port_entry_to_map(ipc_port_t port)
 {
-	return (NULL);
+	/* Entry-only VM operations have the same current-task contract. */
+	return (convert_port_to_map(port));
 }
 
 

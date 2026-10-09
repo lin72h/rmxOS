@@ -24,3 +24,4 @@ atf_test_program{name="mach_recovered_readiness_test"}
 atf_test_program{name="mach_child_setters_test"}
 atf_test_program{name="mach_exec_workqueue_test"}
 atf_test_program{name="mach_debug_sysctls_test"}
+atf_test_program{name="mach_vm_contract_test"}

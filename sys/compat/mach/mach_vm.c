@@ -41,6 +41,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/filedesc.h>
 #include <sys/exec.h>
 #include <sys/sysproto.h>
+#include <sys/syscallsubr.h>
+#include <sys/racct.h>
 #include <sys/uio.h>
 #include <sys/vnode.h>
 
@@ -126,6 +128,26 @@ first_free_is_valid(vm_map_t map)
 }
 #endif	
 
+static kern_return_t
+mach_vm_errno(int error)
+{
+	switch (error) {
+	case 0: return (KERN_SUCCESS);
+	case EFAULT: return (KERN_INVALID_ADDRESS);
+	case EINVAL: return (KERN_INVALID_ARGUMENT);
+	case ENOMEM: return (KERN_NO_SPACE);
+	case EACCES: case EPERM: return (KERN_PROTECTION_FAILURE);
+	default: return (KERN_FAILURE);
+	}
+}
+
+/* Cross-task VM operations are not supported by the 1.0 wrappers. */
+static bool
+mach_vm_current(vm_map_t map)
+{
+	return (map == current_map());
+}
+
 int
 mach_vm_map(vm_map_t map, mach_vm_address_t *address, mach_vm_size_t _size,
 			mach_vm_offset_t _mask, int _flags, mem_entry_name_port_t object __unused,
@@ -135,10 +157,12 @@ mach_vm_map(vm_map_t map, mach_vm_address_t *address, mach_vm_size_t _size,
 	vm_offset_t addr = 0;
 	size_t size;
 	int docow, error, find_space;
+	if (!mach_vm_current(map))
+		return (KERN_INVALID_ARGUMENT);
 
 	/* XXX Darwin fails on mapping a page at address 0 */
 	if ((_flags & VM_FLAGS_ANYWHERE) == 0 && *address == 0)
-		return (ENOMEM);
+		return (KERN_NO_SPACE);
 
 	size = round_page(_size);
 	docow = error = 0;
@@ -174,7 +198,7 @@ mach_vm_map(vm_map_t map, mach_vm_address_t *address, mach_vm_size_t _size,
 
 	*address = addr;
 done:
-	return (error);
+	return (mach_vm_errno(error));
 }
 
 int
@@ -191,6 +215,10 @@ mach_vm_allocate(vm_map_t map, vm_offset_t *addr, size_t _size, int flags)
 	vm_offset_t daddr;
 	vm_prot_t prot, protmax;
 	int err;
+	if (!mach_vm_current(map))
+		return (KERN_INVALID_ARGUMENT);
+	if (size < _size)
+		return (KERN_INVALID_ARGUMENT);
 
 	prot = VM_PROT_READ|VM_PROT_WRITE;
 	protmax = VM_PROT_ALL;
@@ -213,6 +241,8 @@ mach_vm_allocate(vm_map_t map, vm_offset_t *addr, size_t _size, int flags)
 		if (daddr + size < daddr)
 		  goto error;
 	}
+	if ((err = kern_mmap_racct_check(curthread, map, size)) != 0)
+		goto error;
 	if (vm_map_insert(map, NULL, 0, daddr, daddr + size, prot, protmax, 0)) {
 	  err = EFAULT;
 	  goto error;
@@ -221,8 +251,11 @@ mach_vm_allocate(vm_map_t map, vm_offset_t *addr, size_t _size, int flags)
 	*addr = daddr;
 	return (0);
  error:
+	RACCT_PROC_LOCK(curproc);
+	racct_set_force(curproc, RACCT_VMEM, map->size);
+	RACCT_PROC_UNLOCK(curproc);
 	vm_map_unlock(map);
-	return (err);
+	return (mach_vm_errno(err));
 }
 
 int
@@ -233,26 +266,26 @@ vm_deallocate(vm_map_t map, vm_offset_t addr, size_t len)
 }
 
 int
-mach_vm_deallocate(vm_map_t target __unused, mach_vm_address_t addr, mach_vm_size_t len)
+mach_vm_deallocate(vm_map_t target, mach_vm_address_t addr, mach_vm_size_t len)
 {
 	struct munmap_args cup;
+	if (!mach_vm_current(target))
+		return (KERN_INVALID_ARGUMENT);
 
 	cup.addr = (void *)addr;
 	cup.len = len;
-	return (sys_munmap(curthread, &cup));
+	return (mach_vm_errno(sys_munmap(curthread, &cup)));
 }
 
 int
-mach_vm_protect(vm_map_t target_task __unused, vm_offset_t addr, size_t len,
-				boolean_t setmax __unused, vm_prot_t prot)
+mach_vm_protect(vm_map_t target_task, vm_offset_t addr, size_t len,
+				boolean_t setmax, vm_prot_t prot)
 {
-	struct mprotect_args cup;
-
-	cup.addr = (void *)addr;
-	cup.len = len;
-	cup.prot = prot;
-
-	return (sys_mprotect(curthread, &cup));
+	if (!mach_vm_current(target_task) || (prot & ~VM_PROT_ALL) != 0)
+		return (KERN_INVALID_ARGUMENT);
+	return (mach_vm_errno(kern_mprotect(curthread, addr, len,
+	    prot | (setmax ? PROT_MAX(prot) : 0),
+	    setmax ? VM_MAP_PROTECT_SET_MAXPROT : 0)));
 }
 
 
@@ -262,15 +295,15 @@ mach_vm_inherit(vm_map_t target_task, mach_vm_address_t address, mach_vm_size_t 
 {
 	struct minherit_args cup;
 	int error;
+	if (!mach_vm_current(target_task))
+		return (KERN_INVALID_ARGUMENT);
 
 	cup.addr = (void *)address;
 	cup.len = size;
 	cup.inherit = new_inheritance;
 
-	if ((error = sys_minherit(curthread, &cup)) != 0)
-		return (KERN_FAILURE);
-
-	return (0);
+	error = sys_minherit(curthread, &cup);
+	return (mach_vm_errno(error));
 }
 
 int
@@ -281,6 +314,8 @@ mach_vm_map_page_query(
 	integer_t *ref_count
 )
 {
+	if (!mach_vm_current(target_map))
+		return (KERN_INVALID_ARGUMENT);
 	return (KERN_NOT_SUPPORTED);
 }
 
@@ -293,7 +328,9 @@ _mach_make_memory_entry(
 	mem_entry_name_port_t *object_handle,
 	mem_entry_name_port_t parent_handle
 )
-{	
+{
+	if (!mach_vm_current(target_task))
+		return (KERN_INVALID_ARGUMENT);
 
 	return (KERN_NOT_SUPPORTED);
 }
@@ -303,7 +340,9 @@ mach_make_memory_entry(vm_map_t target_task, vm_size_t *size,
 					   vm_offset_t offset, vm_prot_t permission,
 					   mem_entry_name_port_t *object_handle,
 					   mem_entry_name_port_t parent_handle)
-{	
+{
+	if (!mach_vm_current(target_task))
+		return (KERN_INVALID_ARGUMENT);
 
 	return (KERN_NOT_SUPPORTED);
 }
@@ -314,18 +353,22 @@ mach_make_memory_entry_64(vm_map_t target_task, memory_object_size_t *size,
 						  memory_object_offset_t offset, vm_prot_t permission,
 						  mach_port_t *object_handle,
 						  mem_entry_name_port_t parent_handle)
-{	
+{
+	if (!mach_vm_current(target_task))
+		return (KERN_INVALID_ARGUMENT);
 
 	return (KERN_NOT_SUPPORTED);
 }
 
 
 int
-mach_vm_msync(vm_map_t target_task __unused, mach_vm_address_t addr, mach_vm_size_t size,
+mach_vm_msync(vm_map_t target_task, mach_vm_address_t addr, mach_vm_size_t size,
 		vm_sync_t flags)
 {
 	struct msync_args cup;
 	int error;
+	if (!mach_vm_current(target_task))
+		return (KERN_INVALID_ARGUMENT);
 
 	cup.addr = (void *)addr;
 	cup.len = size;
@@ -338,9 +381,7 @@ mach_vm_msync(vm_map_t target_task __unused, mach_vm_address_t addr, mach_vm_siz
 		cup.flags |= MS_INVALIDATE;
 	error = sys_msync(curthread, &cup);
 	
-	if (error)
-		return (KERN_FAILURE);
-	return (0);
+	return (mach_vm_errno(error));
 }
 
 /* XXX Do it for remote task */
@@ -351,6 +392,8 @@ mach_vm_copy(vm_map_t target_task, mach_vm_address_t src, mach_vm_size_t size,
 {
 	char *tmpbuf;
 	int error;
+	if (!mach_vm_current(target_task))
+		return (KERN_INVALID_ARGUMENT);
 
 #ifdef DEBUG_MACH_VM
 	printf("mach_vm_copy: src = 0x%08lx, size = 0x%08lx, addr = 0x%08lx\n",
@@ -382,7 +425,7 @@ mach_vm_copy(vm_map_t target_task, mach_vm_address_t src, mach_vm_size_t size,
 
 out:
 	free(tmpbuf, M_TEMP);
-	return (KERN_FAILURE);
+	return (mach_vm_errno(error));
 }
 
 int
@@ -392,6 +435,8 @@ mach_vm_read(vm_map_t map, mach_vm_address_t addr, mach_vm_size_t size,
 	caddr_t tbuf;
 	vm_offset_t dstaddr;
 	int error;
+	if (!mach_vm_current(map))
+		return (KERN_INVALID_ARGUMENT);
 
 	size = round_page(size);
 
@@ -433,7 +478,7 @@ mach_vm_write(
 	vm_offset_t			data,
 	mach_msg_type_number_t	size __unused)
 {
-	if (map == VM_MAP_NULL)
+	if (!mach_vm_current(map))
 		return KERN_INVALID_ARGUMENT;
 
 	return vm_map_copy_overwrite(map, (vm_map_address_t)address,
@@ -446,6 +491,8 @@ mach_vm_machine_attribute(vm_map_t target_task, mach_vm_address_t addr, mach_vm_
 {
 	int error = 0;
 	vm_machine_attribute_val_t value;
+	if (!mach_vm_current(target_task))
+		return (KERN_INVALID_ARGUMENT);
 
 	
 	/* Both VM MIG families supply their kernel request field here. */
@@ -549,7 +596,12 @@ vm_map_copyin_internal(
 		return KERN_RESOURCE_SHORTAGE;
 	}
 	size =  (vm_size_t) (sizeof(struct vm_map_copy) + len);
+	copy = VM_MAP_COPY_NULL;
+	KFAIL_POINT_CODE(DEBUG_FP, mach_ool_copyin_alloc, {
+		goto alloc_failed;
+	});
 	copy = (vm_map_copy_t) malloc(size, M_MACH_VM, M_NOWAIT|M_ZERO);
+alloc_failed:
 	if (copy == VM_MAP_COPY_NULL) {
 		kr = KERN_RESOURCE_SHORTAGE;
 		goto fail;
@@ -1222,6 +1274,8 @@ vm_map_copy_overwrite(vm_map_t                dst_map,
 int
 mach_vm_behavior_set(vm_map_t target_task, mach_vm_address_t address, mach_vm_size_t size, vm_behavior_t new_behavior)
 {
+	if (!mach_vm_current(target_task))
+		return (KERN_INVALID_ARGUMENT);
 
 	return (KERN_NOT_SUPPORTED);
 }
@@ -1231,8 +1285,10 @@ mach_vm_page_info(vm_map_t target_task, mach_vm_address_t address,
 				  vm_page_info_flavor_t flavor, vm_page_info_t info,
 				  mach_msg_type_number_t *infoCnt)
 {
+	if (!mach_vm_current(target_task))
+		return (KERN_INVALID_ARGUMENT);
 
-		return (KERN_NOT_SUPPORTED);
+	return (KERN_NOT_SUPPORTED);
 }
 
 int
@@ -1243,8 +1299,10 @@ mach_vm_page_query(
 	integer_t *ref_count
 )
 {
+	if (!mach_vm_current(target_map))
+		return (KERN_INVALID_ARGUMENT);
 
-		return (KERN_NOT_SUPPORTED);
+	return (KERN_NOT_SUPPORTED);
 }
 
 int
@@ -1255,6 +1313,8 @@ mach_vm_purgable_control(
 	int *state
 	)
 {
+	if (!mach_vm_current(target_task))
+		return (KERN_INVALID_ARGUMENT);
 
 	return (KERN_NOT_SUPPORTED);
 }
@@ -1266,6 +1326,8 @@ mach_vm_read_list(
 	natural_t count
 	)
 {
+	if (!mach_vm_current(target_task))
+		return (KERN_INVALID_ARGUMENT);
 	return (KERN_NOT_SUPPORTED);
 }
 
@@ -1277,6 +1339,8 @@ vm_read_list(
 	natural_t count
 	)
 {
+	if (!mach_vm_current(target_task))
+		return (KERN_INVALID_ARGUMENT);
 	return (KERN_NOT_SUPPORTED);
 }
 
@@ -1289,6 +1353,8 @@ mach_vm_read_overwrite(
 	mach_vm_size_t *outsize
 )
 {
+	if (!mach_vm_current(target_task))
+		return (KERN_INVALID_ARGUMENT);
 	return (KERN_NOT_SUPPORTED);
 }
 
@@ -1303,6 +1369,8 @@ mach_vm_region(
 	mach_port_t *object_name
 	)
 {
+	if (!mach_vm_current(target_task))
+		return (KERN_INVALID_ARGUMENT);
 	/*
 	 * MACH_VM_REGION_BASIC_INFO is the only
 	 * supported flavor in Darwin.
@@ -1320,6 +1388,8 @@ mach_vm_region_info(
 	mach_msg_type_number_t *objectsCnt
 )
 {
+	if (!mach_vm_current(task))
+		return (KERN_INVALID_ARGUMENT);
 	return (KERN_NOT_SUPPORTED);
 }
 
@@ -1332,6 +1402,8 @@ mach_vm_region_info_64(
 	mach_msg_type_number_t *objectsCnt
 )
 {
+	if (!mach_vm_current(task))
+		return (KERN_INVALID_ARGUMENT);
 	return (KERN_NOT_SUPPORTED);
 }
 
@@ -1345,6 +1417,8 @@ mach_vm_region_recurse(
 	mach_msg_type_number_t *infoCnt
 	)
 {
+	if (!mach_vm_current(target_task))
+		return (KERN_INVALID_ARGUMENT);
 	return (KERN_NOT_SUPPORTED);
 }
 
@@ -1355,6 +1429,8 @@ mach_vm_mapped_pages_info(
 	mach_msg_type_number_t *pagesCnt
 )
 {
+	if (!mach_vm_current(task))
+		return (KERN_INVALID_ARGUMENT);
 	return (KERN_NOT_SUPPORTED);
 }
 
@@ -1372,8 +1448,10 @@ mach_vm_remap(
 	vm_prot_t *cur_protection,
 	vm_prot_t *max_protection,
 	vm_inherit_t inheritance
-	)
+)
 {
+	if (!mach_vm_current(target_task) || !mach_vm_current(src_task))
+		return (KERN_INVALID_ARGUMENT);
 	return (KERN_NOT_SUPPORTED);
 }
 
@@ -1386,6 +1464,8 @@ mach_vm_wire(
 	vm_prot_t desired_access
 )
 {
+	if (!mach_vm_current(task))
+		return (KERN_INVALID_ARGUMENT);
 	return (KERN_NOT_SUPPORTED);
 }
 
@@ -1398,12 +1478,16 @@ mach_vm_wire_32(
 	vm_prot_t desired_access
 )
 {
+	if (!mach_vm_current(task))
+		return (KERN_INVALID_ARGUMENT);
 	return (KERN_NOT_SUPPORTED);
 }
 
 int
 task_wire(vm_map_t target_task, boolean_t must_wire)
 {
+	if (!mach_vm_current(target_task))
+		return (KERN_INVALID_ARGUMENT);
 
 	return (KERN_NOT_SUPPORTED);
 }
