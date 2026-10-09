@@ -414,20 +414,31 @@ mach_vm_copy(vm_map_t target_task, mach_vm_address_t src, mach_vm_size_t size,
 		return (KERN_INVALID_ARGUMENT);
 
 
+	if (size == 0)
+		return (KERN_SUCCESS);
+	if (src + size < src || dst + size < dst)
+		return (KERN_INVALID_ARGUMENT);
+
 	tmpbuf = malloc(PAGE_SIZE, M_TEMP, M_WAITOK);
-
-	/* Is there an easy way of dealing with that efficiently? */
-	do {
-		if ((error = copyin((void*)src, tmpbuf, PAGE_SIZE)) != 0)
+	bool backwards = dst > src && dst - src < size;
+	if (backwards) {
+		src += size;
+		dst += size;
+	}
+	while (size != 0) {
+		if (backwards) {
+			src -= PAGE_SIZE;
+			dst -= PAGE_SIZE;
+		}
+		if ((error = copyin((void *)src, tmpbuf, PAGE_SIZE)) != 0 ||
+		    (error = copyout(tmpbuf, (void *)dst, PAGE_SIZE)) != 0)
 			goto out;
-
-		if ((error = copyout(tmpbuf, (void *)dst, PAGE_SIZE)) != 0)
-			goto out;
-
-		src += PAGE_SIZE;
-		dst += PAGE_SIZE;
+		if (!backwards) {
+			src += PAGE_SIZE;
+			dst += PAGE_SIZE;
+		}
 		size -= PAGE_SIZE;
-	} while (size > 0);
+	}
 
 	free(tmpbuf, M_TEMP);
 	return (0);
