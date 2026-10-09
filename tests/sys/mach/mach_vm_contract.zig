@@ -31,6 +31,11 @@ fn allocate() u64 {
     fact("allocate", 0, c.syscall(c.SYS__kernelrpc_mach_vm_allocate_trap, @as(u32, 0), &addr, @as(u64, 4096), @as(c_int, 1)));
     return addr;
 }
+fn sendTask(channel: u32) c_int {
+    // The child's bootstrap name is a send right, not a receive right.
+    var msg = fm.Message{ .header = .{ .bits = c.MACH_MSGH_BITS_COMPLEX | c.MACH_MSG_TYPE_COPY_SEND, .size = 40, .remote = channel, .local = 0, .voucher = 0, .id = 583 }, .count = 1, .descriptor = .{ .name = c.mach_task_self(), .pad = 0, .pad2 = 0, .disposition = c.MACH_MSG_TYPE_COPY_SEND, .kind = 0 }, .trailer = @splat(0) };
+    return c.syscall(c.SYS_mach_msg_trap, &msg, @as(u32, 1), @as(u32, 40), @as(u32, 0), @as(u32, 0), @as(u32, 0), @as(u32, 0));
+}
 fn point(value: [*:0]const u8) void {
     if (c.sysctlbyname("debug.fail_point.mach_ool_copyin_alloc", null, null, @constCast(value), std.mem.len(value)) != 0) c.atf_tc_fail("allocation fail point control failed");
 }
@@ -86,7 +91,7 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
         if (child == 0) {
             _ = c.alarm(5);
             var channel: u32 = 0;
-            if (c.task_get_special_port(c.mach_task_self(), c.TASK_BOOTSTRAP_PORT, &channel) != 0 or fm.sendFile(channel, @intCast(c.mach_task_self())) != 0) c._exit(91);
+            if (c.task_get_special_port(c.mach_task_self(), c.TASK_BOOTSTRAP_PORT, &channel) != 0 or sendTask(channel) != 0) c._exit(91);
             _ = c.pause();
             c._exit(0);
         }
