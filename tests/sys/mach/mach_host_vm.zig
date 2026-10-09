@@ -14,7 +14,7 @@ const c = @cImport({
     @cInclude("stdio.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-const names = [_][*:0]const u8{ "self_calls", "copy_zero", "copy_overlap" };
+const names = [_][*:0]const u8{ "self_calls", "copy_zero", "copy_overlap", "map_prototype" };
 var cases: [names.len]c.atf_tc_t = undefined;
 fn fact(name: [*:0]const u8, expected: i64, observed: i64) void {
     _ = c.printf("host_vm check=%s expected=%lld observed=%lld\n", name, @as(c_longlong, expected), @as(c_longlong, observed));
@@ -39,7 +39,16 @@ fn migAllocate() u64 {
 }
 fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
     const name = std.mem.span(c.atf_tc_get_ident(t));
-    if (std.mem.eql(u8, name, "copy_zero") or std.mem.eql(u8, name, "copy_overlap")) {
+    if (std.mem.eql(u8, name, "map_prototype")) {
+        var address: u64 = 0;
+        fact("map_size_then_mask", 0, c.mach_vm_map(c.mach_task_self(), &address, 8192, 0, 1, 0, 0, 0, 3, 7, 2));
+        var state: u8 = 0;
+        fact("map_second_page_present", 0, c.mincore(@ptrFromInt(address + 4096), 4096, &state));
+        const bytes: *[8192]u8 = @ptrFromInt(address);
+        bytes[8191] = 0x58;
+        fact("map_second_page_writable", 0x58, bytes[8191]);
+        fact("map_cleanup", 0, c.mach_vm_deallocate(c.mach_task_self(), address, 8192));
+    } else if (std.mem.eql(u8, name, "copy_zero") or std.mem.eql(u8, name, "copy_overlap")) {
         var address: u64 = 0;
         fact("copy_allocate", 0, c.mach_vm_allocate(c.mach_task_self(), &address, 4 * 4096, 1));
         const bytes: *[4 * 4096]u8 = @ptrFromInt(address);

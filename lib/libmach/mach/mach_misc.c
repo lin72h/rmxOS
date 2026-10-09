@@ -150,8 +150,8 @@ vm_deallocate(mach_port_name_t target, vm_address_t addr, vm_size_t size)
 
 
 kern_return_t
-mach_vm_map(mach_vm_map_t target, mach_vm_address_t *address, mach_vm_offset_t mask,
-			mach_vm_size_t size, int flags, mem_entry_name_port_t object __unused,
+mach_vm_map(mach_vm_map_t target, mach_vm_address_t *address, mach_vm_size_t size,
+			mach_vm_offset_t mask, int flags, mem_entry_name_port_t object __unused,
 			memory_object_offset_t offset __unused, boolean_t copy __unused,
 			vm_prot_t cur_protection, vm_prot_t max_protection __unused,
 			vm_inherit_t inheritance __unused)
