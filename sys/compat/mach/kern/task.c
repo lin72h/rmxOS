@@ -124,6 +124,9 @@
 #endif
 #include <sys/mach/host_special_ports.h>
 #include <sys/mach/host.h>
+#include <sys/resourcevar.h>
+#include <sys/syscallsubr.h>
+#include <vm/vm_extern.h>
 #include <vm/vm_kern.h>		/* for kernel_map, ipc_kernel_map */
 #include <vm/uma.h>
 #if	MACH_KDB
@@ -471,109 +474,11 @@ task_threads(
 	thread_act_array_t	*thr_act_list,
 	mach_msg_type_number_t	*count)
 {
-#if 0
-	unsigned int		actual;	/* this many thr_acts */
-	thread_act_t		thr_act;
-	thread_act_t		*thr_acts;
-	thread_t		thread;
-	int			i, j;
-	boolean_t rt = FALSE; /* ### This boolean is FALSE, because there
-			       * currently exists no mechanism to determine
-			       * whether or not the reply port is an RT port
-			       */
-
-
-	vm_size_t size, size_needed;
-	vm_offset_t addr;
-
+	*thr_act_list = NULL;
+	*count = 0;
 	if (task == TASK_NULL)
-		return KERN_INVALID_ARGUMENT;
-
-	size = 0; addr = 0;
-
-	for (;;) {
-		task_lock(task);
-		if (!task->active) {
-			task_unlock(task);
-			if (size != 0)
-				KFREE(addr, size, rt);
-			return KERN_FAILURE;
-		}
-
-		actual = task->thr_act_count;
-
-		/* do we have the memory we need? */
-		size_needed = actual * sizeof(mach_port_t);
-		if (size_needed <= size)
-			break;
-
-		/* unlock the task and allocate more memory */
-		task_unlock(task);
-
-		if (size != 0)
-			KFREE(addr, size, rt);
-
-		assert(size_needed > 0);
-		size = size_needed;
-
-		addr = KALLOC(size, rt);
-		if (addr == 0)
-			return KERN_RESOURCE_SHORTAGE;
-	}
-
-	/* OK, have memory and the task is locked & active */
-	thr_acts = (thread_act_t *) addr;
-
-	for (i = j = 0, thr_act = (thread_act_t) queue_first(&task->thr_acts);
-	     i < actual;
-	     i++, thr_act = (thread_act_t) queue_next(&thr_act->thr_acts)) {
-		act_reference(thr_act);
-		thr_acts[j++] = thr_act;
-	}
-	assert(queue_end(&task->thr_acts, (queue_entry_t) thr_act));
-	actual = j;
-
-	/* can unlock task now that we've got the thr_act refs */
-	task_unlock(task);
-
-	if (actual == 0) {
-		/* no thr_acts, so return null pointer and deallocate memory */
-
-		*thr_act_list = 0;
-		*count = 0;
-
-		if (size != 0)
-			KFREE(addr, size, rt);
-	} else {
-		/* if we allocated too much, must copy */
-
-		if (size_needed < size) {
-			vm_offset_t newaddr;
-
-			newaddr = KALLOC(size_needed, rt);
-			if (newaddr == 0) {
-				for (i = 0; i < actual; i++)
-					act_deallocate(thr_acts[i]);
-				KFREE(addr, size, rt);
-				return KERN_RESOURCE_SHORTAGE;
-			}
-
-			bcopy((char *) addr, (char *) newaddr, size_needed);
-			KFREE(addr, size, rt);
-			thr_acts = (thread_act_t *) newaddr;
-		}
-
-		*thr_act_list = (mach_port_t *) thr_acts;
-		*count = actual;
-
-		/* do the conversion that Mig should handle */
-
-		for (i = 0; i < actual; i++)
-			((ipc_port_t *) thr_acts)[i] =
-				convert_act_to_port(thr_acts[i]);
-	}
-#endif
-	return KERN_SUCCESS;
+		return (KERN_INVALID_ARGUMENT);
+	return (KERN_NOT_SUPPORTED);
 }
 
 kern_return_t
@@ -729,184 +634,41 @@ task_info(
 	task_info_t		task_info_out,
 	mach_msg_type_number_t	*task_info_count)
 {
+	task_basic_info_data_t basic = { 0 };
+	struct vmspace *vm;
+	struct rusage usage;
+	mach_msg_type_number_t capacity = *task_info_count;
 
+	*task_info_count = 0;
+	bzero(task_info_out, MIN(capacity, TASK_BASIC_INFO_COUNT) * sizeof(integer_t));
 	if (task == TASK_NULL)
-		return(KERN_INVALID_ARGUMENT);
-
-	switch (flavor) {
-	    case TASK_BASIC_INFO:
-	    {
-#ifdef notyet
-		register task_basic_info_t	basic_info;
-#endif
-
-		if (*task_info_count < TASK_BASIC_INFO_COUNT) {
-		    return(KERN_INVALID_ARGUMENT);
-		}
-
-#ifdef notyet
-		basic_info = (task_basic_info_t) task_info_out;
-		map = (task == kernel_task) ? kernel_map : task->map;
-
-		basic_info->virtual_size  = map->size;
-		basic_info->resident_size = pmap_resident_count(map->pmap)
-						   * PAGE_SIZE;
-		task_lock(task);
-		basic_info->policy = task->policy;
-		basic_info->suspend_count = task->user_stop_count;
-		basic_info->user_time.seconds
-				= task->total_user_time.seconds;
-		basic_info->user_time.microseconds
-				= task->total_user_time.microseconds;
-		basic_info->system_time.seconds
-				= task->total_system_time.seconds;
-		basic_info->system_time.microseconds 
-				= task->total_system_time.microseconds;
-		task_unlock(task);
-#endif
-
-		*task_info_count = TASK_BASIC_INFO_COUNT;
-		break;
-	    }
-
-	    case TASK_THREAD_TIMES_INFO:
-	    {
-		register task_thread_times_info_t times_info;
-
-		if (*task_info_count < TASK_THREAD_TIMES_INFO_COUNT) {
-		    return (KERN_INVALID_ARGUMENT);
-		}
-
-		times_info = (task_thread_times_info_t) task_info_out;
-		times_info->user_time.seconds = 0;
-		times_info->user_time.microseconds = 0;
-		times_info->system_time.seconds = 0;
-		times_info->system_time.microseconds = 0;
-
-#ifdef notyet
-		task_lock(task);
-		queue_iterate(&task->thr_acts, thr_act,
-			      thread_act_t, thr_acts)
-		{
-			thread_t thread;
-		    time_value_t user_time, system_time;
-		    spl_t	 s;
-
-		    thread = act_lock_thread(thr_act);
-
-		    /* Skip empty threads and threads that have migrated
-		     * into this task:
-		     */
-		    if (thr_act->ith_object) {
-				act_unlock_thread(thr_act);
-				continue;
-		    }
-		    assert(thread);	/* Must have thread, if no thread_pool*/
-		    s = splsched();
-		    thread_lock(thread);
-
-		    thread_read_times(thread, &user_time, &system_time);
-
-		    thread_unlock(thread);
-		    splx(s);
-		    act_unlock_thread(thr_act);
-
-		    time_value_add(&times_info->user_time, &user_time);
-		    time_value_add(&times_info->system_time, &system_time);
-		}
-		task_unlock(task);
-#endif
-		*task_info_count = TASK_THREAD_TIMES_INFO_COUNT;
-		break;
-	    }
-
-	    case TASK_SCHED_FIFO_INFO:
-	    {
-		register policy_fifo_base_t	fifo_base;
-
-		if (*task_info_count < POLICY_FIFO_BASE_COUNT)
-			return(KERN_INVALID_ARGUMENT);
-
-		fifo_base = (policy_fifo_base_t) task_info_out;
-
-		task_lock(task);
-		if (task->policy != POLICY_FIFO) {
-			task_unlock(task);
-			return(KERN_INVALID_POLICY);
-		}
-		fifo_base->base_priority = task->priority;
-		task_unlock(task);
-
-		*task_info_count = POLICY_FIFO_BASE_COUNT;
-		break;
-	    }
-
-	    case TASK_SCHED_RR_INFO:
-	    {
-		register policy_rr_base_t	rr_base;
-
-		if (*task_info_count < POLICY_RR_BASE_COUNT)
-			return(KERN_INVALID_ARGUMENT);
-
-		rr_base = (policy_rr_base_t) task_info_out;
-
-		task_lock(task);
-		if (task->policy != POLICY_RR) {
-			task_unlock(task);
-			return(KERN_INVALID_POLICY);
-		}
-		rr_base->base_priority = task->priority;
-		rr_base->quantum = (task->sched_data * ticks)/1000;
-		task_unlock(task);
-
-		*task_info_count = POLICY_RR_BASE_COUNT;
-		break;
-	    }
-
-	    case TASK_SCHED_TIMESHARE_INFO:
-	    {
-		register policy_timeshare_base_t	ts_base;
-
-		if (*task_info_count < POLICY_TIMESHARE_BASE_COUNT)
-			return(KERN_INVALID_ARGUMENT);
-
-		ts_base = (policy_timeshare_base_t) task_info_out;
-
-		task_lock(task);
-		if (task->policy != POLICY_TIMESHARE) {
-			task_unlock(task);
-			return(KERN_INVALID_POLICY);
-		}
-		ts_base->base_priority = task->priority;
-		task_unlock(task);
-
-		*task_info_count = POLICY_TIMESHARE_BASE_COUNT;
-		break;
-	    }
-
-            case TASK_SECURITY_TOKEN:
-	    {
-                register security_token_t	*sec_token_p;
-
-		if (*task_info_count < TASK_SECURITY_TOKEN_COUNT) {
-		    return(KERN_INVALID_ARGUMENT);
-		}
-
-		sec_token_p = (security_token_t *) task_info_out;
-
-		task_lock(task);
-		*sec_token_p = task->sec_token;
-		task_unlock(task);
-
-		*task_info_count = TASK_SECURITY_TOKEN_COUNT;
-                break;
-            }
-            
-	    default:
 		return (KERN_INVALID_ARGUMENT);
-	}
-
-	return(KERN_SUCCESS);
+	if (task != current_task())
+		return (KERN_NOT_SUPPORTED);
+	if (flavor != TASK_BASIC_INFO)
+		return (flavor == TASK_THREAD_TIMES_INFO ?
+		    KERN_NOT_SUPPORTED : KERN_INVALID_ARGUMENT);
+	if (capacity < TASK_BASIC_INFO_COUNT)
+		return (KERN_INVALID_ARGUMENT);
+	if (kern_getrusage(curthread, RUSAGE_SELF, &usage) != 0)
+		return (KERN_FAILURE);
+	vm = vmspace_acquire_ref(curproc);
+	vm_map_lock_read(&vm->vm_map);
+	basic.virtual_size = vm->vm_map.size;
+	basic.resident_size = pmap_resident_count(vmspace_pmap(vm)) * PAGE_SIZE;
+	vm_map_unlock_read(&vm->vm_map);
+	vmspace_free(vm);
+	basic.user_time.seconds = usage.ru_utime.tv_sec;
+	basic.user_time.microseconds = usage.ru_utime.tv_usec;
+	basic.system_time.seconds = usage.ru_stime.tv_sec;
+	basic.system_time.microseconds = usage.ru_stime.tv_usec;
+	task_lock(task);
+	basic.policy = task->policy;
+	basic.suspend_count = task->user_stop_count;
+	task_unlock(task);
+	memcpy(task_info_out, &basic, sizeof(basic));
+	*task_info_count = TASK_BASIC_INFO_COUNT;
+	return (KERN_SUCCESS);
 }
 
 /*

@@ -102,6 +102,9 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
         fact("foreign_inherit", 46, c.mach_vm_inherit(other, address, 4096, 2));
         fact("foreign_allocate_trap", 46, c.syscall(c.SYS__kernelrpc_mach_vm_allocate_trap, other, &allocated, @as(u64, 4096), @as(c_int, 1)));
         fact("non_task_allocate_trap", 4, c.syscall(c.SYS__kernelrpc_mach_vm_allocate_trap, port, &allocated, @as(u64, 4096), @as(c_int, 1)));
+        var info: c.task_basic_info_data_t = undefined;
+        var count: u32 = @sizeOf(c.task_basic_info_data_t) / @sizeOf(c.natural_t);
+        fact("foreign_task_info", 46, c.task_info(other, c.TASK_BASIC_INFO, @ptrCast(&info), &count));
         bytes[0] = 0x59; // Still mapped and writable in the caller.
         fact("caller_mapping_preserved", 0x59, bytes[0]);
         _ = c.kill(child, c.SIGKILL);

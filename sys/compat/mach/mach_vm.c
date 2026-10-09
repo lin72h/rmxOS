@@ -446,37 +446,11 @@ int
 mach_vm_read(vm_map_t map, mach_vm_address_t addr, mach_vm_size_t size,
 			 vm_offset_t *data, mach_msg_type_number_t *dataCnt)
 {
-	caddr_t tbuf;
-	vm_offset_t dstaddr;
-	int error;
+	*data = 0;
+	*dataCnt = 0;
 	if (!mach_vm_current(map))
 		return (mach_vm_target_error(map));
-
-	size = round_page(size);
-
-	if ((error = mach_vm_allocate(map, &dstaddr, size, 0)))
-		return (KERN_NO_SPACE);
-	/*
-	 * Copy the data from the target process to the current process
-	 * This is reasonable for small chunk of data, but we should
-	 * remap COW for areas bigger than a page.
-	 */
-	tbuf = malloc(size, M_MACH_TMP, M_WAITOK);
-#ifdef notyet
-	if ((error = copyin_vm_map(map, (caddr_t)addr, tbuf, size)) != 0) {
-		printf("copyin_proc error = %d, addr = %lx, size = %zx\n", error, addr, size);
-		free(tbuf, M_MACH_TMP);
-		return (KERN_PROTECTION_FAILURE);
-	}
-#endif
-	if ((error = copyout(tbuf, (void *)dstaddr, size)) != 0) {
-		printf("copyout error = %d\n", error);
-		free(tbuf, M_MACH_TMP);
-		return (KERN_PROTECTION_FAILURE);
-	}
-
-	free(tbuf, M_MACH_TMP);
-	return (0);
+	return (KERN_NOT_SUPPORTED);
 }
 
 

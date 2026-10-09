@@ -72,8 +72,8 @@ convert_port_to_semaphore(ipc_port_t port)
 task_name_t
 convert_port_to_task_name(ipc_port_t port)
 {
-
-	return (NULL);
+	/* convert_port_to_task pins a live binding under the port lock. */
+	return (convert_port_to_task(port));
 }
 
 task_suspension_token_t

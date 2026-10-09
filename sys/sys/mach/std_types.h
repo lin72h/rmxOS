@@ -160,7 +160,7 @@ extern void mach_vm_map_deallocate(vm_map_t map);
 #define vm_map_copy_steal_pages(copy)
 struct thread_shuttle;
 extern void thread_deallocate(struct thread_shuttle *);
-#define task_name_deallocate(task)
+#define task_name_deallocate(task) task_deallocate(task)
 #define assert_wait(a, b)
 #define cpu_number() curcpu
 #define copyoutmap(a, b, c, d) copyout((const void *)b, (void *)c, d)
