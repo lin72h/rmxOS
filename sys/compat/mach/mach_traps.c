@@ -515,6 +515,10 @@ sys__kernelrpc_mach_vm_protect_trap(struct thread *td, struct _kernelrpc_mach_vm
 	/* mach_port_name_t target = uap->target */
 	/* int set_maximum = uap->set_maximum */
 
+	/* Check the full syscall value before narrowing it to vm_prot_t. */
+	if ((uap->new_protection & ~VM_PROT_ALL) != 0)
+		return (mach_trap_return(td, KERN_INVALID_ARGUMENT));
+
 	int error = mach_vm_protect(&td->td_proc->p_vmspace->vm_map,
 	    uap->address, uap->size, FALSE, uap->new_protection);
 	return (mach_trap_return(td, error == ENOMEM ? KERN_INVALID_ADDRESS :
