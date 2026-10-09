@@ -63,10 +63,10 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
     }
     if (std.mem.eql(u8, name, "racct_limit")) {
         _ = c.snprintf(&rule, rule.len, "process:%d:vmemoryuse:deny=1", c.getpid());
-        if (c.rctl_add_rule(&rule, std.mem.len(@as([*:0]const u8, @ptrCast(&rule))), null, 0) != 0) c.atf_tc_fail("RCTL VMEM rule install failed");
+        if (c.rctl_add_rule(&rule, std.mem.len(@as([*:0]const u8, @ptrCast(&rule))) + 1, null, 0) != 0) c.atf_tc_fail("RCTL VMEM rule install failed");
         var address: u64 = 0;
         const rc = c.syscall(c.SYS__kernelrpc_mach_vm_allocate_trap, @as(u32, 0), &address, @as(u64, 4096), @as(c_int, 1));
-        _ = c.rctl_remove_rule(&rule, std.mem.len(@as([*:0]const u8, @ptrCast(&rule))), null, 0);
+        _ = c.rctl_remove_rule(&rule, std.mem.len(@as([*:0]const u8, @ptrCast(&rule))) + 1, null, 0);
         rule[0] = 0;
         fact("racct_denied", 3, rc);
         fact("racct_address_unchanged", 0, @intCast(address));
@@ -138,7 +138,7 @@ fn cleanup(_: [*c]const c.atf_tc_t) callconv(.c) void {
         _ = c.kill(child, c.SIGKILL);
         _ = c.waitpid(child, null, 0);
     }
-    if (rule[0] != 0) _ = c.rctl_remove_rule(&rule, std.mem.len(@as([*:0]const u8, @ptrCast(&rule))), null, 0);
+    if (rule[0] != 0) _ = c.rctl_remove_rule(&rule, std.mem.len(@as([*:0]const u8, @ptrCast(&rule))) + 1, null, 0);
 }
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     for (names, 0..) |name, i| {

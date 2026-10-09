@@ -166,7 +166,7 @@ routine vm_inherit(
 		target_task	: vm_task_entry_t;
 		address		: vm_address_t;
 		size		: vm_size_t;
-		new_inheritance	: vm_inherit_t);
+		new_inheritance	: integer_t);
 
 /*
  *	Returns the contents of the specified range of the

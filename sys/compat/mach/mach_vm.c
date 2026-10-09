@@ -294,7 +294,7 @@ mach_vm_protect(vm_map_t target_task, vm_offset_t addr, size_t len,
 
 int
 mach_vm_inherit(vm_map_t target_task, mach_vm_address_t address, mach_vm_size_t size,
-				vm_inherit_t new_inheritance)
+				integer_t new_inheritance)
 {
 	struct minherit_args cup;
 	int error;
@@ -303,7 +303,13 @@ mach_vm_inherit(vm_map_t target_task, mach_vm_address_t address, mach_vm_size_t 
 
 	cup.addr = (void *)address;
 	cup.len = size;
-	cup.inherit = new_inheritance;
+	/* Mach has no FreeBSD VM_INHERIT_ZERO value. Narrow only after checking. */
+	switch (new_inheritance) {
+	case 0: cup.inherit = VM_INHERIT_SHARE; break;
+	case 1: cup.inherit = VM_INHERIT_COPY; break;
+	case 2: cup.inherit = VM_INHERIT_NONE; break;
+	default: return (KERN_INVALID_ARGUMENT);
+	}
 
 	error = sys_minherit(curthread, &cup);
 	return (mach_vm_errno(error));
@@ -395,6 +401,7 @@ mach_vm_copy(vm_map_t target_task, mach_vm_address_t src, mach_vm_size_t size,
 {
 	char *tmpbuf;
 	int error;
+	size_t chunk;
 	if (!mach_vm_current(target_task))
 		return (mach_vm_target_error(target_task));
 
@@ -402,12 +409,6 @@ mach_vm_copy(vm_map_t target_task, mach_vm_address_t src, mach_vm_size_t size,
 	printf("mach_vm_copy: src = 0x%08lx, size = 0x%08lx, addr = 0x%08lx\n",
 	    (long)req->req_src, (long)req->req_size, (long)req->req_addr);
 #endif
-	if ((src & (PAGE_SIZE - 1)) ||
-	    (dst & (PAGE_SIZE - 1)) ||
-	    (size & (PAGE_SIZE - 1)))
-		return (KERN_INVALID_ARGUMENT);
-
-
 	if (size == 0)
 		return (KERN_SUCCESS);
 	if (src + size < src || dst + size < dst)
@@ -420,18 +421,19 @@ mach_vm_copy(vm_map_t target_task, mach_vm_address_t src, mach_vm_size_t size,
 		dst += size;
 	}
 	while (size != 0) {
+		chunk = MIN(size, PAGE_SIZE);
 		if (backwards) {
-			src -= PAGE_SIZE;
-			dst -= PAGE_SIZE;
+			src -= chunk;
+			dst -= chunk;
 		}
-		if ((error = copyin((void *)src, tmpbuf, PAGE_SIZE)) != 0 ||
-		    (error = copyout(tmpbuf, (void *)dst, PAGE_SIZE)) != 0)
+		if ((error = copyin((void *)src, tmpbuf, chunk)) != 0 ||
+		    (error = copyout(tmpbuf, (void *)dst, chunk)) != 0)
 			goto out;
 		if (!backwards) {
-			src += PAGE_SIZE;
-			dst += PAGE_SIZE;
+			src += chunk;
+			dst += chunk;
 		}
-		size -= PAGE_SIZE;
+		size -= chunk;
 	}
 
 	free(tmpbuf, M_TEMP);
@@ -467,7 +469,7 @@ mach_vm_write(
 	mach_msg_type_number_t	size __unused)
 {
 	if (!mach_vm_current(map))
-		return KERN_INVALID_ARGUMENT;
+		return (mach_vm_target_error(map));
 
 	return vm_map_copy_overwrite(map, (vm_map_address_t)address,
 		(vm_map_copy_t) data, FALSE /* interruptible XXX */);

@@ -4,6 +4,7 @@ const c = @cImport({
     @cInclude("atf-c.h");
     @cInclude("mach/mach.h");
     @cInclude("mach/mach_vm.h");
+    @cInclude("mach/vm_map.h");
     @cInclude("mach/mach_host.h");
     @cInclude("mach/ndr.h");
     @cInclude("sys/types.h");
@@ -15,7 +16,7 @@ const c = @cImport({
     @cInclude("stdio.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-const names = [_][*:0]const u8{ "self_calls", "copy_zero", "copy_overlap", "map_prototype", "map_fixed", "map_inheritance", "map_mask", "map_protection", "truthful" };
+const names = [_][*:0]const u8{ "self_calls", "copy_zero", "copy_overlap", "map_prototype", "map_fixed", "map_inheritance", "map_mask", "map_protection", "truthful", "inheritance" };
 var cases: [names.len]c.atf_tc_t = undefined;
 fn fact(name: [*:0]const u8, expected: i64, observed: i64) void {
     _ = c.printf("host_vm check=%s expected=%lld observed=%lld\n", name, @as(c_longlong, expected), @as(c_longlong, observed));
@@ -40,7 +41,37 @@ fn migAllocate() u64 {
 }
 fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
     const name = std.mem.span(c.atf_tc_get_ident(t));
-    if (std.mem.eql(u8, name, "truthful")) {
+    _ = c.printf("host_vm begin case=%s\n", c.atf_tc_get_ident(t));
+    if (std.mem.eql(u8, name, "inheritance")) {
+        for ([_]*const fn (u32, u64, u64, i32) callconv(.c) i32{ &c.mach_vm_inherit, &c.vm_inherit }) |rpc| {
+            var address: u64 = 0;
+            fact("inherit_setup", 0, c.mach_vm_allocate(c.mach_task_self(), &address, 4096, 1));
+            const bytes: *u8 = @ptrFromInt(address);
+            bytes.* = 0x58;
+            for ([_]i32{ 3, 99, 0x100 }) |invalid| fact("inherit_invalid", 4, rpc(c.mach_task_self(), address, 4096, invalid));
+            for ([_]i32{ 0, 1, 2 }) |mode| {
+                bytes.* = 0x58;
+                fact("inherit_valid", 0, rpc(c.mach_task_self(), address, 4096, mode));
+                const pid = c.fork();
+                if (pid < 0) c.atf_tc_fail("inherit fork failed");
+                if (pid == 0) {
+                    var state: u8 = 0;
+                    const present = c.mincore(@ptrFromInt(address), 4096, &state) == 0;
+                    if (present != (mode != 2)) c._exit(91);
+                    if (present) {
+                        if (bytes.* != 0x58) c._exit(92);
+                        bytes.* = 0x59;
+                    }
+                    c._exit(0);
+                }
+                var status: c_int = 0;
+                fact("inherit_child_reaped", pid, c.waitpid(pid, &status, 0));
+                fact("inherit_child_observation", 0, status);
+                fact("inherit_parent_byte", if (mode == 0) 0x59 else 0x58, bytes.*);
+            }
+            fact("inherit_cleanup", 0, c.mach_vm_deallocate(c.mach_task_self(), address, 4096));
+        }
+    } else if (std.mem.eql(u8, name, "truthful")) {
         const task = c.mach_task_self();
         var info: c.task_basic_info_data_t = undefined;
         var count: u32 = @sizeOf(c.task_basic_info_data_t) / @sizeOf(c.natural_t);
@@ -148,10 +179,20 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
         const bytes: *[4 * 4096]u8 = @ptrFromInt(address);
         for (0..4) |i| @memset(bytes[i * 4096 ..][0..4096], @as(u8, @intCast(0x11 * (i + 1))));
         const zero = std.mem.eql(u8, name, "copy_zero");
+        if (zero) fact("copy_zero_unaligned", 0, c.mach_vm_copy(c.mach_task_self(), address + 1, 0, address + 4097));
         fact("copy_result", 0, c.mach_vm_copy(c.mach_task_self(), address, if (zero) 0 else 3 * 4096, address + 4096));
         for (0..4) |i| {
             const value: u8 = @intCast(0x11 * (if (zero or i == 0) i + 1 else i));
             for (bytes[i * 4096 ..][0..4096]) |observed| if (observed != value) c.atf_tc_fail("copy page/canary differs");
+        }
+        if (!zero) {
+            bytes[0] = 1;
+            bytes[1] = 2;
+            bytes[2] = 3;
+            fact("copy_unaligned_overlap", 0, c.mach_vm_copy(c.mach_task_self(), address, 3, address + 1));
+            fact("copy_unaligned_first", 1, bytes[1]);
+            fact("copy_unaligned_second", 2, bytes[2]);
+            fact("copy_unaligned_third", 3, bytes[3]);
         }
         fact("copy_cleanup", 0, c.mach_vm_deallocate(c.mach_task_self(), address, 4 * 4096));
     } else if (std.mem.eql(u8, name, "self_calls")) {

@@ -3,10 +3,6 @@
 
 /* Module vm_map */
 
-#if !defined(__i386__) && !defined(__amd64__)
-#pragma GCC diagnostic ignored "-Wredundant-decls"
-#endif
-
 #include <sys/cdefs.h>
 #include <sys/types.h>
 #ifdef _KERNEL
@@ -45,6 +41,7 @@ typedef function_table_entry   *function_table_t;
 
 #include <sys/mach/std_types.h>
 #include <sys/mach/mig.h>
+#include <sys/mach/thread_status.h>
 #include <sys/mach/ipc_sync.h>
 #include <sys/mach/ipc/ipc_voucher.h>
 #include <sys/mach/ipc_host.h>
@@ -170,14 +167,14 @@ kern_return_t vm_inherit
 	vm_map_t target_task;
 	vm_address_t address;
 	vm_size_t size;
-	vm_inherit_t new_inheritance;
+	integer_t new_inheritance;
 { return vm_inherit(target_task, address, size, new_inheritance); }
 #else
 (
 	vm_map_t target_task,
 	vm_address_t address,
 	vm_size_t size,
-	vm_inherit_t new_inheritance
+	integer_t new_inheritance
 );
 #endif	/* defined(LINTLIBRARY) */
 
@@ -789,14 +786,14 @@ kern_return_t vm_inherit
 	vm_map_t target_task;
 	vm_address_t address;
 	vm_size_t size;
-	vm_inherit_t new_inheritance;
+	integer_t new_inheritance;
 { return vm_inherit(target_task, address, size, new_inheritance); }
 #else
 (
 	vm_map_t target_task,
 	vm_address_t address,
 	vm_size_t size,
-	vm_inherit_t new_inheritance
+	integer_t new_inheritance
 );
 #endif	/* defined(LINTLIBRARY) */
 
@@ -1411,7 +1408,7 @@ extern const struct vm_map_subsystem {
 		NDR_record_t NDR;
 		vm_address_t address;
 		vm_size_t size;
-		vm_inherit_t new_inheritance;
+		integer_t new_inheritance;
 	} __Request__vm_inherit_t;
 #ifdef  __MigPackStructs
 #pragma pack()

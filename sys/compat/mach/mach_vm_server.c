@@ -1,7 +1,7 @@
 /*
  * IDENTIFICATION:
- * stub generated Thu Jun 11 18:17:45 2015
- * with a MiG generated Thu Jun 11 16:16:11 PDT 2015 by kmacy@serenity
+ * stub generated Fri Oct  9 15:02:16 2026
+ * with a MiG generated Tue Sep 22 19:11:28 NZST 2026 by me@bdw-fx15-x64z
  * OPTIONS: 
  *	KernelServer
  */
@@ -32,6 +32,7 @@
 
 #include <sys/mach/std_types.h>
 #include <sys/mach/mig.h>
+#include <sys/mach/thread_status.h>
 #include <sys/mach/ipc_sync.h>
 #include <sys/mach/ipc/ipc_voucher.h>
 #include <sys/mach/ipc_host.h>
@@ -156,7 +157,7 @@
 		NDR_record_t NDR;
 		mach_vm_address_t address;
 		mach_vm_size_t size;
-		vm_inherit_t new_inheritance;
+		integer_t new_inheritance;
 	} __Request__mach_vm_inherit_t;
 #ifdef  __MigPackStructs
 #pragma pack()
@@ -893,14 +894,14 @@ kern_return_t mach_vm_inherit
 	vm_map_t target_task;
 	mach_vm_address_t address;
 	mach_vm_size_t size;
-	vm_inherit_t new_inheritance;
+	integer_t new_inheritance;
 { return mach_vm_inherit(target_task, address, size, new_inheritance); }
 #else
 (
 	vm_map_t target_task,
 	mach_vm_address_t address,
 	mach_vm_size_t size,
-	vm_inherit_t new_inheritance
+	integer_t new_inheritance
 );
 #endif	/* defined(LINTLIBRARY) */
 
@@ -920,7 +921,7 @@ mig_internal novalue _Xmach_vm_inherit
 		NDR_record_t NDR;
 		mach_vm_address_t address;
 		mach_vm_size_t size;
-		vm_inherit_t new_inheritance;
+		integer_t new_inheritance;
 		mach_msg_trailer_t trailer;
 	} Request;
 #ifdef  __MigPackStructs

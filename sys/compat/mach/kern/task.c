@@ -664,7 +664,8 @@ task_info(
 	basic.system_time.microseconds = usage.ru_stime.tv_usec;
 	task_lock(task);
 	basic.policy = task->policy;
-	basic.suspend_count = task->user_stop_count;
+	/* There is no implemented Mach suspension state in this task. */
+	basic.suspend_count = 0;
 	task_unlock(task);
 	memcpy(task_info_out, &basic, sizeof(basic));
 	*task_info_count = TASK_BASIC_INFO_COUNT;
