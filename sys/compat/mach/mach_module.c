@@ -96,7 +96,10 @@ sysctl_mach_current_task_space_stats(SYSCTL_HANDLER_ARGS)
 		ipc_entry_bits_t bits;
 		mach_port_type_t type;
 
+		/* Close needs the write lock before removing the publication pin. */
+		ipc_entry_reference(entry);
 		bits = entry->ie_bits;
+		ipc_entry_put(entry);
 		type = IE_BITS_TYPE(bits);
 		if (type == MACH_PORT_TYPE_NONE)
 			continue;
@@ -166,9 +169,11 @@ sysctl_mach_current_task_port_status(SYSCTL_HANDLER_ARGS)
 	}
 
 	type = IE_BITS_TYPE(entry->ie_bits);
+	ipc_entry_reference(entry);
 	entry_refs = ipc_entry_refs(entry);
 	object = entry->ie_object;
 	if (object == IO_NULL || io_otype(object) != IOT_PORT) {
+		ipc_entry_put(entry);
 		is_read_unlock(space);
 		snprintf(buf, sizeof(buf),
 		    "status=unavailable reason=not_port name=%u type=0x%x entry_refs=%u",
@@ -188,6 +193,7 @@ sysctl_mach_current_task_port_status(SYSCTL_HANDLER_ARGS)
 	receiver_current = port->ip_receiver == space;
 	receiver_name = port->ip_receiver_name;
 	ip_unlock(port);
+	ipc_entry_put(entry);
 	is_read_unlock(space);
 
 	snprintf(buf, sizeof(buf),

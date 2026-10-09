@@ -1,4 +1,8 @@
 TESTSDIR= ${TESTSBASE}/sys/mach
+SCRIPTS+= mach_debug_sysctls_test
+mach_debug_sysctls_test: ${.CURDIR}/mach_debug_sysctls.zig ${.CURDIR}/file_message.zig
+	${ZIG} build-exe ${.CURDIR}/mach_debug_sysctls.zig ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc -lpthread \
+	    --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -femit-bin=${.TARGET}
 SCRIPTS+= mach_exec_workqueue_test
 mach_exec_workqueue_test: ${.CURDIR}/mach_exec_workqueue.zig
 	${ZIG} build-exe ${.ALLSRC} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc \
