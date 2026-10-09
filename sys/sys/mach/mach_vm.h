@@ -111,6 +111,6 @@ int
 mach_vm_map(vm_map_t map, mach_vm_address_t *address, mach_vm_size_t _size,
 			mach_vm_offset_t _mask, int _flags, mem_entry_name_port_t object __unused,
 			memory_object_offset_t offset __unused, boolean_t copy __unused,
-			vm_prot_t cur_protection, vm_prot_t max_protection, vm_inherit_t inh);
+			int cur_protection, int max_protection, vm_inherit_t inh);
 
 #endif /* MACH_VM_H_ */

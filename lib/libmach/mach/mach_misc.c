@@ -153,11 +153,29 @@ kern_return_t
 mach_vm_map(mach_vm_map_t target, mach_vm_address_t *address, mach_vm_size_t size,
 			mach_vm_offset_t mask, int flags, mem_entry_name_port_t object __unused,
 			memory_object_offset_t offset __unused, boolean_t copy __unused,
-			vm_prot_t cur_protection, vm_prot_t max_protection __unused,
-			vm_inherit_t inheritance __unused)
+			vm_prot_t cur_protection, vm_prot_t max_protection,
+			vm_inherit_t inheritance)
 {
 
-	return (_kernelrpc_mach_vm_map_trap(target, address, size, mask, flags, cur_protection));
+	mach_vm_address_t result_address = *address;
+	kern_return_t result;
+	if (((cur_protection | max_protection) & ~VM_PROT_ALL) != 0 ||
+	    (cur_protection & ~max_protection) != 0)
+		return (KERN_INVALID_ARGUMENT);
+	result = _kernelrpc_mach_vm_map_trap(target, &result_address, size,
+	    mask, flags, cur_protection);
+	if (result != KERN_SUCCESS)
+		return (result);
+	result = mach_vm_protect(target, result_address, size, TRUE,
+	    max_protection);
+	if (result == KERN_SUCCESS)
+		result = mach_vm_inherit(target, result_address, size, inheritance);
+	if (result != KERN_SUCCESS) {
+		(void)mach_vm_deallocate(target, result_address, size);
+		return (result);
+	}
+	*address = result_address;
+	return (KERN_SUCCESS);
 }
 
 kern_return_t

@@ -157,55 +157,49 @@ mach_vm_target_error(vm_map_t map)
 
 int
 mach_vm_map(vm_map_t map, mach_vm_address_t *address, mach_vm_size_t _size,
-			mach_vm_offset_t _mask, int _flags, mem_entry_name_port_t object __unused,
-			memory_object_offset_t offset __unused, boolean_t copy __unused,
-			vm_prot_t cur_protection, vm_prot_t max_protection, vm_inherit_t inh)
+    mach_vm_offset_t mask, int flags, mem_entry_name_port_t object __unused,
+    memory_object_offset_t offset __unused, boolean_t copy __unused,
+    int cur_protection, int max_protection, vm_inherit_t inh)
 {
-	vm_offset_t addr = 0;
-	size_t size;
-	int docow, error, find_space;
+	vm_offset_t addr;
+	vm_size_t size = round_page(_size);
+	int alignment = 0, find_space, result;
+	uint64_t value;
+
 	if (!mach_vm_current(map))
 		return (mach_vm_target_error(map));
-
-	/* XXX Darwin fails on mapping a page at address 0 */
-	if ((_flags & VM_FLAGS_ANYWHERE) == 0 && *address == 0)
-		return (KERN_NO_SPACE);
-
-	size = round_page(_size);
-	docow = error = 0;
-
-	if (!(_mask & (_mask + 1)) && _mask != 0)
-		_mask++;
-
-	find_space = _mask ? VMFS_ALIGNED_SPACE(ffs(_mask)) : VMFS_ANY_SPACE;
-	if ((_flags & VM_FLAGS_ANYWHERE) == 0) {
-		addr = trunc_page(*address);
-	} else
+	if (((cur_protection | max_protection) & ~VM_PROT_ALL) != 0 ||
+	    (cur_protection & ~max_protection) != 0 || size < _size ||
+	    inh > VM_INHERIT_NONE)
+		return (KERN_INVALID_ARGUMENT);
+	if (mask == UINT64_MAX || (mask & (mask + 1)) != 0)
+		return (KERN_INVALID_ARGUMENT);
+	for (value = mask + 1; value > 1; value >>= 1)
+		alignment++;
+	if ((flags & VM_FLAGS_ANYWHERE) != 0) {
 		addr = 0;
-
-	switch(inh) {
-	case VM_INHERIT_SHARE:
-		break;
-	case VM_INHERIT_COPY:
-		docow = MAP_COPY_ON_WRITE;
-		break;
-	case VM_INHERIT_NONE:
-		break;
-	case VM_INHERIT_DONATE_COPY:
-	default:
-		uprintf("mach_vm_map: unsupported inheritance flag %d\n", inh);
-		break;
+		find_space = mask == 0 ? VMFS_ANY_SPACE :
+		    VMFS_ALIGNED_SPACE(alignment);
+	} else {
+		addr = *address;
+		if (addr == 0)
+			return (KERN_NO_SPACE);
+		if ((addr & PAGE_MASK) != 0 || (addr & mask) != 0)
+			return (KERN_INVALID_ARGUMENT);
+		find_space = VMFS_NO_SPACE;
 	}
-
-	if (vm_map_find(map, NULL, 0, &addr, size, 0, find_space,
-	    cur_protection, max_protection, docow) != KERN_SUCCESS) {
-		error = ENOMEM;
-		goto done;
+	result = vm_map_find(map, NULL, 0, &addr, size, 0, find_space,
+	    cur_protection, max_protection,
+	    inh == VM_INHERIT_SHARE ? MAP_INHERIT_SHARE : 0);
+	if (result != KERN_SUCCESS)
+		return (result);
+	result = vm_map_inherit(map, addr, addr + size, inh);
+	if (result != KERN_SUCCESS) {
+		(void)mach_vm_deallocate(map, addr, size);
+		return (result);
 	}
-
 	*address = addr;
-done:
-	return (mach_vm_errno(error));
+	return (KERN_SUCCESS);
 }
 
 int

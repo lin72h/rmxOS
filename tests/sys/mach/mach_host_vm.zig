@@ -14,7 +14,7 @@ const c = @cImport({
     @cInclude("stdio.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-const names = [_][*:0]const u8{ "self_calls", "copy_zero", "copy_overlap", "map_prototype" };
+const names = [_][*:0]const u8{ "self_calls", "copy_zero", "copy_overlap", "map_prototype", "map_fixed", "map_inheritance", "map_mask", "map_protection" };
 var cases: [names.len]c.atf_tc_t = undefined;
 fn fact(name: [*:0]const u8, expected: i64, observed: i64) void {
     _ = c.printf("host_vm check=%s expected=%lld observed=%lld\n", name, @as(c_longlong, expected), @as(c_longlong, observed));
@@ -39,7 +39,55 @@ fn migAllocate() u64 {
 }
 fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
     const name = std.mem.span(c.atf_tc_get_ident(t));
-    if (std.mem.eql(u8, name, "map_prototype")) {
+    if (std.mem.eql(u8, name, "map_fixed")) {
+        var address: u64 = 0;
+        fact("fixed_setup", 0, c.mach_vm_allocate(c.mach_task_self(), &address, 4096, 1));
+        const bytes: *[4096]u8 = @ptrFromInt(address);
+        bytes[0] = 0x58;
+        var requested = address;
+        fact("fixed_occupied", 3, c.mach_vm_map(c.mach_task_self(), &requested, 4096, 0, 0, 0, 0, 0, 3, 7, 2));
+        fact("fixed_occupied_address", @intCast(address), @intCast(requested));
+        fact("fixed_occupied_data", 0x58, bytes[0]);
+        fact("fixed_free_page", 0, c.mach_vm_deallocate(c.mach_task_self(), address, 4096));
+        fact("fixed_free", 0, c.mach_vm_map(c.mach_task_self(), &requested, 4096, 0, 0, 0, 0, 0, 3, 7, 2));
+        fact("fixed_exact_address", @intCast(address), @intCast(requested));
+        fact("fixed_cleanup", 0, c.mach_vm_deallocate(c.mach_task_self(), address, 4096));
+    } else if (std.mem.eql(u8, name, "map_inheritance")) {
+        var none: u64 = 0;
+        var share: u64 = 0;
+        fact("map_none", 0, c.mach_vm_map(c.mach_task_self(), &none, 4096, 0, 1, 0, 0, 0, 3, 7, 2));
+        fact("map_share", 0, c.mach_vm_map(c.mach_task_self(), &share, 4096, 0, 1, 0, 0, 0, 3, 7, 0));
+        const bytes: *u8 = @ptrFromInt(share);
+        bytes.* = 0x58;
+        const pid = c.fork();
+        if (pid < 0) c.atf_tc_fail("map fork failed");
+        if (pid == 0) {
+            var state: u8 = 0;
+            if (c.mincore(@ptrFromInt(none), 4096, &state) == 0) c._exit(91);
+            bytes.* = 0x59;
+            c._exit(0);
+        }
+        var status: c_int = 0;
+        fact("map_child_reaped", pid, c.waitpid(pid, &status, 0));
+        fact("map_none_child_absent", 0, status);
+        fact("map_shared_child_write", 0x59, bytes.*);
+        fact("map_none_cleanup", 0, c.mach_vm_deallocate(c.mach_task_self(), none, 4096));
+        fact("map_share_cleanup", 0, c.mach_vm_deallocate(c.mach_task_self(), share, 4096));
+    } else if (std.mem.eql(u8, name, "map_mask")) {
+        var address: u64 = 0;
+        fact("map_mask_32", 0, c.mach_vm_map(c.mach_task_self(), &address, 4096, 0xffffffff, 1, 0, 0, 0, 3, 7, 2));
+        fact("map_mask_aligned", 0, @intCast(address & 0xffffffff));
+        fact("map_mask_cleanup", 0, c.mach_vm_deallocate(c.mach_task_self(), address, 4096));
+        address = 0;
+        fact("map_unrepresentable_mask", 4, c.mach_vm_map(c.mach_task_self(), &address, 4096, 0xffffffffffffffff, 1, 0, 0, 0, 3, 7, 2));
+        fact("map_mask_failure_address", 0, @intCast(address));
+    } else if (std.mem.eql(u8, name, "map_protection")) {
+        var address: u64 = 0;
+        fact("map_full_protection", 4, c.syscall(c.SYS__kernelrpc_mach_vm_map_trap, @as(u32, 0), &address, @as(u64, 4096), @as(u64, 0), @as(c_int, 1), @as(c_int, 0x103)));
+        fact("map_invalid_protection_address", 0, @intCast(address));
+        fact("map_invalid_maximum", 4, c.mach_vm_map(c.mach_task_self(), &address, 4096, 0, 1, 0, 0, 0, 3, 0x80, 2));
+        fact("map_invalid_maximum_address", 0, @intCast(address));
+    } else if (std.mem.eql(u8, name, "map_prototype")) {
         var address: u64 = 0;
         fact("map_size_then_mask", 0, c.mach_vm_map(c.mach_task_self(), &address, 8192, 0, 1, 0, 0, 0, 3, 7, 2));
         var state: u8 = 0;

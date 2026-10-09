@@ -436,6 +436,8 @@ sys__kernelrpc_mach_vm_map_trap(struct thread *td, struct _kernelrpc_mach_vm_map
 
 	if ((error = copyin(uap->address, &addr, sizeof(addr))) != 0)
 		return (mach_trap_return(td, KERN_INVALID_ADDRESS));
+	if ((uap->cur_protection & ~VM_PROT_ALL) != 0)
+		return (mach_trap_return(td, KERN_INVALID_ARGUMENT));
 	error = mach_vm_map(&curthread->td_proc->p_vmspace->vm_map, &addr, uap->size, uap->mask, uap->flags, NULL, 0, 0, uap->cur_protection,
 						VM_PROT_ALL, VM_INHERIT_NONE);
 	if (error)
