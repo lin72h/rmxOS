@@ -175,6 +175,9 @@ ref_pset_port_locked(
 void ipc_host_init(void)
 {
 	ipc_port_t	port;
+	mtx_init(&realhost.lock, "Mach host", NULL, MTX_DEF);
+	mtx_init(&default_pset.lock, "Mach default pset", NULL, MTX_DEF);
+	default_pset.active = TRUE;
 	/*
 	 *	Allocate and set up the two host ports.
 	 */

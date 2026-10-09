@@ -110,6 +110,7 @@
 #include <sys/types.h>
 #include <sys/syslog.h>
 #include <sys/mach/mach_types.h>
+#include <vm/vm_extern.h>
 #include <sys/mach/kern_return.h>
 #include <sys/mach/mach_param.h>
 #include <sys/mach/task_special_ports.h>
@@ -649,8 +650,9 @@ task_get_special_port(
 		break;
 
 	    case TASK_NAME_PORT:
-		port = ipc_port_make_send(task->itk_nself);
-		break;
+		*portp = IP_NULL;
+		itk_unlock(task);
+		return (KERN_NOT_SUPPORTED);
 
 	    case TASK_HOST_PORT:
 		port = ipc_port_copy_send(task->itk_host);
@@ -1144,6 +1146,13 @@ ref_space_port_locked( ipc_port_t port, ipc_space_t *pspace )
 /* Identity-only token: foreign maps are never accessed by the wrappers. */
 static struct vm_map mach_unsupported_map;
 
+void
+mach_vm_map_deallocate(vm_map_t map)
+{
+	if (map != VM_MAP_NULL && map != &mach_unsupported_map)
+		vmspace_free(__containerof(map, struct vmspace, vm_map));
+}
+
 vm_map_t
 convert_port_to_map(
 	ipc_port_t	port)
@@ -1160,7 +1169,7 @@ convert_port_to_map(
 		return (&mach_unsupported_map);
 	}
 
-	map = &task->itk_p->p_vmspace->vm_map;
+	map = &vmspace_acquire_ref(curproc)->vm_map;
 	task_deallocate(task);
 	return (map);
 }

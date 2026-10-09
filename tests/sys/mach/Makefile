@@ -70,3 +70,9 @@ mach_child_setters_test: ${.CURDIR}/mach_child_setters.zig
 	${ZIG} build-exe ${.ALLSRC} ${MACH_SO} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc -lpthread \
 	    --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf \
 	    -I${SRCTOP}/sys -femit-bin=${.TARGET}
+
+SCRIPTS+= mach_host_vm_test
+mach_host_vm_test: ${.CURDIR}/mach_host_vm.zig
+	${ZIG} build-exe ${.ALLSRC} ${MACH_SO} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc \
+	    --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf \
+	    -I${SRCTOP}/sys -femit-bin=${.TARGET}

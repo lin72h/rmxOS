@@ -152,7 +152,8 @@ extern int mach_debug_enable;
 #endif
 /* drop reference */
 #define vm_map_copyin_page_list(map, addr, length, options, etc0, etc1) 0
-#define vm_map_deallocate(map)
+extern void mach_vm_map_deallocate(vm_map_t map);
+#define vm_map_deallocate(map) mach_vm_map_deallocate(map)
 #define vm_object_pager_wakeup(map)
 #define ds_notify(map) 0
 #define ds_master_notify(map) 0
