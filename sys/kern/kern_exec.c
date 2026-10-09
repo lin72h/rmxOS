@@ -317,8 +317,6 @@ pre_execve(struct thread *td, struct vmspace **oldvmspace)
 	}
 	KASSERT(error != 0 || (td->td_pflags & TDP_EXECVMSPC) == 0,
 	    ("nested execve"));
-	if (error == 0)
-		twq_proc_exec(p);
 	*oldvmspace = p->p_vmspace;
 	return (error);
 }
@@ -1273,6 +1271,8 @@ exec_new_vmspace(struct image_params *imgp, struct sysentvec *sv)
 
 	imgp->vmspace_destroyed = true;
 	imgp->sysent = sv;
+	/* Failures from here terminate the process; failed exec keeps its workqueue. */
+	twq_proc_exec(p);
 
 	if (p->p_sysent->sv_onexec_old != NULL)
 		p->p_sysent->sv_onexec_old(td);

@@ -1,4 +1,8 @@
 TESTSDIR= ${TESTSBASE}/sys/mach
+SCRIPTS+= mach_exec_workqueue_test
+mach_exec_workqueue_test: ${.CURDIR}/mach_exec_workqueue.zig
+	${ZIG} build-exe ${.ALLSRC} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc \
+	    --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -femit-bin=${.TARGET}
 KYUAFILE= yes
 SCRIPTS+= mach_fileops_test mach_swtch_test mach_short_kevent_test mach_dead_name_test mach_named_pset_test mach_translate_test mach_file_lifetime_test mach_passable_test mach_proc_info_test mach_filecaps_test mach_timeout_test mach_clock_test mach_timebase_test
 SCRIPTSDIR= ${TESTSDIR}
