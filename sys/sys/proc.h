@@ -387,10 +387,6 @@ struct thread {
 	int		td_ma_cnt;	/* (k) size of *td_ma */
 	/* LP64 hole */
 	void		*td_emuldata;	/* Emulator state data */
-#ifdef COMPAT_MACH
-	void		*td_machdata;	/* (k) Mach state data. */
-#endif
-	struct twq_thread *td_twq;	/* (k) pthread_workqueue thread state */
 	int		td_lastcpu;	/* (t) Last cpu we were on. */
 	int		td_oncpu;	/* (t) Which cpu we are on. */
 	void		*td_lkpi_task;	/* LinuxKPI task struct pointer */
@@ -400,6 +396,10 @@ struct thread {
 #ifdef EPOCH_TRACE
 	SLIST_HEAD(, epoch_tracker) td_epochs;
 #endif
+#ifdef COMPAT_MACH
+	void		*td_machdata;	/* (k) Mach state data. */
+#endif
+	struct twq_thread *td_twq;	/* (k) pthread_workqueue thread state */
 };
 
 struct thread0_storage {
@@ -787,14 +787,14 @@ struct proc {
 
 	TAILQ_HEAD(, kq_timer_cb_data)	p_kqtim_stop;	/* (c) */
 	LIST_ENTRY(proc) p_jaillist;	/* (d) Jail process linkage. */
-#ifdef COMPAT_MACH
-	void		*p_machdata;	/* (c) Mach state data. */
-#endif
-	struct twq_proc	*p_twq;		/* (k) pthread_workqueue proc state */
 	u_int		p_asig;		/* (c) ASYNCEXIT pending signal. */
 	u_int		p_tree_refcnt;	/* (e) proctree refcount */
 	u_int		p_execblock;	/* (c) Blockers for execve. */
 	u_int		p_zombieref;	/* (e) References for reap. */
+#ifdef COMPAT_MACH
+	void		*p_machdata;	/* (c) Mach state data. */
+#endif
+	struct twq_proc	*p_twq;		/* (k) pthread_workqueue proc state */
 };
 
 #define	p_session	p_pgrp->pg_session

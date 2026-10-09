@@ -74,11 +74,9 @@ struct nameidata;
 #define	DTYPE_INOTIFY	15	/* inotify descriptor */
 #define	DTYPE_JAILDESC	16	/* jail descriptor */
 #ifdef COMPAT_MACH
-#define	DTYPE_MACH_IPC	17	/* Mach port or port set */
-#define	DTYPE_NTSYNC	18	/* /dev/ntsync */
-#else
-#define	DTYPE_NTSYNC	17	/* /dev/ntsync */
+#define	DTYPE_MACH_IPC	18	/* Mach port or port set */
 #endif
+#define	DTYPE_NTSYNC	17	/* /dev/ntsync */
 
 #ifdef _KERNEL
 

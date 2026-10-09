@@ -39,6 +39,7 @@
 #include <sys/msan.h>
 #include <sys/mutex.h>
 #include <sys/proc.h>
+#include <sys/file.h>
 #include <sys/bitstring.h>
 #include <sys/epoch.h>
 #include <sys/rangelock.h>
@@ -94,6 +95,16 @@ _Static_assert(offsetof(struct thread, td_frame) == 0x4e8,
     "struct thread KBI td_frame");
 _Static_assert(offsetof(struct thread, td_emuldata) == 0x700,
     "struct thread KBI td_emuldata");
+_Static_assert(offsetof(struct thread, td_lastcpu) == 0x708,
+    "stock FreeBSD 15 thread KBI td_lastcpu");
+_Static_assert(offsetof(struct thread, td_lkpi_task) == 0x710,
+    "stock FreeBSD 15 thread KBI td_lkpi_task");
+_Static_assert(offsetof(struct thread, td_ktr_io_lim) == 0x728,
+    "stock FreeBSD 15 thread KBI td_ktr_io_lim");
+#ifdef EPOCH_TRACE
+_Static_assert(offsetof(struct thread, td_epochs) == 0x730,
+    "stock FreeBSD 15 thread KBI td_epochs");
+#endif
 _Static_assert(offsetof(struct proc, p_flag) == 0xb8,
     "struct proc KBI p_flag");
 _Static_assert(offsetof(struct proc, p_pid) == 0xc4,
@@ -104,6 +115,11 @@ _Static_assert(offsetof(struct proc, p_comm) == 0x3e0,
     "struct proc KBI p_comm");
 _Static_assert(offsetof(struct proc, p_emuldata) == 0x4d0,
     "struct proc KBI p_emuldata");
+_Static_assert(offsetof(struct proc, p_asig) == 0x558,
+    "stock FreeBSD 15 proc KBI p_asig");
+_Static_assert(offsetof(struct proc, p_zombieref) == 0x564,
+    "stock FreeBSD 15 proc KBI p_zombieref");
+_Static_assert(DTYPE_NTSYNC == 17, "stock FreeBSD 15 DTYPE_NTSYNC");
 #endif
 #ifdef __i386__
 _Static_assert(offsetof(struct thread, td_flags) == 0x9c,
