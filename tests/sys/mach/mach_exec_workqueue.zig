@@ -12,8 +12,12 @@ extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c)
 var tc: c.atf_tc_t = undefined;
 fn body(_: [*c]const c.atf_tc_t) callconv(.c) void {
     var args = @import("std").mem.zeroes(c.struct_twq_init_args);
-    args.tqi_version = c.TWQ_INIT_VERSION;
-    if (c.syscall(c.SYS_twq_kernreturn, @as(c_int, c.TWQ_OP_INIT), &args, @as(c_int, @sizeOf(@TypeOf(args))), @as(c_int, 0)) < 0) c.atf_tc_fail("workqueue init failed");
+    args.tqi_version = c.TWQ_SPI_VERSION_CURRENT;
+    c.__error().* = 0;
+    const init_rc = c.syscall(c.SYS_twq_kernreturn, @as(c_int, c.TWQ_OP_INIT), &args, @as(c_int, @sizeOf(@TypeOf(args))), @as(c_int, 0));
+    const init_errno = c.__error().*;
+    _ = c.printf("exec_workqueue init_version=%u expected_min=0 observed_result=%d expected_errno=0 observed_errno=%d\n", @as(c_uint, args.tqi_version), init_rc, init_errno);
+    if (init_rc < 0) c.atf_tc_fail("workqueue init failed");
     var argv = [_:null]?[*:0]const u8{"missing"};
     var env = [_:null]?[*:0]const u8{};
     const exec_rc = c.execve("/op583-missing-executable", @ptrCast(&argv), @ptrCast(&env));
