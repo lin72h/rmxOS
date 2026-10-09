@@ -426,7 +426,8 @@ sys__kernelrpc_mach_vm_map_trap(struct thread *td, struct _kernelrpc_mach_vm_map
 {
 	kern_return_t target_result = mach_trap_task_target(uap->target);
 	if (target_result != KERN_SUCCESS) {
-		td->td_retval[0] = KERN_INVALID_ARGUMENT;
+		td->td_retval[0] = target_result == KERN_NOT_SUPPORTED ?
+		    KERN_NOT_SUPPORTED : KERN_INVALID_ARGUMENT;
 		return (0);
 	}
 
@@ -451,7 +452,8 @@ sys__kernelrpc_mach_vm_allocate_trap(struct thread *td, struct _kernelrpc_mach_v
 {
 	kern_return_t target_result = mach_trap_task_target(uap->target);
 	if (target_result != KERN_SUCCESS) {
-		td->td_retval[0] = KERN_INVALID_ARGUMENT;
+		td->td_retval[0] = target_result == KERN_NOT_SUPPORTED ?
+		    KERN_NOT_SUPPORTED : KERN_INVALID_ARGUMENT;
 		return (0);
 	}
 
@@ -480,7 +482,8 @@ sys__kernelrpc_mach_vm_deallocate_trap(struct thread *td, struct _kernelrpc_mach
 {
 	kern_return_t target_result = mach_trap_task_target(uap->target);
 	if (target_result != KERN_SUCCESS) {
-		td->td_retval[0] = KERN_INVALID_ARGUMENT;
+		td->td_retval[0] = target_result == KERN_NOT_SUPPORTED ?
+		    KERN_NOT_SUPPORTED : KERN_INVALID_ARGUMENT;
 		return (0);
 	}
 
@@ -495,7 +498,8 @@ sys__kernelrpc_mach_vm_protect_trap(struct thread *td, struct _kernelrpc_mach_vm
 {
 	kern_return_t target_result = mach_trap_task_target(uap->target);
 	if (target_result != KERN_SUCCESS) {
-		td->td_retval[0] = KERN_INVALID_ARGUMENT;
+		td->td_retval[0] = target_result == KERN_NOT_SUPPORTED ?
+		    KERN_NOT_SUPPORTED : KERN_INVALID_ARGUMENT;
 		return (0);
 	}
 

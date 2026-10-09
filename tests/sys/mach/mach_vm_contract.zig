@@ -95,11 +95,13 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
         var packet: fm.Message = undefined;
         if (c.syscall(c.SYS_mach_msg_trap, &packet, @as(u32, 0x102), @as(u32, 0), @as(u32, @sizeOf(fm.Message)), port, @as(u32, 1000), @as(u32, 0)) != 0) c.atf_tc_fail("child task receive failed");
         const other = packet.descriptor.name;
-        fact("foreign_protect", 4, c.mach_vm_protect(other, address, 4096, 0, 1));
-        fact("foreign_deallocate", 4, c.mach_vm_deallocate(other, address, 4096));
+        fact("foreign_protect", 46, c.mach_vm_protect(other, address, 4096, 0, 1));
+        fact("foreign_deallocate", 46, c.mach_vm_deallocate(other, address, 4096));
         var allocated: u64 = 0;
-        fact("foreign_allocate", 4, c.mach_vm_allocate(other, &allocated, 4096, 1));
-        fact("foreign_inherit", 4, c.mach_vm_inherit(other, address, 4096, 2));
+        fact("foreign_allocate", 46, c.mach_vm_allocate(other, &allocated, 4096, 1));
+        fact("foreign_inherit", 46, c.mach_vm_inherit(other, address, 4096, 2));
+        fact("foreign_allocate_trap", 46, c.syscall(c.SYS__kernelrpc_mach_vm_allocate_trap, other, &allocated, @as(u64, 4096), @as(c_int, 1)));
+        fact("non_task_allocate_trap", 4, c.syscall(c.SYS__kernelrpc_mach_vm_allocate_trap, port, &allocated, @as(u64, 4096), @as(c_int, 1)));
         bytes[0] = 0x59; // Still mapped and writable in the caller.
         fact("caller_mapping_preserved", 0x59, bytes[0]);
         _ = c.kill(child, c.SIGKILL);

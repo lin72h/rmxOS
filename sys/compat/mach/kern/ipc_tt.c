@@ -1141,6 +1141,9 @@ ref_space_port_locked( ipc_port_t port, ipc_space_t *pspace )
  *		Nothing locked.
  */
 
+/* Identity-only token: foreign maps are never accessed by the wrappers. */
+static struct vm_map mach_unsupported_map;
+
 vm_map_t
 convert_port_to_map(
 	ipc_port_t	port)
@@ -1154,7 +1157,7 @@ convert_port_to_map(
 		return VM_MAP_NULL;
 	if (task != current_task()) {
 		task_deallocate(task);
-		return (VM_MAP_NULL);
+		return (&mach_unsupported_map);
 	}
 
 	map = &task->itk_p->p_vmspace->vm_map;
