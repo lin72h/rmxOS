@@ -18,6 +18,18 @@ const c = @cImport({
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 const names = [_][*:0]const u8{ "self_calls", "copy_zero", "copy_overlap", "map_prototype", "map_fixed", "map_inheritance", "map_mask", "map_protection", "truthful", "inheritance" };
 var cases: [names.len]c.atf_tc_t = undefined;
+// task_info.h uses #pragma pack(4); translate-c loses that packing here.
+const BasicInfo = extern struct {
+    suspend_count: c.integer_t,
+    virtual_size: c.vm_size_t align(4),
+    resident_size: c.vm_size_t align(4),
+    user_time: c.time_value_t,
+    system_time: c.time_value_t,
+    policy: c.policy_t,
+};
+comptime {
+    if (@sizeOf(BasicInfo) != 40 or @offsetOf(BasicInfo, "virtual_size") != 4 or @offsetOf(BasicInfo, "policy") != 36) @compileError("task basic info wire layout differs");
+}
 fn fact(name: [*:0]const u8, expected: i64, observed: i64) void {
     _ = c.printf("host_vm check=%s expected=%lld observed=%lld\n", name, @as(c_longlong, expected), @as(c_longlong, observed));
     if (expected != observed) c.atf_tc_fail("host/task/VM observations differ");
@@ -73,10 +85,10 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
         }
     } else if (std.mem.eql(u8, name, "truthful")) {
         const task = c.mach_task_self();
-        var info: c.task_basic_info_data_t = undefined;
-        var count: u32 = @sizeOf(c.task_basic_info_data_t) / @sizeOf(c.natural_t);
+        var info: BasicInfo = undefined;
+        var count: u32 = @sizeOf(BasicInfo) / @sizeOf(c.natural_t);
         fact("task_basic_info", 0, c.task_info(task, c.TASK_BASIC_INFO, @ptrCast(&info), &count));
-        fact("task_basic_count", @sizeOf(c.task_basic_info_data_t) / @sizeOf(c.natural_t), count);
+        fact("task_basic_count", @sizeOf(BasicInfo) / @sizeOf(c.natural_t), count);
         fact("task_virtual_nonzero", 1, @intFromBool(info.virtual_size > 0));
         fact("task_resident_nonzero", 1, @intFromBool(info.resident_size > 0));
         fact("task_resident_within_virtual", 1, @intFromBool(info.resident_size <= info.virtual_size));
@@ -93,7 +105,7 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
             fact("task_threads_unsupported", 46, c.task_threads(task, &list, &threads));
             fact("task_threads_empty", 1, @intFromBool(list == null and threads == 0));
         }
-        count = @sizeOf(c.task_basic_info_data_t) / @sizeOf(c.natural_t);
+        count = @sizeOf(BasicInfo) / @sizeOf(c.natural_t);
         fact("task_basic_info_after", 0, c.task_info(task, c.TASK_BASIC_INFO, @ptrCast(&info), &count));
         fact("unsupported_no_mapping_leak", @intCast(before_size), @intCast(info.virtual_size));
         var address: u64 = 0;
@@ -103,7 +115,7 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
         var before: c.struct_rusage = undefined;
         var after: c.struct_rusage = undefined;
         fact("rusage_before", 0, c.getrusage(c.RUSAGE_SELF, &before));
-        count = @sizeOf(c.task_basic_info_data_t) / @sizeOf(c.natural_t);
+        count = @sizeOf(BasicInfo) / @sizeOf(c.natural_t);
         fact("task_basic_mapping", 0, c.task_info(task, c.TASK_BASIC_INFO, @ptrCast(&info), &count));
         fact("rusage_after", 0, c.getrusage(c.RUSAGE_SELF, &after));
         fact("task_virtual_delta", 8192, @intCast(info.virtual_size - before_size));
@@ -112,9 +124,9 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
         fact("task_user_rusage_bounds", 1, @intFromBool(user >= before.ru_utime.tv_sec * 1000000 + before.ru_utime.tv_usec and user <= after.ru_utime.tv_sec * 1000000 + after.ru_utime.tv_usec));
         fact("task_system_rusage_bounds", 1, @intFromBool(system >= before.ru_stime.tv_sec * 1000000 + before.ru_stime.tv_usec and system <= after.ru_stime.tv_sec * 1000000 + after.ru_stime.tv_usec));
         fact("task_info_mapping_cleanup", 0, c.mach_vm_deallocate(task, address, 8192));
-        count = @sizeOf(c.task_basic_info_data_t) / @sizeOf(c.natural_t);
+        count = @sizeOf(BasicInfo) / @sizeOf(c.natural_t);
         fact("task_info_unknown", 4, c.task_info(task, 99999, @ptrCast(&info), &count));
-        count = @sizeOf(c.task_basic_info_data_t) / @sizeOf(c.natural_t);
+        count = @sizeOf(BasicInfo) / @sizeOf(c.natural_t);
         fact("task_times_unsupported", 46, c.task_info(task, c.TASK_THREAD_TIMES_INFO, @ptrCast(&info), &count));
     } else if (std.mem.eql(u8, name, "map_fixed")) {
         var address: u64 = 0;
