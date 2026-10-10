@@ -1690,7 +1690,7 @@ ipc_kmsg_copyin_ool_ports_descriptor(
 	}
 
 	if (dsc->deallocate) {
-		(void) mach_vm_deallocate(map, addr, plength);
+		(void) mach_vm_deallocate(map, addr, pnlength);
 	}
 
 	dsc->address = (void *) data;

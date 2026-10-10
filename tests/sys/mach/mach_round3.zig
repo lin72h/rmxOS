@@ -13,7 +13,7 @@ const c = @cImport({
     @cInclude("stdio.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-const names = [_][*:0]const u8{"headroom"};
+const names = [_][*:0]const u8{ "headroom", "ool_deallocate" };
 var cases: [names.len]c.atf_tc_t = undefined;
 fn fact(name: [*:0]const u8, expected: i64, observed: i64) void {
     _ = c.printf("round3 check=%s expected=%lld observed=%lld\n", name, @as(c_longlong, expected), @as(c_longlong, observed));
@@ -74,6 +74,39 @@ fn headroom() void {
         c.mach_msg_destroy(@ptrCast(&out));
     }
 }
+const OolPorts = extern struct { address: u64, deallocate: u8, copy: u8, disposition: u8, kind: u8, count: u32 };
+fn oolDeallocate() void {
+    const page: usize = @intCast(c.getpagesize());
+    const mapping = c.mmap(null, 2 * page, c.PROT_READ | c.PROT_WRITE, c.MAP_ANON | c.MAP_PRIVATE, -1, 0);
+    if (mapping == c.MAP_FAILED) c.atf_tc_fail("array mmap failed");
+    const bytes: [*]u8 = @ptrCast(mapping.?);
+    @memset(bytes[0..page], 0);
+    @memset(bytes[page .. 2 * page], 0x35);
+    const dest = fm.allocate();
+    sendRight(dest);
+    defer _ = c.close(@intCast(dest));
+    var msg: [44]u8 align(8) = @splat(0);
+    const h: *fm.Header = @ptrCast(&msg);
+    h.* = .{ .bits = c.MACH_MSGH_BITS_COMPLEX | c.MACH_MSG_TYPE_COPY_SEND, .size = msg.len, .remote = dest, .local = 0, .voucher = 0, .id = 61702 };
+    @as(*u32, @ptrCast(@alignCast(msg[24..].ptr))).* = 1;
+    const d: *align(1) OolPorts = @ptrCast(msg[28..].ptr);
+    d.* = .{ .address = @intFromPtr(bytes), .deallocate = 1, .copy = c.MACH_MSG_VIRTUAL_COPY, .disposition = c.MACH_MSG_TYPE_COPY_SEND, .kind = c.MACH_MSG_OOL_PORTS_DESCRIPTOR, .count = @intCast(page / 4) };
+    fact("ool_send", 0, send(&msg));
+    var vec: u8 = 0;
+    fact("sender_array_unmapped", -1, c.mincore(mapping, page, &vec));
+    fact("following_page_mapped", 0, c.mincore(bytes + page, page, &vec));
+    var unchanged: usize = 0;
+    for (bytes[page .. 2 * page]) |byte| unchanged += @intFromBool(byte == 0x35);
+    fact("following_page_canary", @intCast(page), @intCast(unchanged));
+    var out: [256]u8 align(8) = @splat(0);
+    fact("ool_receive", 0, receive(dest, &out));
+    const rd: *align(1) OolPorts = @ptrCast(out[28..].ptr);
+    fact("ool_count", @intCast(page / 4), rd.count);
+    const received: [*]const u32 = @ptrFromInt(rd.address);
+    for (received[0..rd.count]) |name| if (name != 0) c.atf_tc_fail("null array changed");
+    c.mach_msg_destroy(@ptrCast(&out));
+    fact("following_page_cleanup", 0, c.munmap(bytes + page, page));
+}
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "require.user", "%s", "root");
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "25");
@@ -86,7 +119,8 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
     const module = c.kldload(&path);
     if (module < 0) c.atf_tc_fail("fixture load failed");
     defer _ = c.kldunload(module);
-    headroom();
+    const name = std.mem.span(c.atf_tc_get_ident(t));
+    if (std.mem.eql(u8, name, "ool_deallocate")) oolDeallocate() else headroom();
 }
 fn cleanup(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const module = c.kldfind("rmx_translate_fixture.ko");
