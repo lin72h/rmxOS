@@ -13,7 +13,7 @@ const c = @cImport({
     @cInclude("stdio.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-const names = [_][*:0]const u8{ "reply_send", "terminate" };
+const names = [_][*:0]const u8{ "reply_send", "terminate", "file_insert" };
 var cases: [names.len]c.atf_tc_t = undefined;
 fn fact(name: [*:0]const u8, expected: i64, observed: i64) void {
     _ = c.printf("round2 check=%s expected=%lld observed=%lld\n", name, @as(c_longlong, expected), @as(c_longlong, observed));
@@ -74,6 +74,37 @@ fn replySend() void {
     _ = c.close(@intCast(other));
     _ = c.close(@intCast(channel));
 }
+// Native kinfo_file prefix; records have a variable-length trailing pathname.
+const FilePrefix = extern struct { size: c_int, kind: c_int, fd: c_int, refs: c_int };
+fn fileRefs(fd: c_int) i32 {
+    var mib = [_]c_int{ c.CTL_KERN, c.KERN_PROC, c.KERN_PROC_FILEDESC, c.getpid() };
+    var buf: [65536]u8 align(8) = undefined;
+    var len: usize = buf.len;
+    fact("file_snapshot", 0, c.sysctl(&mib, mib.len, &buf, &len, null, 0));
+    var offset: usize = 0;
+    while (offset + @sizeOf(FilePrefix) <= len) {
+        const p: *align(1) const FilePrefix = @ptrCast(buf[offset..].ptr);
+        if (p.size < @sizeOf(FilePrefix) or @as(usize, @intCast(p.size)) > len - offset) c.atf_tc_fail("invalid file snapshot record");
+        if (p.fd == fd) return p.refs;
+        offset += @intCast(p.size);
+    }
+    c.atf_tc_fail("file missing from snapshot");
+}
+fn fileInsert() void {
+    const task = c.mach_task_self();
+    var pipe: [2]c_int = undefined;
+    fact("pipe_setup", 0, c.pipe(&pipe));
+    const before = fileRefs(pipe[1]);
+    const requested: u32 = 4096;
+    fact("file_named_unsupported", 46, c.mach_port_insert_right(task, requested, @intCast(pipe[1]), c.MACH_MSG_TYPE_COPY_SEND));
+    var kind: u32 = 0;
+    fact("file_no_space_entry", 15, c.mach_port_type(task, requested, &kind));
+    fact("file_references_unchanged", before, fileRefs(pipe[1]));
+    fact("pipe_writer_close", 0, c.close(pipe[1]));
+    var byte: u8 = 0;
+    fact("pipe_no_retained_writer", 0, c.read(pipe[0], &byte, 1));
+    _ = c.close(pipe[0]);
+}
 fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
     const name = std.mem.span(c.atf_tc_get_ident(t));
     if (std.mem.eql(u8, name, "terminate")) {
@@ -83,7 +114,7 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
         var port: u32 = 0;
         fact("task_still_usable", 0, c.mach_port_allocate(c.mach_task_self(), c.MACH_PORT_RIGHT_RECEIVE, &port));
         fact("task_cleanup", 0, c.close(@intCast(port)));
-    } else replySend();
+    } else if (std.mem.eql(u8, name, "file_insert")) fileInsert() else replySend();
 }
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     for (names, 0..) |name, i| {

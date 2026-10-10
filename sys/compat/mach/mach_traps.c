@@ -320,6 +320,9 @@ sys__kernelrpc_mach_port_insert_right_trap(struct thread *td, struct _kernelrpc_
 		goto done;
 	disp = ipc_object_copyin_type(uap->polyPoly);
 	rv = mach_port_insert_right(space, uap->name, port, disp);
+	/* Failed named copyout leaves the file-context input with its caller. */
+	if (rv != KERN_SUCCESS && (port->ip_flags & IP_CONTEXT_FILE))
+		ipc_object_destroy((ipc_object_t)port, disp);
 done:
 	td->td_retval[0] = rv;
 	return (0);

@@ -747,6 +747,10 @@ ipc_object_copyout_name(
 	assert(IO_VALID(object));
 	assert(io_otype(object) == IOT_PORT);
 
+	/* File descriptors cannot be installed at an arbitrary Mach name. */
+	if (((ipc_port_t)object)->ip_flags & IP_CONTEXT_FILE)
+		return KERN_NOT_SUPPORTED;
+
 	kr = ipc_entry_alloc_name(space, name, &entry);
 	if (kr != KERN_SUCCESS)
 		return kr;
