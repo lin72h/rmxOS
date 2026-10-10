@@ -1301,9 +1301,6 @@ ipc_right_copyin_check(
 
 		if (port == NULL)
 			return (FALSE);
-		if (port->ip_receiver != space)
-			return (FALSE);
-
 		if ((bits & MACH_PORT_TYPE_SEND_RIGHTS) == 0)
 			return FALSE;
 

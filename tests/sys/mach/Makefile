@@ -76,3 +76,9 @@ mach_host_vm_test: ${.CURDIR}/mach_host_vm.zig
 	${ZIG} build-exe ${.ALLSRC} ${MACH_SO} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc \
 	    --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf \
 	    -I${SRCTOP}/sys -femit-bin=${.TARGET}
+
+SCRIPTS+= mach_round2_test
+mach_round2_test: ${.CURDIR}/mach_round2.zig ${.CURDIR}/file_message.zig
+	${ZIG} build-exe ${.CURDIR}/mach_round2.zig ${MACH_SO} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc \
+	    --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf \
+	    -I${SRCTOP}/sys -femit-bin=${.TARGET}

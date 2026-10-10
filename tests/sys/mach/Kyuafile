@@ -27,3 +27,4 @@ atf_test_program{name="mach_debug_sysctls_test"}
 atf_test_program{name="mach_vm_contract_test"}
 
 atf_test_program{name="mach_host_vm_test"}
+atf_test_program{name="mach_round2_test"}
