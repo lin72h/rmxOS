@@ -46,6 +46,28 @@ extern fn rmx_fixture_dealloc_kernel(*anyopaque) void;
 extern fn ipc_port_make_send(*anyopaque) ?*anyopaque;
 extern fn rmx_fixture_port_hold(*anyopaque) void;
 extern fn rmx_fixture_port_drop(*anyopaque) void;
+extern fn rmx_fixture_port_refs(*anyopaque) u32;
+const ReplyWatch = extern struct { command: u32, name: u32 };
+const ReplyRefs = extern struct { refs: u32, active: u32 };
+var watched_reply: ?*anyopaque = null;
+export fn rmx_reply_refs(control: *const ReplyWatch, out: *ReplyRefs) c_int {
+    out.* = .{ .refs = 0, .active = 0 };
+    if (control.command == 0) {
+        if (watched_reply != null) return 16;
+        const entry = rmx_fixture_entry(control.name) orelse return 2;
+        const port = rmx_fixture_object(entry) orelse return 2;
+        rmx_fixture_port_hold(port);
+        watched_reply = port;
+    } else if (control.command == 2) {
+        if (watched_reply) |port| rmx_fixture_port_drop(port);
+        watched_reply = null;
+        return 0;
+    }
+    const port = watched_reply orelse return 2;
+    out.refs = rmx_fixture_port_refs(port);
+    out.active = @intCast(rmx_fixture_port_active(port));
+    return 0;
+}
 extern fn task_set_special_port(*anyopaque, c_int, ?*anyopaque) c_int;
 var watched_control: ?*anyopaque = null;
 var watched_bootstrap: ?*anyopaque = null;

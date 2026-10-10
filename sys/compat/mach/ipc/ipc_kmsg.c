@@ -2233,7 +2233,6 @@ ipc_kmsg_copyout_header(
 			assert(entry->ie_object == IO_NULL);
 			ip_lock(reply);
 			if (notify_port == IP_NULL) {
-				ip_reference(reply);	/* hold onto the reply port */
 				/* not making dead name request */
 				entry->ie_object = (ipc_object_t) reply;
 				break;
@@ -2262,7 +2261,6 @@ ipc_kmsg_copyout_header(
 				is_write_lock(space);
 				continue;
 			}
-			ip_reference(reply);	/* hold onto the reply port */
 			entry->ie_object = (ipc_object_t) reply;
 			entry->ie_request = request;
 			break;

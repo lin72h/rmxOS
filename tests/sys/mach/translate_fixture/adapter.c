@@ -89,6 +89,29 @@ void rmx_fixture_port_hold(void *);
 void rmx_fixture_port_drop(void *);
 void rmx_fixture_port_hold(void *port) { ip_reference((ipc_port_t)port); }
 void rmx_fixture_port_drop(void *port) { ip_release((ipc_port_t)port); }
+uint32_t rmx_fixture_port_refs(void *);
+uint32_t rmx_fixture_port_refs(void *pointer) {
+    ipc_port_t port = pointer;
+    uint32_t refs;
+    ip_lock(port);
+    refs = port->ip_object.io_references;
+    ip_unlock(port);
+    return (refs);
+}
+struct reply_watch { uint32_t command, name; };
+struct reply_refs { uint32_t refs, active; };
+extern int rmx_reply_refs(const struct reply_watch *, struct reply_refs *);
+static int reply_refs_sysctl(SYSCTL_HANDLER_ARGS) {
+    struct reply_watch control;
+    struct reply_refs out;
+    int error = SYSCTL_IN(req, &control, sizeof(control));
+    if (error == 0) error = rmx_reply_refs(&control, &out);
+    if (error != 0) return (error);
+    return (SYSCTL_OUT(req, &out, sizeof(out)));
+}
+SYSCTL_PROC(_debug, OID_AUTO, rmx_reply_refs,
+    CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0,
+    reply_refs_sysctl, "S,reply_refs", "Reply reference count with observer pin");
 void *rmx_fixture_task(void) { return (current_task()); }
 void *rmx_fixture_bootstrap(void);
 void *rmx_fixture_bootstrap(void) { return (current_task()->itk_bootstrap); }

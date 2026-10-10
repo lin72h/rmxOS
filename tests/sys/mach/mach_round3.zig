@@ -13,7 +13,7 @@ const c = @cImport({
     @cInclude("stdio.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-const names = [_][*:0]const u8{ "headroom", "ool_deallocate" };
+const names = [_][*:0]const u8{ "headroom", "ool_deallocate", "reply_once", "reply_send" };
 var cases: [names.len]c.atf_tc_t = undefined;
 fn fact(name: [*:0]const u8, expected: i64, observed: i64) void {
     _ = c.printf("round3 check=%s expected=%lld observed=%lld\n", name, @as(c_longlong, expected), @as(c_longlong, observed));
@@ -107,6 +107,62 @@ fn oolDeallocate() void {
     c.mach_msg_destroy(@ptrCast(&out));
     fact("following_page_cleanup", 0, c.munmap(bytes + page, page));
 }
+const ReplyRefs = extern struct { refs: u32, active: u32 };
+fn replyWatch(command: u32, name: u32) ReplyRefs {
+    var control: extern struct { command: u32, name: u32 } = .{ .command = command, .name = name };
+    var observed: ReplyRefs = undefined;
+    var len: usize = @sizeOf(ReplyRefs);
+    fact("reply_watch", 0, c.sysctlbyname("debug.rmx_reply_refs", &observed, &len, &control, @sizeOf(@TypeOf(control))));
+    return observed;
+}
+fn replyRefs(once: bool) void {
+    const task = c.mach_task_self();
+    const dest = fm.allocate();
+    sendRight(dest);
+    var saved: u32 = 0;
+    fact("bootstrap_save", 0, c.task_get_special_port(task, c.TASK_BOOTSTRAP_PORT, &saved));
+    fact("bootstrap_set", 0, c.task_set_special_port(task, c.TASK_BOOTSTRAP_PORT, dest));
+    const pid = c.fork();
+    if (pid < 0) c.atf_tc_fail("fork failed");
+    if (pid == 0) {
+        _ = c.alarm(15);
+        var target: u32 = 0;
+        if (c.task_get_special_port(c.mach_task_self(), c.TASK_BOOTSTRAP_PORT, &target) != 0) c._exit(90);
+        const reply = fm.allocate();
+        const before = replyWatch(0, reply);
+        for (0..200) |_| {
+            var request = fm.Header{ .bits = @as(u32, c.MACH_MSG_TYPE_COPY_SEND) | (@as(u32, if (once) c.MACH_MSG_TYPE_MAKE_SEND_ONCE else c.MACH_MSG_TYPE_MAKE_SEND) << 8), .size = 24, .remote = target, .local = reply, .voucher = 0, .id = 61703 };
+            if (send(std.mem.asBytes(&request)) != 0) c._exit(91);
+            var buffer: [256]u8 align(8) = @splat(0);
+            if (receive(reply, &buffer) != 0) c._exit(92);
+            const h: *fm.Header = @ptrCast(&buffer);
+            if (h.id != 61704) c._exit(93);
+        }
+        const after = replyWatch(1, 0);
+        fact("reply_references_return", before.refs, after.refs);
+        fact("reply_still_active", 1, after.active);
+        fact("reply_close", 0, c.close(@intCast(reply)));
+        const last = replyWatch(1, 0);
+        fact("reply_last_reference", 1, last.refs);
+        fact("reply_retired", 0, last.active);
+        _ = replyWatch(2, 0);
+        c._exit(0);
+    }
+    fact("bootstrap_restore", 0, c.task_set_special_port(task, c.TASK_BOOTSTRAP_PORT, saved));
+    if (saved != 0) _ = c.mach_port_deallocate(task, saved);
+    for (0..200) |_| {
+        var buffer: [256]u8 align(8) = @splat(0);
+        if (receive(dest, &buffer) != 0) c.atf_tc_fail("request receive failed");
+        const h: *fm.Header = @ptrCast(&buffer);
+        if (h.id != 61703 or h.remote == 0) c.atf_tc_fail("reply right missing");
+        var response = fm.Header{ .bits = @intCast(if (once) c.MACH_MSG_TYPE_MOVE_SEND_ONCE else c.MACH_MSG_TYPE_MOVE_SEND), .size = 24, .remote = h.remote, .local = 0, .voucher = 0, .id = 61704 };
+        if (send(std.mem.asBytes(&response)) != 0) c.atf_tc_fail("reply send failed");
+    }
+    var status: c_int = 0;
+    fact("reply_child_wait", pid, c.waitpid(pid, &status, 0));
+    fact("reply_child_result", 0, status);
+    fact("request_port_cleanup", 0, c.close(@intCast(dest)));
+}
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "require.user", "%s", "root");
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "25");
@@ -120,11 +176,14 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
     if (module < 0) c.atf_tc_fail("fixture load failed");
     defer _ = c.kldunload(module);
     const name = std.mem.span(c.atf_tc_get_ident(t));
-    if (std.mem.eql(u8, name, "ool_deallocate")) oolDeallocate() else headroom();
+    if (std.mem.eql(u8, name, "ool_deallocate")) oolDeallocate() else if (std.mem.eql(u8, name, "reply_once")) replyRefs(true) else if (std.mem.eql(u8, name, "reply_send")) replyRefs(false) else headroom();
 }
 fn cleanup(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const module = c.kldfind("rmx_translate_fixture.ko");
-    if (module >= 0) _ = c.kldunload(module);
+    if (module >= 0) {
+        _ = replyWatch(2, 0);
+        _ = c.kldunload(module);
+    }
 }
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     for (names, 0..) |name, i| {
