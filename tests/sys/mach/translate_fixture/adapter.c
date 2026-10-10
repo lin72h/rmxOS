@@ -556,3 +556,16 @@ static int child_crash_sysctl(SYSCTL_HANDLER_ARGS) {
 SYSCTL_PROC(_debug, OID_AUTO, rmx_child_crash,
     CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_MPSAFE, NULL, 0,
     child_crash_sysctl, "S,child_action", "Stored task exception action projection");
+
+struct extract_observation { int result; uint32_t present, type; };
+extern int rmx_extract_observe(uint32_t, struct extract_observation *);
+static int extract_sysctl(SYSCTL_HANDLER_ARGS) {
+ uint32_t name; struct extract_observation out = {0};
+ int error = SYSCTL_IN(req, &name, sizeof(name));
+ if (error == 0) error = rmx_extract_observe(name, &out);
+ if (error == 0) error = SYSCTL_OUT(req, &out, sizeof(out));
+ return (error);
+}
+SYSCTL_PROC(_debug, OID_AUTO, rmx_extract_observe,
+ CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0,
+ extract_sysctl, "S,extract_observation", "Kernel named extraction result and outputs");

@@ -14,7 +14,6 @@ const KmsgObservation = extern struct { result: c_int, pad: c_int, before: KmsgS
 extern fn rmx_fixture_map() ?*anyopaque;
 extern fn rmx_fixture_kmsg_state(*anyopaque, *KmsgState) void;
 extern fn ipc_kmsg_copyin(*anyopaque, ?*anyopaque, ?*anyopaque, u32) c_int;
-extern fn ipc_kmsg_destroy(*anyopaque) void;
 export fn rmx_kmsg_observe(control: *const KmsgControl, out: *KmsgObservation) c_int {
     out.* = .{ .result = 0, .pad = 0, .before = .{ .size = 0, .next = 0, .prev = 0 }, .after = .{ .size = 0, .next = 0, .prev = 0 } };
     var message: ?*anyopaque = null;
@@ -498,5 +497,20 @@ extern fn rmx_fixture_child_action(u32, *ChildAction) void;
 export fn rmx_child_crash(index: u32, out: *ChildAction) c_int {
     if (index == 0 or index >= 13) return 22;
     rmx_fixture_child_action(index, out);
+    return 0;
+}
+
+extern fn ipc_object_destroy(*anyopaque, u32) void;
+const ExtractObservation = extern struct { result: c_int, present: u32, kind: u32 };
+extern fn mach_port_extract_right(?*anyopaque, u32, u32, *?*anyopaque, *u32) c_int;
+export fn rmx_extract_observe(name: u32, out: *ExtractObservation) c_int {
+    var object: ?*anyopaque = null;
+    var kind: u32 = 0;
+    out.result = mach_port_extract_right(rmx_fixture_space(), name, 19, &object, &kind);
+    out.present = @intFromBool(object != null);
+    out.kind = kind;
+    if (out.result == 0) {
+        if (object) |port| ipc_object_destroy(port, kind);
+    }
     return 0;
 }

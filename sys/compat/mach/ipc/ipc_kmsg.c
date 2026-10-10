@@ -667,9 +667,10 @@ ipc_kmsg_clean_body(
 
 		assert(dsc->count != 0);
 
-		KFREE((vm_offset_t) dsc->address, 
-		     (vm_size_t) dsc->count * sizeof(mach_port_name_t),
-		     rt);
+		/* The array contains count kernel-sized ipc_object_t values,
+		 * allocated by copyin with M_MACH_TMP, not user names.
+		 * FreeBSD typed free does not take a size argument. */
+		free(objects, M_MACH_TMP);
 		break;
 	    }
 	    default : {

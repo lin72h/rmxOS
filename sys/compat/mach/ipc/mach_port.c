@@ -1337,19 +1337,30 @@ mach_port_extract_right(
 	ipc_port_t		*poly,
 	mach_msg_type_name_t	*polyPoly)
 {
+	ipc_object_t object;
+	mach_msg_type_name_t type;
 	kern_return_t kr;
 
+	*poly = IP_NULL;
+	*polyPoly = 0;
 	if (space == IS_NULL)
 		return KERN_INVALID_TASK;
-
 	if (!MACH_MSG_TYPE_PORT_ANY(msgt_name))
 		return KERN_INVALID_VALUE;
 
-	kr = ipc_object_copyin(space, name, msgt_name, (ipc_object_t *) poly);
-
-	if (kr == KERN_SUCCESS)
-		*polyPoly = ipc_object_copyin_type(msgt_name);
-	return kr;
+	kr = ipc_object_copyin(space, name, msgt_name, &object);
+	if (kr != KERN_SUCCESS)
+		return kr;
+	type = ipc_object_copyin_type(msgt_name);
+	if (IO_VALID(object) && (((ipc_port_t)object)->ip_flags & IP_CONTEXT_FILE) != 0) {
+		/* Named file-right extraction has the same unsupported contract
+		 * as named insertion. Release the temporary wrapper and file ref. */
+		ipc_object_destroy(object, type);
+		return KERN_NOT_SUPPORTED;
+	}
+	*poly = (ipc_port_t)object;
+	*polyPoly = type;
+	return KERN_SUCCESS;
 }
 
 
