@@ -650,7 +650,8 @@ mach_port_allocate_full(
 	    }
 
 	    case MACH_PORT_RIGHT_DEAD_NAME:
-		kr = ipc_object_alloc_dead(space, namep);
+		kr = qosp->name ? KERN_NOT_SUPPORTED :
+		    ipc_object_alloc_dead(space, namep);
 		break;
 
 	    default:

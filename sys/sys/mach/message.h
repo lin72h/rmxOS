@@ -854,11 +854,4 @@ extern mach_msg_return_t	mach_msg(
 					mach_port_name_t notify);
 
 
-#if defined(_KERNEL) && defined(MACH_INTERNAL)
-struct thread_shuttle;
-
-extern mach_msg_return_t	mach_msg_receive_results(
-					struct thread_shuttle *thread);
-#endif
-
 #endif	/* _MACH_MESSAGE_H_ */

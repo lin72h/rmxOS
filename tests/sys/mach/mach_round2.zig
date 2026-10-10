@@ -13,7 +13,7 @@ const c = @cImport({
     @cInclude("stdio.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-const names = [_][*:0]const u8{ "reply_send", "terminate", "file_insert", "file_receive" };
+const names = [_][*:0]const u8{ "reply_send", "terminate", "file_insert", "file_receive", "named_dead" };
 var cases: [names.len]c.atf_tc_t = undefined;
 fn fact(name: [*:0]const u8, expected: i64, observed: i64) void {
     _ = c.printf("round2 check=%s expected=%lld observed=%lld\n", name, @as(c_longlong, expected), @as(c_longlong, observed));
@@ -144,6 +144,14 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
         var port: u32 = 0;
         fact("task_still_usable", 0, c.mach_port_allocate(c.mach_task_self(), c.MACH_PORT_RIGHT_RECEIVE, &port));
         fact("task_cleanup", 0, c.close(@intCast(port)));
+    } else if (std.mem.eql(u8, name, "named_dead")) {
+        const task = c.mach_task_self();
+        fact("named_dead_unsupported", 46, c.mach_port_allocate_name(task, c.MACH_PORT_RIGHT_DEAD_NAME, 4096));
+        var kind: u32 = 0;
+        fact("named_dead_no_entry", 15, c.mach_port_type(task, 4096, &kind));
+        var ordinary: u32 = 0;
+        fact("ordinary_dead_allocate", 0, c.mach_port_allocate(task, c.MACH_PORT_RIGHT_DEAD_NAME, &ordinary));
+        fact("ordinary_dead_cleanup", 0, c.close(@intCast(ordinary)));
     } else if (std.mem.eql(u8, name, "file_insert")) fileInsert() else if (std.mem.eql(u8, name, "file_receive")) fileReceive() else replySend();
 }
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {

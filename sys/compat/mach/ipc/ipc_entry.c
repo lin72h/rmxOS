@@ -164,7 +164,7 @@ static int kern_finstall(struct thread *td, struct file *fp, int *fd, int flags,
 #define FNOFDALLOC    0x80000000
 
 #ifndef DTYPE_MACH_IPC
-#define DTYPE_MACH_IPC 17
+#define DTYPE_MACH_IPC 18
 #endif
 #ifndef S_IFPORT
 #define S_IFPORT 0150000
@@ -649,6 +649,8 @@ ipc_entry_get(
 	if (kern_finstall(td, fp, &fd, FNOFDALLOC, NULL)) {
 		log(LOG_WARNING, "%s:%d failed to allocate fp:%p at fd:%d \n", __FILE__, __LINE__, fp, fd);
 		kern_fddealloc(td, fd);
+		fp->f_data = NULL;
+		ipc_entry_put(free_entry);
 		fdrop(fp, td);
 		return (KERN_RESOURCE_SHORTAGE);
 	}
@@ -777,6 +779,8 @@ ipc_entry_alloc_name(
 	finit(fp, 0, DTYPE_MACH_IPC, free_entry, &mach_fileops);
 	if (kern_finstall(td, fp, &name, FNOFDALLOC, NULL)) {
 		kern_fddealloc(td, newname);
+		fp->f_data = NULL;
+		ipc_entry_put(free_entry);
 		fdrop(fp, td);
 		return (KERN_RESOURCE_SHORTAGE);
 	}
