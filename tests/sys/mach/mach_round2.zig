@@ -13,7 +13,7 @@ const c = @cImport({
     @cInclude("stdio.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-const names = [_][*:0]const u8{ "reply_send", "terminate", "file_insert" };
+const names = [_][*:0]const u8{ "reply_send", "terminate", "file_insert", "file_receive" };
 var cases: [names.len]c.atf_tc_t = undefined;
 fn fact(name: [*:0]const u8, expected: i64, observed: i64) void {
     _ = c.printf("round2 check=%s expected=%lld observed=%lld\n", name, @as(c_longlong, expected), @as(c_longlong, observed));
@@ -105,7 +105,37 @@ fn fileInsert() void {
     fact("pipe_no_retained_writer", 0, c.read(pipe[0], &byte, 1));
     _ = c.close(pipe[0]);
 }
+fn portRefs(port: u32) u32 {
+    fact("port_selector", 0, c.sysctlbyname("mach.current_task_port_name", null, null, @constCast(&port), @sizeOf(u32)));
+    var buf: [512]u8 = undefined;
+    var len: usize = buf.len;
+    fact("port_snapshot", 0, c.sysctlbyname("mach.current_task_port_status", &buf, &len, null, 0));
+    var fields = std.mem.tokenizeScalar(u8, buf[0..len], ' ');
+    while (fields.next()) |field| {
+        if (std.mem.startsWith(u8, field, "refs=")) return std.fmt.parseInt(u32, std.mem.trimEnd(u8, field[5..], "\x00"), 10) catch c.atf_tc_fail("invalid port reference count");
+    }
+    c.atf_tc_fail("port reference count missing");
+}
+fn fileReceive() void {
+    const task = c.mach_task_self();
+    const dest = fm.allocate();
+    fact("destination_send", 0, c.mach_port_insert_right(task, dest, dest, c.MACH_MSG_TYPE_MAKE_SEND));
+    var pipe: [2]c_int = undefined;
+    fact("pipe_setup", 0, c.pipe(&pipe));
+    const refs = portRefs(dest);
+    const file_refs = fileRefs(pipe[1]);
+    var msg = fm.Message{ .header = .{ .bits = c.MACH_MSGH_BITS_COMPLEX | c.MACH_MSG_TYPE_COPY_SEND, .size = 40, .remote = dest, .local = 0, .voucher = 0, .id = 60704 }, .count = 1, .descriptor = .{ .name = @intCast(pipe[1]), .pad = 0, .pad2 = 0, .disposition = c.MACH_MSG_TYPE_MOVE_RECEIVE, .kind = 0 }, .trailer = @splat(0) };
+    fact("file_receive_refused", c.MACH_SEND_INVALID_RIGHT, c.mach_msg(@ptrCast(&msg), c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, 40, 0, 0, 2000, 0));
+    fact("destination_references_unchanged", refs, portRefs(dest));
+    fact("file_references_unchanged", file_refs, fileRefs(pipe[1]));
+    _ = c.close(pipe[1]);
+    _ = c.close(pipe[0]);
+    _ = c.close(@intCast(dest));
+    var zero: u32 = 0;
+    fact("selector_cleanup", 0, c.sysctlbyname("mach.current_task_port_name", null, null, &zero, @sizeOf(u32)));
+}
 fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
+    _ = c.alarm(20);
     const name = std.mem.span(c.atf_tc_get_ident(t));
     if (std.mem.eql(u8, name, "terminate")) {
         const task = c.mach_task_self();
@@ -114,7 +144,7 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
         var port: u32 = 0;
         fact("task_still_usable", 0, c.mach_port_allocate(c.mach_task_self(), c.MACH_PORT_RIGHT_RECEIVE, &port));
         fact("task_cleanup", 0, c.close(@intCast(port)));
-    } else if (std.mem.eql(u8, name, "file_insert")) fileInsert() else replySend();
+    } else if (std.mem.eql(u8, name, "file_insert")) fileInsert() else if (std.mem.eql(u8, name, "file_receive")) fileReceive() else replySend();
 }
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     for (names, 0..) |name, i| {

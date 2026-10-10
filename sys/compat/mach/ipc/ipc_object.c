@@ -436,7 +436,10 @@ ipc_object_copyin(
 	kern_return_t kr;
 	int xlock;
 
-	if (ipc_entry_file_to_port(space, name, objectp) == KERN_SUCCESS)
+	/* A file projection has no receive right and cannot enter limbo. */
+	if ((ipc_object_copyin_type(msgt_name) == MACH_MSG_TYPE_PORT_SEND ||
+	    ipc_object_copyin_type(msgt_name) == MACH_MSG_TYPE_PORT_SEND_ONCE) &&
+	    ipc_entry_file_to_port(space, name, objectp) == KERN_SUCCESS)
 		return (KERN_SUCCESS);
 	/*
 	 *	Could first try a read lock when doing
