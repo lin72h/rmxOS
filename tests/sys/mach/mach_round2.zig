@@ -13,7 +13,7 @@ const c = @cImport({
     @cInclude("stdio.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-const names = [_][*:0]const u8{"reply_send"};
+const names = [_][*:0]const u8{ "reply_send", "terminate" };
 var cases: [names.len]c.atf_tc_t = undefined;
 fn fact(name: [*:0]const u8, expected: i64, observed: i64) void {
     _ = c.printf("round2 check=%s expected=%lld observed=%lld\n", name, @as(c_longlong, expected), @as(c_longlong, observed));
@@ -74,8 +74,16 @@ fn replySend() void {
     _ = c.close(@intCast(other));
     _ = c.close(@intCast(channel));
 }
-fn body(_: [*c]const c.atf_tc_t) callconv(.c) void {
-    replySend();
+fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
+    const name = std.mem.span(c.atf_tc_get_ident(t));
+    if (std.mem.eql(u8, name, "terminate")) {
+        const task = c.mach_task_self();
+        fact("terminate_unsupported", 46, c.task_terminate(task));
+        fact("task_self_survives", task, c.mach_task_self());
+        var port: u32 = 0;
+        fact("task_still_usable", 0, c.mach_port_allocate(c.mach_task_self(), c.MACH_PORT_RIGHT_RECEIVE, &port));
+        fact("task_cleanup", 0, c.close(@intCast(port)));
+    } else replySend();
 }
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     for (names, 0..) |name, i| {
