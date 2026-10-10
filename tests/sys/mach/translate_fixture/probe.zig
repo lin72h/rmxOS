@@ -64,7 +64,7 @@ export fn rmx_reply_refs(control: *const ReplyWatch, out: *ReplyRefs) c_int {
     }
     const port = watched_reply orelse return 2;
     out.refs = rmx_fixture_port_refs(port);
-    out.active = @intCast(rmx_fixture_port_active(port));
+    out.active = @intFromBool(rmx_fixture_port_active(port) != 0);
     return 0;
 }
 extern fn task_set_special_port(*anyopaque, c_int, ?*anyopaque) c_int;
