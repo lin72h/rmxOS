@@ -367,7 +367,6 @@ ipc_kobject_server(ipc_kmsg_t	request)
 		ipc_kmsg_destroy(request);
 		return IKM_NULL;
 	}
-	ikm_init_special(reply, reply_size);
 	/*
 	 * Initialize reply message.
 	 */

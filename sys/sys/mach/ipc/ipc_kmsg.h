@@ -166,7 +166,7 @@ typedef struct ipc_kmsg {
 #define	IKM_SAVED_KMSG_SIZE	256
 #define	IKM_SAVED_MSG_SIZE	ikm_less_overhead(IKM_SAVED_KMSG_SIZE)
 
-#define	ikm_alloc(size)	ipc_kmsg_alloc(size);
+#define	ikm_alloc(size)	ipc_kmsg_alloc((size) + MAX_TRAILER_SIZE);
 
 #define	ikm_init(kmsg, size)						\
 MACRO_BEGIN								\
@@ -187,8 +187,9 @@ MACRO_END
 
 #define ikm_set_header(kmsg, mtsize)					\
 MACRO_BEGIN												\
-(kmsg)->ikm_header = (mach_msg_header_t *)(kmsg + 1);	\
 MPASS(kmsg->ikm_size >= mtsize + sizeof(*kmsg));		\
+(kmsg)->ikm_header = (mach_msg_header_t *)((char *)(kmsg) + \
+    (kmsg)->ikm_size - (mtsize));	\
 MACRO_END
 
 /*

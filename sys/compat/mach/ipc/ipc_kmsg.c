@@ -405,8 +405,8 @@ ipc_kmsg_alloc(
 		max_expanded_size = msg_and_trailer_size + max_desc;
 	} else
 		max_expanded_size = msg_and_trailer_size;
-	/* fudge factor */
-	kmsg = malloc(ikm_plus_overhead(max_expanded_size) + MAX_TRAILER_SIZE, M_MACH_IPC_KMSG, mflags);
+	/* Trailer is included above; descriptor expansion belongs below the header. */
+	kmsg = malloc(ikm_plus_overhead(max_expanded_size), M_MACH_IPC_KMSG, mflags);
 	if (kmsg != IKM_NULL) {
 		ikm_init(kmsg, max_expanded_size);
 		ikm_set_header(kmsg, msg_and_trailer_size);
@@ -1861,6 +1861,7 @@ ipc_kmsg_copyin_body(
     if(descriptor_size != KERN_DESC_SIZE*dsc_count) {
         vm_offset_t dsc_adjust = KERN_DESC_SIZE*dsc_count - descriptor_size;
 
+        MPASS((char *)kmsg->ikm_header - dsc_adjust >= (char *)(kmsg + 1));
         memmove((char *)(((vm_offset_t)kmsg->ikm_header) - dsc_adjust), kmsg->ikm_header, sizeof(mach_msg_base_t));
         kmsg->ikm_header = (mach_msg_header_t *)((vm_offset_t)kmsg->ikm_header - dsc_adjust);
 
@@ -2674,6 +2675,8 @@ ipc_kmsg_copyout_body(
     }
 	if(user_dsc != kern_dsc) {
         vm_offset_t dsc_adjust = (vm_offset_t)user_dsc - (vm_offset_t)kern_dsc;
+		MPASS((char *)kmsg->ikm_header + dsc_adjust + sizeof(mach_msg_base_t) <=
+		    (char *)kmsg + kmsg->ikm_size);
 		MDPRINTF(("dsc_adjust=%ld\n", dsc_adjust));
         memmove((char *)((vm_offset_t)kmsg->ikm_header + dsc_adjust), kmsg->ikm_header, sizeof(mach_msg_base_t));
         kmsg->ikm_header = (mach_msg_header_t *)((vm_offset_t)kmsg->ikm_header + dsc_adjust);

@@ -25,6 +25,30 @@
 /* Observe the attachment ABI common to both images, without a new symbol. */
 #undef current_space
 #define current_space() current_task()->itk_space
+struct kmsg_control { uint64_t address; uint32_t size, pad; };
+struct kmsg_state { uint64_t size, next, prev; };
+struct kmsg_observation { int result, pad; struct kmsg_state before, after; };
+extern int rmx_kmsg_observe(const struct kmsg_control *, struct kmsg_observation *);
+void *rmx_fixture_map(void);
+void *rmx_fixture_map(void) { return (current_map()); }
+void rmx_fixture_kmsg_state(void *, struct kmsg_state *);
+void rmx_fixture_kmsg_state(void *message, struct kmsg_state *out) {
+    ipc_kmsg_t kmsg = message;
+    out->size = kmsg->ikm_size;
+    out->next = (uintptr_t)kmsg->ikm_next;
+    out->prev = (uintptr_t)kmsg->ikm_prev;
+}
+static int kmsg_state_sysctl(SYSCTL_HANDLER_ARGS) {
+    struct kmsg_control control;
+    struct kmsg_observation out;
+    int error = SYSCTL_IN(req, &control, sizeof(control));
+    if (error == 0) error = rmx_kmsg_observe(&control, &out);
+    if (error != 0) return (error);
+    return (SYSCTL_OUT(req, &out, sizeof(out)));
+}
+SYSCTL_PROC(_debug, OID_AUTO, rmx_kmsg_state,
+    CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0,
+    kmsg_state_sysctl, "S,kmsg_observation", "Message copyin queue metadata");
 /* Project the function-like kernel-space macros through the C ABI. */
 void *rmx_fixture_alloc_kernel(void);
 void rmx_fixture_dealloc_kernel(void *);

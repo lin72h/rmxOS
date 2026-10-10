@@ -8,6 +8,25 @@ extern fn rmx_fixture_owned(*anyopaque) c_int;
 extern fn rmx_fixture_unlock(*anyopaque) void;
 extern fn ipc_object_translate(?*anyopaque, u32, u32, *?*anyopaque) c_int;
 const Observation = extern struct { result: c_int, owned: c_int };
+const KmsgControl = extern struct { address: u64, size: u32, pad: u32 };
+const KmsgState = extern struct { size: u64, next: u64, prev: u64 };
+const KmsgObservation = extern struct { result: c_int, pad: c_int, before: KmsgState, after: KmsgState };
+extern fn rmx_fixture_map() ?*anyopaque;
+extern fn rmx_fixture_kmsg_state(*anyopaque, *KmsgState) void;
+extern fn ipc_kmsg_copyin(*anyopaque, ?*anyopaque, ?*anyopaque, u32) c_int;
+extern fn ipc_kmsg_destroy(*anyopaque) void;
+export fn rmx_kmsg_observe(control: *const KmsgControl, out: *KmsgObservation) c_int {
+    out.* = .{ .result = 0, .pad = 0, .before = .{ .size = 0, .next = 0, .prev = 0 }, .after = .{ .size = 0, .next = 0, .prev = 0 } };
+    var message: ?*anyopaque = null;
+    out.result = ipc_kmsg_get(@ptrFromInt(control.address), control.size, &message, rmx_fixture_space());
+    if (out.result != 0) return 0;
+    const kmsg = message orelse return 12;
+    rmx_fixture_kmsg_state(kmsg, &out.before);
+    out.result = ipc_kmsg_copyin(kmsg, rmx_fixture_space(), rmx_fixture_map(), 0);
+    rmx_fixture_kmsg_state(kmsg, &out.after);
+    if (out.result == 0) ipc_kmsg_destroy(kmsg) else ipc_kmsg_free(kmsg);
+    return 0;
+}
 const MachTimespec = extern struct { sec: u32, nsec: c_int };
 const ClockPointer = extern struct { result: c_int, sec: u32, nsec: c_int, guard: u64 };
 extern fn clock_get_time(?*anyopaque, *MachTimespec) c_int;

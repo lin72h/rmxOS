@@ -299,7 +299,6 @@ ipc_notify_port_deleted(
 		return;
 	}
 
-	ikm_init(kmsg, sizeof *n);
 	n = (mach_port_deleted_notification_t *) kmsg->ikm_header;
 	*n = ipc_notify_port_deleted_template;
 
@@ -340,7 +339,6 @@ ipc_notify_port_destroyed(
 		return;
 	}
 
-	ikm_init(kmsg, sizeof *n);
 	n = (mach_port_destroyed_notification_t *) kmsg->ikm_header;
 	*n = ipc_notify_port_destroyed_template;
 
@@ -376,7 +374,6 @@ ipc_notify_no_senders(
 		return;
 	}
 
-	ikm_init(kmsg, sizeof *n);
 	n = (mach_no_senders_notification_t *) kmsg->ikm_header;
 	*n = ipc_notify_no_senders_template;
 
@@ -411,7 +408,6 @@ ipc_notify_send_once(
 		return;
 	}
 
-	ikm_init(kmsg, sizeof *n);
 	n = (mach_send_once_notification_t *) kmsg->ikm_header;
 	*n = ipc_notify_send_once_template;
 
@@ -446,7 +442,6 @@ ipc_notify_dead_name(
 		return;
 	}
 
-	ikm_init(kmsg, sizeof *n);
 	n = (mach_dead_name_notification_t *) kmsg->ikm_header;
 	*n = ipc_notify_dead_name_template;
 
