@@ -288,7 +288,7 @@ const Observer = struct {
         }
         const call = @tagName(o.action.call);
         _ = c.printf("port_model mismatch seed=%u step=%zu call=%.*s field=%s name=%u right=%zu expected=%lld observed=%lld\n", o.seed, o.step, @as(c_int, @intCast(call.len)), call.ptr, field, name, right, @as(c_longlong, expected), @as(c_longlong, observed));
-        _ = c.fflush(c.stdout);
+        _ = c.fflush(null);
     }
 };
 fn bindName(m: *Model, slot: usize, name: u32) void {
