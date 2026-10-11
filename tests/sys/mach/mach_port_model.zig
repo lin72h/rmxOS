@@ -97,6 +97,7 @@ const Model = struct {
             return 0;
         }
         if (a.call == .receive) {
+            std.debug.assert(e.refs[3] == 0); // port-set selection is outside this oracle
             if (e.refs[1] == 0) return recv_invalid_name;
             if (e.queued == 0) return recv_timed_out;
             e.queued -= 1;
@@ -167,7 +168,11 @@ const Generator = struct {
         var a: Action = .{ .call = @enumFromInt(op), .slot = target % m.count, .other = if (other % 3 == 0) 60 else other % m.count, .right = @enumFromInt(right % 5), .delta = @as(i32, @intCast(delta % 5)) - 2, .once = right % 2 != 0 };
         // Direct receive of members is outside this model's call domain.
         // Generate a membership removal instead, including NOT_IN_SET controls.
-        if (a.call == .receive and m.entries[a.slot].member != null) {
+        if (a.call == .receive and m.entries[a.slot].refs[3] != 0) {
+            a.call = .mod_refs;
+            a.right = .set;
+            a.delta = 0;
+        } else if (a.call == .receive and m.entries[a.slot].member != null) {
             a.call = .move_member;
             a.other = 60;
         }
@@ -190,6 +195,14 @@ test "fixed generator vector and seed determinism" {
             try std.testing.expectEqual(a.apply(ax, @intCast(step)), b.apply(ay, @intCast(step)));
             try std.testing.expectEqualDeep(a, b);
         }
+    }
+}
+test "generator excludes legal but unmodeled port-set receives" {
+    var m: Model = .{};
+    _ = m.add(.set, null);
+    for (0..2000) |seed| {
+        var g: Generator = .{ .state = seed };
+        try std.testing.expect(g.action(m).call != .receive);
     }
 }
 test "receive send urefs death and send-once death" {
