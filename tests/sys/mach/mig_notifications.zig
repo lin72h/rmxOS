@@ -96,7 +96,7 @@ fn run(id: i32) void {
         fact("drop_once", 0, c.mach_port_deallocate(task, once));
         expected = 0;
     } else {
-        request(peer, id, notify, if (id == 70 or id == 72 or id == 65) 1 else 0);
+        request(peer, if (id == 65) c.MACH_NOTIFY_DEAD_NAME else id, notify, if (id == 70 or id == 72 or id == 65) 1 else 0);
         if (id == 65) {
             fact("remove_name", 0, c.close(@intCast(peer)));
         } else if (id == 70) {
