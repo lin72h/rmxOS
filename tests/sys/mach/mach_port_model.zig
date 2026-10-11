@@ -280,8 +280,9 @@ test "forgotten numeric names never become NULL call arguments" {
     try std.testing.expectEqual(@as(u32, 42), argumentName(.{ .name = 42 }));
 }
 fn observe(o: *Observer, m: Model, before: ?Model) void {
-    for (m.entries[0..m.count], 0..) |e, slot| {
-        if (e.name == 0) continue;
+    for (m.entries[0..m.count], 0..) |entry, slot| {
+        var e = entry;
+        e.name = argumentName(e);
         if (before) |old| {
             const involved = slot == o.action.slot or (o.action.call == .move_member and slot == o.action.other) or slot >= old.count;
             if (!involved and std.mem.eql(u32, &e.refs, &old.entries[slot].refs)) continue;
@@ -326,6 +327,8 @@ fn execute(m: *Model, a: Action, id: i32, o: *Observer) void {
     // Zero marks a forgotten tombstone after numeric reuse. Query a valid
     // but unallocated name instead of MACH_PORT_NULL's special semantics.
     const name = argumentName(before.entries[a.slot]);
+    if (a.call != .allocate) o.remember(name);
+    if (a.call == .move_member and a.other != 60) o.remember(argumentName(before.entries[a.other]));
     var new_name: u32 = 0;
     var acquired: c.mach_msg_type_name_t = 0;
     var result_id: i32 = 0;
