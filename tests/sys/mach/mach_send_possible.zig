@@ -11,7 +11,7 @@ const c = @cImport({
     @cInclude("stdio.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-const names = [_][*:0]const u8{ "full", "rearm", "cancel", "death", "early", "replace", "qlimit" };
+const names = [_][*:0]const u8{ "full", "rearm", "cancel", "death", "early", "replace", "qlimit", "already_dead" };
 var cases: [names.len]c.atf_tc_t = undefined;
 fn fact(name: [*:0]const u8, expected: i64, observed: i64) void {
     _ = c.printf("send_possible check=%s expected=%lld observed=%lld\n", name, @as(c_longlong, expected), @as(c_longlong, observed));
@@ -76,6 +76,29 @@ fn run(name: []const u8) void {
     defer _ = c.close(@intCast(notify));
     const baseline = watch(0, notify);
     defer _ = watch(2, 0);
+    if (std.mem.eql(u8, name, "already_dead")) {
+        fact("already_dead_receive_release", 0, c.mach_port_mod_refs(c.mach_task_self(), peer, c.MACH_PORT_RIGHT_RECEIVE, -1));
+        var refs: u32 = 0;
+        fact("initial_dead_refs_call", 0, c.mach_port_get_refs(c.mach_task_self(), peer, c.MACH_PORT_RIGHT_DEAD_NAME, &refs));
+        fact("initial_dead_refs", 1, refs);
+        fact("already_dead_previous", 0, request(peer, notify, 0));
+        notification(notify, c.MACH_NOTIFY_DEAD_NAME, peer);
+        fact("notified_dead_refs_call", 0, c.mach_port_get_refs(c.mach_task_self(), peer, c.MACH_PORT_RIGHT_DEAD_NAME, &refs));
+        fact("notified_dead_refs", 2, refs);
+        fact("notification_references_return", baseline.refs, watch(1, 0).refs);
+        var previous: u32 = 0;
+        fact("plain_dead_name_sync_zero", c.KERN_INVALID_ARGUMENT, c.mach_port_request_notification(c.mach_task_self(), peer, c.MACH_NOTIFY_DEAD_NAME, 0, notify, c.MACH_MSG_TYPE_MAKE_SEND_ONCE, &previous));
+        // The refused request releases its supplied send-once right.
+        var out: [256]u8 align(8) = @splat(0);
+        fact("refused_once_receive", 0, receive(notify, &out));
+        fact("refused_once_selector", c.MACH_NOTIFY_SEND_ONCE, @as(*fm.Header, @ptrCast(&out)).id);
+        empty(notify);
+        fact("refused_dead_refs_call", 0, c.mach_port_get_refs(c.mach_task_self(), peer, c.MACH_PORT_RIGHT_DEAD_NAME, &refs));
+        fact("refused_dead_refs", 2, refs);
+        fact("refused_references_return", baseline.refs, watch(1, 0).refs);
+        fact("already_dead_cleanup", 0, c.mach_port_mod_refs(c.mach_task_self(), peer, c.MACH_PORT_RIGHT_DEAD_NAME, -2));
+        return;
+    }
     limit(peer, 1);
     fact("fill_queue", 0, send(peer, 0));
     fact("previous_empty", 0, request(peer, notify, 0));

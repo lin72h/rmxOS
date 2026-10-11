@@ -368,8 +368,8 @@ ipc_right_dnrequest(
 			assert(bits & MACH_PORT_TYPE_DEAD_NAME);
 		}
 
-		if ((bits & MACH_PORT_TYPE_DEAD_NAME) &&
-		    immediate && (notify != IP_NULL)) {
+			if ((bits & MACH_PORT_TYPE_DEAD_NAME) &&
+			    (immediate || send_possible) && (notify != IP_NULL)) {
 
 			assert(IE_BITS_TYPE(bits) == MACH_PORT_TYPE_DEAD_NAME);
 			assert(ipc_entry_refs(entry) > 0);
