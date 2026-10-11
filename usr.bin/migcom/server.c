@@ -1158,7 +1158,7 @@ InArgMsgField(register argument_t *arg,  const char *str)
 	 * Hence we must cast the values.
 	 */
 
-	if (!(arg->argFlags & flRetCode)) {
+	if (!(arg->argFlags & flRetCode) || arg->argRoutine->rtSimpleRequest) {
 		if (akCheck(arg->argKind, akbServerImplicit))
 			sprintf(who, "TrailerP->");
 		else
