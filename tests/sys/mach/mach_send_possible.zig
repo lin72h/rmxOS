@@ -19,7 +19,11 @@ fn fact(name: [*:0]const u8, expected: i64, observed: i64) void {
 }
 fn send(port: u32, options: c_int) i32 {
     var msg = fm.Header{ .bits = c.MACH_MSG_TYPE_COPY_SEND, .size = 24, .remote = port, .local = 0, .voucher = 0, .id = 62201 };
-    return c.mach_msg(@ptrCast(&msg), c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT | options, 24, 0, 0, 0, 0);
+    const result = c.mach_msg(@ptrCast(&msg), c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT | options, 24, 0, 0, 0, 0);
+    // Pseudo-copyout returns the copied destination as an owned MOVE_SEND
+    // right. This test discards the failed message rather than retrying it.
+    if (result == c.MACH_SEND_TIMED_OUT) c.mach_msg_destroy(@ptrCast(&msg));
+    return result;
 }
 fn receive(port: u32, out: []u8) i32 {
     return c.mach_msg(@ptrCast(@alignCast(out.ptr)), c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, @intCast(out.len), port, 0, 0);
