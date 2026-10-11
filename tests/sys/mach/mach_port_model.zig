@@ -250,6 +250,14 @@ const Observer = struct {
     step: usize = 0,
     action: Action = .{ .call = .allocate },
     bad: bool = false,
+    owned: [60]u32 = @splat(0),
+    owned_count: usize = 0,
+    fn remember(o: *Observer, name: u32) void {
+        if (name == 0 or name == 0xffffffff) return;
+        for (o.owned[0..o.owned_count]) |known| if (known == name) return;
+        o.owned[o.owned_count] = name;
+        o.owned_count += 1;
+    }
     fn equal(o: *Observer, field: [*:0]const u8, name: u32, right: usize, expected: i64, observed: i64) void {
         if (expected == observed or o.bad) return;
         o.bad = true;
@@ -345,6 +353,15 @@ fn execute(m: *Model, a: Action, id: i32, o: *Observer) void {
         },
     };
     o.equal("return", name, 0, expected, rc);
+    if (rc == 0 and (a.call == .allocate or a.call == .extract)) {
+        // Cleanup is based on observed ownership even when the oracle rejects
+        // an unexpected successful call or an unexpected output name.
+        o.remember(new_name);
+        o.equal("output_name_valid", new_name, 0, 1, @intFromBool(new_name != 0 and new_name != 0xffffffff));
+        if (a.call == .allocate or a.once) for (before.entries[0..before.count]) |e| {
+            o.equal("output_name_fresh", new_name, 0, 0, @intFromBool(e.live() and e.name == new_name));
+        };
+    }
     if (rc == 0 and a.call == .allocate) bindName(m, before.count, new_name);
     if (rc == 0 and a.call == .extract) {
         o.equal("acquired_type", name, 0, if (a.once) c.MACH_MSG_TYPE_PORT_SEND_ONCE else c.MACH_MSG_TYPE_PORT_SEND, acquired);
@@ -355,12 +372,13 @@ fn execute(m: *Model, a: Action, id: i32, o: *Observer) void {
     observe(o, m.*, before);
 }
 fn cleanup(o: *Observer, m: *Model) void {
-    for (m.entries[0..m.count]) |e| if (e.name != 0) {
+    for (o.owned[0..o.owned_count]) |name| {
         var ty: u32 = 0;
-        const rc = c.mach_port_type(c.mach_task_self(), e.name, &ty);
-        if (rc == 0) o.equal("cleanup_destroy", e.name, 0, 0, c.mach_port_destroy(c.mach_task_self(), e.name));
-    };
-    for (m.entries[0..m.count]) |*e| e.refs = @splat(0);
+        const rc = c.mach_port_type(c.mach_task_self(), name, &ty);
+        if (rc == 0) o.equal("cleanup_destroy", name, 0, 0, c.mach_port_destroy(c.mach_task_self(), name));
+    }
+    m.* = .{ .count = o.owned_count };
+    for (o.owned[0..o.owned_count], 0..) |name, i| m.entries[i].name = name;
     observe(o, m.*, null);
     inventory(o, m.*);
 }
@@ -377,6 +395,8 @@ fn runSeed(seed: u32, shortest: bool) bool {
     }
     inventory(&o, m);
     var clean: Observer = .{ .seed = seed, .step = 30, .action = .{ .call = .destroy } };
+    clean.owned = o.owned;
+    clean.owned_count = o.owned_count;
     cleanup(&clean, &m);
     cleanup_failures += @intFromBool(clean.bad);
     return o.bad or clean.bad;
