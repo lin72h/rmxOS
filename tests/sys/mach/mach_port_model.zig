@@ -85,7 +85,12 @@ const Model = struct {
         if (a.call == .send) {
             if (e.refs[0] == 0 and e.refs[2] == 0) return send_invalid_dest;
             const dest = if (e.refs[2] != 0) &m.entries[e.owner.?] else e;
-            if (e.refs[2] == 0 and dest.queued >= 5) return send_timed_out;
+            if (e.refs[2] == 0 and dest.queued >= 5) {
+                // Failed-send pseudo-copyout returns the copied destination
+                // right to this task, adding a uref (XNU ipc_kmsg.c:4330).
+                e.refs[0] += 1;
+                return send_timed_out;
+            }
             dest.queue[dest.queued] = id;
             dest.queued += 1;
             if (e.refs[2] != 0) e.refs[2] = 0;
@@ -227,6 +232,7 @@ test "unused send-once notifies and bypasses the queue limit" {
     try std.testing.expectEqual(@as(i32, 0), m.apply(.{ .call = .insert }, 0));
     for (0..5) |id| try std.testing.expectEqual(@as(i32, 0), m.apply(.{ .call = .send }, @intCast(id)));
     try std.testing.expectEqual(@as(i32, send_timed_out), m.apply(.{ .call = .send }, 99));
+    try std.testing.expectEqual(@as(u32, 2), m.entries[0].refs[0]);
     try std.testing.expectEqual(@as(i32, 0), m.apply(.{ .call = .send, .slot = 1 }, 100));
     _ = m.add(.once, 0);
     try std.testing.expectEqual(@as(i32, invalid_value), m.apply(.{ .call = .mod_refs, .slot = 2, .right = .once, .delta = 1 }, 0));
