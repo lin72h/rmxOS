@@ -315,7 +315,20 @@ ipc_right_dnrequest(
 				previous = ipc_right_dncancel_macro(space,
 							port, name, entry);
 
-				kr = ipc_port_dnrequest(port, name, notify,
+                /* Immediate requests do not wait for a queue transition on
+                 * send-once/kernel destinations, or an already open queue. */
+                if (send_possible && immediate &&
+                    ((bits & MACH_PORT_TYPE_SEND_ONCE) != 0 ||
+                     port->ip_receiver == ipc_space_kernel ||
+                     port->ip_msgcount < port->ip_qlimit)) {
+                    ip_unlock(port);
+                    is_write_unlock(space);
+                    port = IP_NULL;
+                    ipc_notify_send_possible(notify, name);
+                    break;
+                }
+
+                kr = ipc_port_dnrequest(port, name, notify,
 							&request);
 				if (kr != KERN_SUCCESS) {
 					assert(previous == IP_NULL);
@@ -345,7 +358,9 @@ ipc_right_dnrequest(
                 is_write_unlock(space);
                 if (send_possible && immediate)
                     ipc_port_spnotify(port);
+                ip_unlock_assert(port);
                 ip_release(port);
+                port = IP_NULL;
                 break;
 			}
 
