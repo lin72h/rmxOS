@@ -90,10 +90,13 @@ fn run(id: i32) void {
         var drain: [256]u8 align(8) = @splat(0);
         fact("drain", 0, c.mach_msg(@ptrCast(&drain), c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, drain.len, peer, 1000, 0));
     } else if (id == 71) {
-        var once: u32 = 0;
-        var disposition: c.mach_msg_type_name_t = 0;
-        fact("make_once", 0, c.mach_port_extract_right(task, notify, c.MACH_MSG_TYPE_MAKE_SEND_ONCE, &once, &disposition));
-        fact("drop_once", 0, c.mach_port_deallocate(task, once));
+        var transfer = fm.Header{ .bits = c.MACH_MSG_TYPE_COPY_SEND | (c.MACH_MSG_TYPE_MAKE_SEND_ONCE << 8), .size = 24, .remote = peer, .local = notify, .voucher = 0, .id = 63300 };
+        fact("make_once", 0, c.mach_msg(@ptrCast(&transfer), c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, 24, 0, 0, 1000, 0));
+        var received: [256]u8 align(8) = @splat(0);
+        fact("receive_once", 0, c.mach_msg(@ptrCast(&received), c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, received.len, peer, 1000, 0));
+        const header: *fm.Header = @ptrCast(&received);
+        fact("once_disposition", c.MACH_MSG_TYPE_PORT_SEND_ONCE, header.bits & 0xff);
+        fact("drop_once", 0, c.mach_port_deallocate(task, header.remote));
         expected = 0;
     } else {
         request(peer, if (id == 65) c.MACH_NOTIFY_DEAD_NAME else id, notify, if (id == 70 or id == 72 or id == 65) 1 else 0);

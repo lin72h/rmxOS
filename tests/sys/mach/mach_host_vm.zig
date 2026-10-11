@@ -34,14 +34,14 @@ fn fact(name: [*:0]const u8, expected: i64, observed: i64) void {
     _ = c.printf("host_vm check=%s expected=%lld observed=%lld\n", name, @as(c_longlong, expected), @as(c_longlong, observed));
     if (expected != observed) c.atf_tc_fail("host/task/VM observations differ");
 }
-const Allocate = extern struct { header: c.mach_msg_header_t, count: u32, ndr: c.NDR_record_t, address: u64 align(4), size: u64 align(4), flags: i32 };
+const Allocate = extern struct { header: c.mach_msg_header_t, ndr: c.NDR_record_t, address: u64 align(4), size: u64 align(4), flags: i32 };
 const AllocateReply = extern struct { header: c.mach_msg_header_t, ndr: c.NDR_record_t, result: i32, address: u64 align(4) };
 fn migAllocate() u64 {
     var reply: u32 = 0;
     fact("reply_allocate", 0, c.mach_port_allocate(c.mach_task_self(), c.MACH_PORT_RIGHT_RECEIVE, &reply));
     var buffer: [512]u8 align(8) = @splat(0);
     const request: *Allocate = @ptrCast(&buffer);
-    request.* = .{ .header = .{ .msgh_bits = 0x80000000 | 19 | (21 << 8), .msgh_size = @sizeOf(Allocate), .msgh_remote_port = c.mach_task_self(), .msgh_local_port = reply, .msgh_voucher_port = 0, .msgh_id = 3801 }, .count = 0, .ndr = c.NDR_record, .address = 0, .size = 4096, .flags = 1 };
+    request.* = .{ .header = .{ .msgh_bits = 19 | (21 << 8), .msgh_size = @sizeOf(Allocate), .msgh_remote_port = c.mach_task_self(), .msgh_local_port = reply, .msgh_voucher_port = 0, .msgh_id = 3801 }, .ndr = c.NDR_record, .address = 0, .size = 4096, .flags = 1 };
     fact("vm_allocate_mig_transport", 0, c.mach_msg(&request.header, 0x113, @sizeOf(Allocate), buffer.len, reply, 2000, 0));
     const response: *AllocateReply = @ptrCast(&buffer);
     fact("vm_allocate_mig_id", 3901, response.header.msgh_id);

@@ -16,7 +16,7 @@ fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "descr", "%s", "Named port sets initialize membership and knote locks");
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "10");
 }
-const AllocateName = extern struct { header: Header, descriptors: u32, ndr: [8]u8, right: u32, name: u32 };
+const AllocateName = extern struct { header: Header, ndr: [8]u8, right: u32, name: u32 };
 const Reply = extern struct { header: Header, ndr: [8]u8, result: i32 };
 fn body(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const task = c.syscall(c.SYS_task_self_trap);
@@ -33,7 +33,7 @@ fn body(_: [*c]const c.atf_tc_t) callconv(.c) void {
     if (c.close(vacant) != 0) c.atf_tc_fail("name release failed");
     var storage: [128]u8 align(8) = [_]u8{0} ** 128;
     const request: *AllocateName = @ptrCast(&storage);
-    request.* = .{ .header = .{ .bits = 0x80000000 | 19 | (21 << 8), .size = @sizeOf(AllocateName), .remote = @intCast(task), .local = reply, .voucher = 0, .id = 3203 }, .descriptors = 0, .ndr = .{ 0, 0, 0, 0, 1, 0, 0, 0 }, .right = 3, .name = @intCast(vacant) };
+    request.* = .{ .header = .{ .bits = 19 | (21 << 8), .size = @sizeOf(AllocateName), .remote = @intCast(task), .local = reply, .voucher = 0, .id = 3203 }, .ndr = .{ 0, 0, 0, 0, 1, 0, 0, 0 }, .right = 3, .name = @intCast(vacant) };
     const rpc = c.syscall(c.SYS_mach_msg_trap, &storage, @as(c_uint, 3), @as(c_uint, @sizeOf(AllocateName)), @as(c_uint, 128), reply, @as(c_uint, 0), @as(c_uint, 0));
     const response: *const Reply = @ptrCast(&storage);
     if (rpc != 0 or response.header.id != 3303 or response.result != 0) c.atf_tc_fail("named pset setup failed transport=%d", rpc);

@@ -39,18 +39,17 @@ pub fn maximum() void {
     const reply = fm.allocate();
     defer _ = c.close(@intCast(reply));
     // Bypass the client-side maximum check to exercise the kernel checker.
-    var req: extern struct { head: fm.Header, descriptors: u32, ndr: c.NDR_record_t, name: u32, flavor: i32, count: u32, info: [18]i32 } = .{
-        .head = .{ .bits = @as(u32, c.MACH_MSGH_BITS_COMPLEX) | 19 | (21 << 8), .size = 120, .remote = c.mach_task_self(), .local = reply, .voucher = 0, .id = 3218 },
-        .descriptors = 0,
+    var req: extern struct { head: fm.Header, ndr: c.NDR_record_t, name: u32, flavor: i32, count: u32, info: [18]i32 } = .{
+        .head = .{ .bits = 19 | (21 << 8), .size = 116, .remote = c.mach_task_self(), .local = reply, .voucher = 0, .id = 3218 },
         .ndr = c.NDR_record,
         .name = port,
         .flavor = c.MACH_PORT_LIMITS_INFO,
         .count = 18,
         .info = @splat(0),
     };
-    if (@sizeOf(@TypeOf(req)) != 120) @compileError("request wire size");
+    if (@sizeOf(@TypeOf(req)) != 116) @compileError("request wire size");
     var response: [256]u8 align(8) = @splat(0);
-    fact("oversized_send", 0, c.mach_msg(@ptrCast(&req), c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, 120, 0, 0, 0, 0));
+    fact("oversized_send", 0, c.mach_msg(@ptrCast(&req), c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, 116, 0, 0, 0, 0));
     fact("oversized_receive", 0, c.mach_msg(@ptrCast(&response), c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, response.len, reply, 1000, 0));
     fact("oversized_reply_id", 3318, @as(*fm.Header, @ptrCast(&response)).id);
     fact("oversized_count", c.MIG_BAD_ARGUMENTS, @as(*i32, @ptrCast(@alignCast(response[32..].ptr))).*);
