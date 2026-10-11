@@ -65,6 +65,16 @@ const Model = struct {
             e.member = null;
         };
     }
+    fn retireOnce(m: *Model, slot: usize) void {
+        const e = &m.entries[slot];
+        if (e.refs[2] == 0) return;
+        const dest = &m.entries[e.owner.?];
+        // Dropping an unused once right sends MACH_NOTIFY_SEND_ONCE even
+        // without a notification request, and can exceed the queue limit.
+        dest.queue[dest.queued] = 71;
+        dest.queued += 1;
+        e.refs[2] = 0;
+    }
     fn apply(m: *Model, a: Action, id: i32) i32 {
         if (a.call == .allocate) {
             _ = m.add(a.right, null);
@@ -74,7 +84,7 @@ const Model = struct {
         if (a.call == .send) {
             if (e.refs[1] == 0 and e.refs[2] == 0) return send_invalid_dest;
             const dest = if (e.refs[2] != 0) &m.entries[e.owner.?] else e;
-            if (dest.queued == 5) return send_timed_out;
+            if (e.refs[2] == 0 and dest.queued >= 5) return send_timed_out;
             dest.queue[dest.queued] = id;
             dest.queued += 1;
             if (e.refs[2] != 0) e.refs[2] = 0;
@@ -102,16 +112,17 @@ const Model = struct {
                 if (a.right == .receive or a.right == .set or a.right == .once) {
                     if (a.delta != 0 and a.delta != -1) return invalid_value;
                 } else if (@as(i64, e.refs[r]) + a.delta < 0) return invalid_value;
-                if (a.delta == -1 and a.right == .receive) m.retireReceive(a.slot) else if (a.delta == -1 and a.right == .set) m.retireSet(a.slot) else e.refs[r] = @intCast(@as(i64, e.refs[r]) + a.delta);
+                if (a.delta == -1 and a.right == .receive) m.retireReceive(a.slot) else if (a.delta == -1 and a.right == .set) m.retireSet(a.slot) else if (a.delta == -1 and a.right == .once) m.retireOnce(a.slot) else e.refs[r] = @intCast(@as(i64, e.refs[r]) + a.delta);
             },
             .deallocate => {
                 for ([_]usize{ 0, 2, 4 }) |r| if (e.refs[r] != 0) {
-                    e.refs[r] -= 1;
+                    if (r == 2) m.retireOnce(a.slot) else e.refs[r] -= 1;
                     return 0;
                 };
                 return invalid_right;
             },
             .destroy => {
+                m.retireOnce(a.slot);
                 if (e.refs[1] != 0) m.retireReceive(a.slot);
                 if (e.refs[3] != 0) m.retireSet(a.slot);
                 e.refs = @splat(0);
@@ -206,6 +217,19 @@ test "set membership singleton restrictions and queue FIFO" {
     try std.testing.expectEqual(@as(i32, recv_timed_out), m.apply(.{ .call = .receive }, 0));
     try std.testing.expectEqual(@as(i32, 0), m.apply(.{ .call = .destroy }, 0));
     try std.testing.expectEqual(@as(i32, invalid_name), m.apply(.{ .call = .deallocate }, 0));
+}
+test "unused send-once notifies and bypasses the queue limit" {
+    var m: Model = .{};
+    _ = m.add(.receive, null);
+    _ = m.add(.once, 0);
+    for (0..5) |id| try std.testing.expectEqual(@as(i32, 0), m.apply(.{ .call = .send }, @intCast(id)));
+    try std.testing.expectEqual(@as(i32, send_timed_out), m.apply(.{ .call = .send }, 99));
+    try std.testing.expectEqual(@as(i32, 0), m.apply(.{ .call = .send, .slot = 1 }, 100));
+    _ = m.add(.once, 0);
+    try std.testing.expectEqual(@as(i32, invalid_value), m.apply(.{ .call = .mod_refs, .slot = 2, .right = .once, .delta = 1 }, 0));
+    try std.testing.expectEqual(@as(i32, 0), m.apply(.{ .call = .deallocate, .slot = 2 }, 0));
+    try std.testing.expectEqual(@as(usize, 7), m.entries[0].queued);
+    try std.testing.expectEqual(@as(i32, 71), m.entries[0].queue[6]);
 }
 
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
@@ -308,7 +332,7 @@ fn execute(m: *Model, a: Action, id: i32, o: *Observer) void {
     }
     if (rc == 0 and a.call == .receive) o.equal("message_id", name, 0, before.entries[a.slot].queue[0], result_id);
     // Never continue a sequence with a divergent oracle; clean its known names.
-    if (!o.bad) observe(o, m.*);
+    observe(o, m.*);
 }
 fn cleanup(o: *Observer, m: *Model) void {
     for (m.entries[0..m.count]) |e| if (e.name != 0) {
@@ -331,7 +355,7 @@ fn runSeed(seed: u32, shortest: bool) bool {
         execute(&m, a, @intCast(step + 64400), &o);
         if (o.bad) break;
     }
-    if (!o.bad) inventory(&o, m);
+    inventory(&o, m);
     var clean: Observer = .{ .seed = seed, .step = 30, .action = .{ .call = .destroy } };
     cleanup(&clean, &m);
     cleanup_failures += @intFromBool(clean.bad);
