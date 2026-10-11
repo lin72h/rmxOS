@@ -83,7 +83,7 @@ const Model = struct {
         }
         const e = &m.entries[a.slot];
         if (a.call == .send) {
-            if (e.refs[1] == 0 and e.refs[2] == 0) return send_invalid_dest;
+            if (e.refs[0] == 0 and e.refs[2] == 0) return send_invalid_dest;
             const dest = if (e.refs[2] != 0) &m.entries[e.owner.?] else e;
             if (e.refs[2] == 0 and dest.queued >= 5) return send_timed_out;
             dest.queue[dest.queued] = id;
@@ -210,6 +210,7 @@ test "set membership singleton restrictions and queue FIFO" {
     try std.testing.expectEqual(@as(i32, invalid_right), m.apply(.{ .call = .deallocate }, 0));
     try std.testing.expectEqual(@as(i32, 0), m.apply(.{ .call = .destroy, .slot = 1 }, 0));
     try std.testing.expectEqual(@as(?usize, null), m.entries[0].member);
+    try std.testing.expectEqual(@as(i32, 0), m.apply(.{ .call = .insert }, 0));
     try std.testing.expectEqual(@as(i32, 0), m.apply(.{ .call = .send }, 11));
     try std.testing.expectEqual(@as(i32, 0), m.apply(.{ .call = .send }, 12));
     try std.testing.expectEqual(@as(i32, 0), m.apply(.{ .call = .receive }, 0));
@@ -223,6 +224,7 @@ test "unused send-once notifies and bypasses the queue limit" {
     var m: Model = .{};
     _ = m.add(.receive, null);
     _ = m.add(.once, 0);
+    try std.testing.expectEqual(@as(i32, 0), m.apply(.{ .call = .insert }, 0));
     for (0..5) |id| try std.testing.expectEqual(@as(i32, 0), m.apply(.{ .call = .send }, @intCast(id)));
     try std.testing.expectEqual(@as(i32, send_timed_out), m.apply(.{ .call = .send }, 99));
     try std.testing.expectEqual(@as(i32, 0), m.apply(.{ .call = .send, .slot = 1 }, 100));
@@ -322,7 +324,7 @@ fn execute(m: *Model, a: Action, id: i32, o: *Observer) void {
         .move_member => c.mach_port_move_member(self, name, if (a.other == 60) 0 else argumentName(before.entries[a.other])),
         .extract => c.op644_extract_right(self, name, if (a.once) c.MACH_MSG_TYPE_MAKE_SEND_ONCE else c.MACH_MSG_TYPE_MAKE_SEND, &new_name, &acquired),
         .send => blk: {
-            var h: Header = .{ .bits = if (before.entries[a.slot].refs[2] != 0) c.MACH_MSG_TYPE_MOVE_SEND_ONCE else c.MACH_MSG_TYPE_MAKE_SEND, .size = 24, .remote = name, .local = 0, .voucher = 0, .id = id };
+            var h: Header = .{ .bits = if (before.entries[a.slot].refs[2] != 0) c.MACH_MSG_TYPE_MOVE_SEND_ONCE else c.MACH_MSG_TYPE_COPY_SEND, .size = 24, .remote = name, .local = 0, .voucher = 0, .id = id };
             break :blk c.mach_msg(@ptrCast(&h), c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, 24, 0, 0, 0, 0);
         },
         .receive => blk: {
