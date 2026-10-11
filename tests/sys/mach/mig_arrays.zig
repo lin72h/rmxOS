@@ -3,7 +3,6 @@ const c = @cImport({
     @cInclude("mach/mach.h");
     @cInclude("mach/mach_port.h");
     @cInclude("mach/mach_host.h");
-    @cInclude("mach/host_priv.h");
     @cInclude("mach/clock.h");
     @cInclude("mach/task.h");
     @cInclude("mach/mach_vm.h");
@@ -69,11 +68,9 @@ pub fn inventory() void {
     fact("host_statistics", 46, c.host_statistics(host, c.HOST_VM_INFO, &words, &n));
     n = 256;
     fact("host_statistics64", 46, c.host_statistics64(host, 4, &words, &n));
-    n = 68;
-    fact("host_priv_statistics", 46, c.host_priv_statistics(host, c.HOST_VM_INFO, &words, &n));
-    var boot: [4096]u8 = @splat(0);
+    // mach_host_self supplies IKOT_HOST, not IKOT_HOST_PRIV. There is
+    // no public privileged-host acquisition path; those RPCs are not called.
     var version: [512]u8 = @splat(0);
-    fact("host_get_boot_info", 46, c.host_get_boot_info(host, &boot));
     fact("host_kernel_version", 46, c.host_kernel_version(host, &version));
     var voucher: u32 = 0;
     var recipe: [16]u8 = @splat(0);
@@ -105,10 +102,6 @@ pub fn inventory() void {
     var handlers: [32]u32 = @splat(0);
     var behaviors: [32]i32 = @splat(0);
     var flavors: [32]i32 = @splat(0);
-    n = 32;
-    fact("host_get_exception_ports", 0, c.host_get_exception_ports(host, c.EXC_MASK_BAD_ACCESS, &masks, &n, &handlers, &behaviors, &flavors));
-    n = 32;
-    fact("host_swap_exception_ports", 0, c.host_swap_exception_ports(host, c.EXC_MASK_BAD_ACCESS, 0, c.EXCEPTION_DEFAULT, c.THREAD_STATE_NONE, &masks, &n, &handlers, &behaviors, &flavors));
     n = 32;
     fact("task_get_exception_ports", 0, c.task_get_exception_ports(self, c.EXC_MASK_BAD_ACCESS, &masks, &n, &handlers, &behaviors, &flavors));
     n = 32;
