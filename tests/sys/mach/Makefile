@@ -78,7 +78,7 @@ mach_host_vm_test: ${.CURDIR}/mach_host_vm.zig
 	    -I${SRCTOP}/sys -femit-bin=${.TARGET}
 
 SCRIPTS+= mach_send_possible_test
-mach_send_possible_test: ${.CURDIR}/mach_send_possible.zig ${.CURDIR}/file_message.zig
+mach_send_possible_test: ${.CURDIR}/mach_send_possible.zig ${.CURDIR}/file_message.zig ${.CURDIR}/mig_arrays.zig
 	${ZIG} build-exe ${.CURDIR}/mach_send_possible.zig ${MACH_SO} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc \
 	    --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf \
 	    -I${SRCTOP}/sys -femit-bin=${.TARGET}

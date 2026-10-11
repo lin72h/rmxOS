@@ -1,7 +1,7 @@
 /*
  * IDENTIFICATION:
- * stub generated Thu Jun 11 18:17:44 2015
- * with a MiG generated Thu Jun 11 16:16:11 PDT 2015 by kmacy@serenity
+ * stub generated Sun Oct 11 18:36:48 2026
+ * with a MiG generated Sun Oct 11 18:35:57 NZDT 2026 by me@bdw-fx15-x64z
  * OPTIONS: 
  *	KernelServer
  */
@@ -32,6 +32,7 @@
 
 #include <sys/mach/std_types.h>
 #include <sys/mach/mig.h>
+#include <sys/mach/thread_status.h>
 #include <sys/mach/ipc_sync.h>
 #include <sys/mach/ipc/ipc_voucher.h>
 #include <sys/mach/ipc_host.h>
@@ -67,7 +68,7 @@
 #endif	/* min */
 
 #if !defined(_WALIGN_)
-#define _WALIGN_(x) (((x) + 7) & ~7)
+#define _WALIGN_(x) (((x) + 3) & ~3)
 #endif /* !defined(_WALIGN_) */
 
 #if !defined(_WALIGNSZ_)
@@ -78,7 +79,7 @@
 #define	UseStaticTemplates	1
 #endif	/* UseStaticTemplates */
 
-#define _WALIGN_(x) (((x) + 7) & ~7)
+#define _WALIGN_(x) (((x) + 3) & ~3)
 #define _WALIGNSZ_(x) _WALIGN_(sizeof(x))
 #ifndef	__DeclareRcvRpc
 #define	__DeclareRcvRpc(_NUM_, _NAME_)
@@ -1211,7 +1212,7 @@ mig_internal novalue _Xhost_priv_statistics
 
 	OutP->NDR = NDR_record;
 
-	OutP->Head.msgh_size = (sizeof(Reply) - 272) + (_WALIGN_((4 * OutP->host_info_outCnt)));
+	OutP->Head.msgh_size = (sizeof(Reply) - 272) + (((4 * OutP->host_info_outCnt)));
 
 	__AfterRcvRpc(402, "host_priv_statistics")
 }
@@ -2568,15 +2569,15 @@ mig_internal novalue _Xhost_get_exception_ports
 	OutP->NDR = NDR_record;
 
 	OutP->masksCnt = masksCnt;
-	msgh_size_delta = _WALIGN_((4 * masksCnt));
+	msgh_size_delta = ((4 * masksCnt));
 	msgh_size = (sizeof(Reply) - 384) + msgh_size_delta;
 	OutP = (Reply *) ((pointer_t) OutP + msgh_size_delta - 128);
 	(void)memcpy((char *) OutP->old_behaviors, (const char *) old_behaviors, 4 * masksCnt);
-	msgh_size_delta = _WALIGN_((4 * masksCnt));
+	msgh_size_delta = ((4 * masksCnt));
 	msgh_size += msgh_size_delta;
 	OutP = (Reply *) ((pointer_t) OutP + msgh_size_delta - 128);
 	(void)memcpy((char *) OutP->old_flavors, (const char *) old_flavors, 4 * masksCnt);
-	msgh_size += _WALIGN_((4 * masksCnt));
+	msgh_size += ((4 * masksCnt));
 
 	OutP = (Reply *) OutHeadP;
 	OutP->Head.msgh_bits |= MACH_MSGH_BITS_COMPLEX;
@@ -2771,15 +2772,15 @@ mig_internal novalue _Xhost_swap_exception_ports
 	OutP->NDR = NDR_record;
 
 	OutP->masksCnt = masksCnt;
-	msgh_size_delta = _WALIGN_((4 * masksCnt));
+	msgh_size_delta = ((4 * masksCnt));
 	msgh_size = (sizeof(Reply) - 384) + msgh_size_delta;
 	OutP = (Reply *) ((pointer_t) OutP + msgh_size_delta - 128);
 	(void)memcpy((char *) OutP->old_behaviors, (const char *) old_behaviors, 4 * masksCnt);
-	msgh_size_delta = _WALIGN_((4 * masksCnt));
+	msgh_size_delta = ((4 * masksCnt));
 	msgh_size += msgh_size_delta;
 	OutP = (Reply *) ((pointer_t) OutP + msgh_size_delta - 128);
 	(void)memcpy((char *) OutP->old_flavors, (const char *) old_flavors, 4 * masksCnt);
-	msgh_size += _WALIGN_((4 * masksCnt));
+	msgh_size += ((4 * masksCnt));
 
 	OutP = (Reply *) OutHeadP;
 	OutP->Head.msgh_bits |= MACH_MSGH_BITS_COMPLEX;

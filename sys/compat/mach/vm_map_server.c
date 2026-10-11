@@ -1,7 +1,7 @@
 /*
  * IDENTIFICATION:
- * stub generated Fri Oct  9 15:02:16 2026
- * with a MiG generated Tue Sep 22 19:11:28 NZST 2026 by me@bdw-fx15-x64z
+ * stub generated Sun Oct 11 18:36:49 2026
+ * with a MiG generated Sun Oct 11 18:35:57 NZDT 2026 by me@bdw-fx15-x64z
  * OPTIONS: 
  *	KernelServer
  */
@@ -68,7 +68,7 @@
 #endif	/* min */
 
 #if !defined(_WALIGN_)
-#define _WALIGN_(x) (((x) + 7) & ~7)
+#define _WALIGN_(x) (((x) + 3) & ~3)
 #endif /* !defined(_WALIGN_) */
 
 #if !defined(_WALIGNSZ_)
@@ -79,7 +79,7 @@
 #define	UseStaticTemplates	1
 #endif	/* UseStaticTemplates */
 
-#define _WALIGN_(x) (((x) + 7) & ~7)
+#define _WALIGN_(x) (((x) + 3) & ~3)
 #define _WALIGNSZ_(x) _WALIGN_(sizeof(x))
 #ifndef	__DeclareRcvRpc
 #define	__DeclareRcvRpc(_NUM_, _NAME_)
@@ -1180,7 +1180,7 @@ mig_internal novalue _Xvm_region
 
 
 	OutP->address = In0P->address;
-	OutP->Head.msgh_size = (sizeof(Reply) - 40) + (_WALIGN_((4 * OutP->infoCnt)));
+	OutP->Head.msgh_size = (sizeof(Reply) - 40) + (((4 * OutP->infoCnt)));
 
 	OutP->Head.msgh_bits |= MACH_MSGH_BITS_COMPLEX;
 	OutP->msgh_body.msgh_descriptor_count = 1;
@@ -3578,7 +3578,7 @@ mig_internal novalue _Xvm_region_recurse
 	OutP->address = In0P->address;
 
 	OutP->nesting_depth = In0P->nesting_depth;
-	OutP->Head.msgh_size = (sizeof(Reply) - 76) + (_WALIGN_((4 * OutP->infoCnt)));
+	OutP->Head.msgh_size = (sizeof(Reply) - 76) + (((4 * OutP->infoCnt)));
 
 	__AfterRcvRpc(3821, "vm_region_recurse")
 }
@@ -3707,7 +3707,7 @@ mig_internal novalue _Xvm_region_recurse_64
 	OutP->address = In0P->address;
 
 	OutP->nesting_depth = In0P->nesting_depth;
-	OutP->Head.msgh_size = (sizeof(Reply) - 76) + (_WALIGN_((4 * OutP->infoCnt)));
+	OutP->Head.msgh_size = (sizeof(Reply) - 76) + (((4 * OutP->infoCnt)));
 
 	__AfterRcvRpc(3822, "vm_region_recurse_64")
 }
@@ -4016,7 +4016,7 @@ mig_internal novalue _Xvm_region_64
 
 
 	OutP->address = In0P->address;
-	OutP->Head.msgh_size = (sizeof(Reply) - 40) + (_WALIGN_((4 * OutP->infoCnt)));
+	OutP->Head.msgh_size = (sizeof(Reply) - 40) + (((4 * OutP->infoCnt)));
 
 	OutP->Head.msgh_bits |= MACH_MSGH_BITS_COMPLEX;
 	OutP->msgh_body.msgh_descriptor_count = 1;

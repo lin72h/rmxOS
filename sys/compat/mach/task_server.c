@@ -1,7 +1,7 @@
 /*
  * IDENTIFICATION:
- * stub generated Wed Oct  7 18:52:55 2026
- * with a MiG generated Tue Sep 22 19:11:28 NZST 2026 by me@bdw-fx15-x64z
+ * stub generated Sun Oct 11 18:36:49 2026
+ * with a MiG generated Sun Oct 11 18:35:57 NZDT 2026 by me@bdw-fx15-x64z
  * OPTIONS: 
  *	KernelServer
  */
@@ -68,7 +68,7 @@
 #endif	/* min */
 
 #if !defined(_WALIGN_)
-#define _WALIGN_(x) (((x) + 7) & ~7)
+#define _WALIGN_(x) (((x) + 3) & ~3)
 #endif /* !defined(_WALIGN_) */
 
 #if !defined(_WALIGNSZ_)
@@ -79,7 +79,7 @@
 #define	UseStaticTemplates	1
 #endif	/* UseStaticTemplates */
 
-#define _WALIGN_(x) (((x) + 7) & ~7)
+#define _WALIGN_(x) (((x) + 3) & ~3)
 #define _WALIGNSZ_(x) _WALIGN_(sizeof(x))
 #ifndef	__DeclareRcvRpc
 #define	__DeclareRcvRpc(_NUM_, _NAME_)
@@ -2126,7 +2126,7 @@ mig_internal novalue _Xtask_info
 
 	OutP->NDR = NDR_record;
 
-	OutP->Head.msgh_size = (sizeof(Reply) - 208) + (_WALIGN_((4 * OutP->task_info_outCnt)));
+	OutP->Head.msgh_size = (sizeof(Reply) - 208) + (((4 * OutP->task_info_outCnt)));
 
 	__AfterRcvRpc(3405, "task_info")
 }
@@ -2160,7 +2160,7 @@ mig_internal kern_return_t __MIG_check__Request__task_set_info_t(__attribute__((
 	if ( In0P->task_info_inCnt > 52 )
 		return MIG_BAD_ARGUMENTS;
 	if (((msgh_size - (sizeof(__Request) - 208)) / 4 < In0P->task_info_inCnt) ||
-	    (msgh_size != (sizeof(__Request) - 208) + _WALIGN_(4 * In0P->task_info_inCnt)))
+	    (msgh_size != (sizeof(__Request) - 208) + (4 * In0P->task_info_inCnt)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
 
@@ -2888,7 +2888,7 @@ mig_internal kern_return_t __MIG_check__Request__thread_create_running_from_user
 	if ( In0P->new_stateCnt > 32 )
 		return MIG_BAD_ARGUMENTS;
 	if (((msgh_size - (sizeof(__Request) - 128)) / 4 < In0P->new_stateCnt) ||
-	    (msgh_size != (sizeof(__Request) - 128) + _WALIGN_(4 * In0P->new_stateCnt)))
+	    (msgh_size != (sizeof(__Request) - 128) + (4 * In0P->new_stateCnt)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
 
@@ -3318,15 +3318,15 @@ mig_internal novalue _Xtask_get_exception_ports
 	OutP->NDR = NDR_record;
 
 	OutP->masksCnt = masksCnt;
-	msgh_size_delta = _WALIGN_((4 * masksCnt));
+	msgh_size_delta = ((4 * masksCnt));
 	msgh_size = (sizeof(Reply) - 384) + msgh_size_delta;
 	OutP = (Reply *) ((pointer_t) OutP + msgh_size_delta - 128);
 	(void)memcpy((char *) OutP->old_behaviors, (const char *) old_behaviors, 4 * masksCnt);
-	msgh_size_delta = _WALIGN_((4 * masksCnt));
+	msgh_size_delta = ((4 * masksCnt));
 	msgh_size += msgh_size_delta;
 	OutP = (Reply *) ((pointer_t) OutP + msgh_size_delta - 128);
 	(void)memcpy((char *) OutP->old_flavors, (const char *) old_flavors, 4 * masksCnt);
-	msgh_size += _WALIGN_((4 * masksCnt));
+	msgh_size += ((4 * masksCnt));
 
 	OutP = (Reply *) OutHeadP;
 	OutP->Head.msgh_bits |= MACH_MSGH_BITS_COMPLEX;
@@ -3525,15 +3525,15 @@ mig_internal novalue _Xtask_swap_exception_ports
 	OutP->NDR = NDR_record;
 
 	OutP->masksCnt = masksCnt;
-	msgh_size_delta = _WALIGN_((4 * masksCnt));
+	msgh_size_delta = ((4 * masksCnt));
 	msgh_size = (sizeof(Reply) - 384) + msgh_size_delta;
 	OutP = (Reply *) ((pointer_t) OutP + msgh_size_delta - 128);
 	(void)memcpy((char *) OutP->old_behaviors, (const char *) old_behaviors, 4 * masksCnt);
-	msgh_size_delta = _WALIGN_((4 * masksCnt));
+	msgh_size_delta = ((4 * masksCnt));
 	msgh_size += msgh_size_delta;
 	OutP = (Reply *) ((pointer_t) OutP + msgh_size_delta - 128);
 	(void)memcpy((char *) OutP->old_flavors, (const char *) old_flavors, 4 * masksCnt);
-	msgh_size += _WALIGN_((4 * masksCnt));
+	msgh_size += ((4 * masksCnt));
 
 	OutP = (Reply *) OutHeadP;
 	OutP->Head.msgh_bits |= MACH_MSGH_BITS_COMPLEX;
@@ -3840,7 +3840,7 @@ mig_internal kern_return_t __MIG_check__Request__task_policy_set_t(__attribute__
 	if ( In0P->policy_infoCnt > 16 )
 		return MIG_BAD_ARGUMENTS;
 	if (((msgh_size - (sizeof(__Request) - 64)) / 4 < In0P->policy_infoCnt) ||
-	    (msgh_size != (sizeof(__Request) - 64) + _WALIGN_(4 * In0P->policy_infoCnt)))
+	    (msgh_size != (sizeof(__Request) - 64) + (4 * In0P->policy_infoCnt)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
 
@@ -4061,7 +4061,7 @@ mig_internal novalue _Xtask_policy_get
 
 	OutP->NDR = NDR_record;
 
-	msgh_size_delta = _WALIGN_((4 * OutP->policy_infoCnt));
+	msgh_size_delta = ((4 * OutP->policy_infoCnt));
 	OutP->Head.msgh_size = (sizeof(Reply) - 64) + msgh_size_delta;
 	OutP = (Reply *) ((pointer_t) OutP + msgh_size_delta - 64);
 
@@ -4098,12 +4098,12 @@ mig_internal kern_return_t __MIG_check__Request__task_policy_t(__attribute__((__
 	if (In0P->NDR.int_rep != NDR_record.int_rep)
 		__NDR_convert__int_rep__Request__task_policy_t__baseCnt(&In0P->baseCnt, In0P->NDR.int_rep);
 #endif	/* __NDR_convert__int_rep__Request__task_policy_t__baseCnt__defined */
-	msgh_size_delta = _WALIGN_(4 * In0P->baseCnt);
+	msgh_size_delta = (4 * In0P->baseCnt);
 #if	__MigTypeCheck
 	if ( In0P->baseCnt > 5 )
 		return MIG_BAD_ARGUMENTS;
 	if (((msgh_size - (sizeof(__Request) - 20)) / 4 < In0P->baseCnt) ||
-	    (msgh_size != (sizeof(__Request) - 20) + _WALIGN_(4 * In0P->baseCnt)))
+	    (msgh_size != (sizeof(__Request) - 20) + (4 * In0P->baseCnt)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
 
@@ -4914,12 +4914,12 @@ mig_internal kern_return_t __MIG_check__Request__task_set_policy_t(__attribute__
 	if (In0P->NDR.int_rep != NDR_record.int_rep)
 		__NDR_convert__int_rep__Request__task_set_policy_t__baseCnt(&In0P->baseCnt, In0P->NDR.int_rep);
 #endif	/* __NDR_convert__int_rep__Request__task_set_policy_t__baseCnt__defined */
-	msgh_size_delta = _WALIGN_(4 * In0P->baseCnt);
+	msgh_size_delta = (4 * In0P->baseCnt);
 #if	__MigTypeCheck
 	if ( In0P->baseCnt > 5 )
 		return MIG_BAD_ARGUMENTS;
 	if (((msgh_size - (sizeof(__Request) - 24)) / 4 < In0P->baseCnt) ||
-	    (msgh_size < (sizeof(__Request) - 24) + _WALIGN_(4 * In0P->baseCnt)))
+	    (msgh_size < (sizeof(__Request) - 24) + (4 * In0P->baseCnt)))
 		return MIG_BAD_ARGUMENTS;
 	msgh_size -= msgh_size_delta;
 #endif	/* __MigTypeCheck */
@@ -4930,12 +4930,12 @@ mig_internal kern_return_t __MIG_check__Request__task_set_policy_t(__attribute__
 	if (In0P->NDR.int_rep != NDR_record.int_rep)
 		__NDR_convert__int_rep__Request__task_set_policy_t__limitCnt(&In1P->limitCnt, In1P->NDR.int_rep);
 #endif	/* __NDR_convert__int_rep__Request__task_set_policy_t__limitCnt__defined */
-	msgh_size_delta = _WALIGN_(4 * In1P->limitCnt);
+	msgh_size_delta = (4 * In1P->limitCnt);
 #if	__MigTypeCheck
 	if ( In1P->limitCnt > 1 )
 		return MIG_BAD_ARGUMENTS;
 	if (((msgh_size - (sizeof(__Request) - 24)) / 4 < In1P->limitCnt) ||
-	    (msgh_size != (sizeof(__Request) - 24) + _WALIGN_(4 * In1P->limitCnt)))
+	    (msgh_size != (sizeof(__Request) - 24) + (4 * In1P->limitCnt)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
 
@@ -5177,7 +5177,7 @@ mig_internal novalue _Xtask_get_state
 
 	OutP->NDR = NDR_record;
 
-	OutP->Head.msgh_size = (sizeof(Reply) - 128) + (_WALIGN_((4 * OutP->old_stateCnt)));
+	OutP->Head.msgh_size = (sizeof(Reply) - 128) + (((4 * OutP->old_stateCnt)));
 
 	__AfterRcvRpc(3433, "task_get_state")
 }
@@ -5211,7 +5211,7 @@ mig_internal kern_return_t __MIG_check__Request__task_set_state_t(__attribute__(
 	if ( In0P->new_stateCnt > 32 )
 		return MIG_BAD_ARGUMENTS;
 	if (((msgh_size - (sizeof(__Request) - 128)) / 4 < In0P->new_stateCnt) ||
-	    (msgh_size != (sizeof(__Request) - 128) + _WALIGN_(4 * In0P->new_stateCnt)))
+	    (msgh_size != (sizeof(__Request) - 128) + (4 * In0P->new_stateCnt)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
 

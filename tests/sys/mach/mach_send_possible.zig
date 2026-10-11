@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 const std = @import("std");
 const fm = @import("file_message.zig");
+const arrays = @import("mig_arrays.zig");
 const c = @cImport({
     @cInclude("atf-c.h");
     @cInclude("mach/mach.h");
@@ -11,7 +12,7 @@ const c = @cImport({
     @cInclude("stdio.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-const names = [_][*:0]const u8{ "full", "rearm", "cancel", "death", "early", "replace", "qlimit", "already_dead" };
+const names = [_][*:0]const u8{ "full", "rearm", "cancel", "death", "early", "replace", "qlimit", "already_dead", "mig_limits", "mig_tempowner", "mig_launchd", "mig_maximum", "mig_inventory" };
 var cases: [names.len]c.atf_tc_t = undefined;
 fn fact(name: [*:0]const u8, expected: i64, observed: i64) void {
     _ = c.printf("send_possible check=%s expected=%lld observed=%lld\n", name, @as(c_longlong, expected), @as(c_longlong, observed));
@@ -69,6 +70,10 @@ fn delayed(command: u32, name: u32) u64 {
     return out;
 }
 fn run(name: []const u8) void {
+    if (std.mem.startsWith(u8, name, "mig_")) {
+        if (std.mem.eql(u8, name, "mig_limits")) arrays.limits(1, false) else if (std.mem.eql(u8, name, "mig_tempowner")) arrays.limits(0, true) else if (std.mem.eql(u8, name, "mig_launchd")) arrays.limits(@sizeOf(c.mach_port_limits_t), false) else if (std.mem.eql(u8, name, "mig_maximum")) arrays.maximum() else arrays.inventory();
+        return;
+    }
     fact("public_selector", 66, c.MACH_NOTIFY_SEND_POSSIBLE);
     const peer = fm.allocate();
     fact("peer_send_right", 0, c.mach_port_insert_right(c.mach_task_self(), peer, peer, c.MACH_MSG_TYPE_MAKE_SEND));

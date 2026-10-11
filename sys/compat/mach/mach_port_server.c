@@ -1,7 +1,7 @@
 /*
  * IDENTIFICATION:
- * stub generated Thu Jun 11 18:17:45 2015
- * with a MiG generated Thu Jun 11 16:16:11 PDT 2015 by kmacy@serenity
+ * stub generated Sun Oct 11 18:36:48 2026
+ * with a MiG generated Sun Oct 11 18:35:57 NZDT 2026 by me@bdw-fx15-x64z
  * OPTIONS: 
  *	KernelServer
  */
@@ -32,6 +32,7 @@
 
 #include <sys/mach/std_types.h>
 #include <sys/mach/mig.h>
+#include <sys/mach/thread_status.h>
 #include <sys/mach/ipc_sync.h>
 #include <sys/mach/ipc/ipc_voucher.h>
 #include <sys/mach/ipc_host.h>
@@ -66,7 +67,7 @@
 #endif	/* min */
 
 #if !defined(_WALIGN_)
-#define _WALIGN_(x) (((x) + 7) & ~7)
+#define _WALIGN_(x) (((x) + 3) & ~3)
 #endif /* !defined(_WALIGN_) */
 
 #if !defined(_WALIGNSZ_)
@@ -77,7 +78,7 @@
 #define	UseStaticTemplates	1
 #endif	/* UseStaticTemplates */
 
-#define _WALIGN_(x) (((x) + 7) & ~7)
+#define _WALIGN_(x) (((x) + 3) & ~3)
 #define _WALIGNSZ_(x) _WALIGN_(sizeof(x))
 #ifndef	__DeclareRcvRpc
 #define	__DeclareRcvRpc(_NUM_, _NAME_)
@@ -3531,7 +3532,7 @@ mig_internal novalue _Xmach_port_get_attributes
 
 	OutP->NDR = NDR_record;
 
-	OutP->Head.msgh_size = (sizeof(Reply) - 68) + (_WALIGN_((4 * OutP->port_info_outCnt)));
+	OutP->Head.msgh_size = (sizeof(Reply) - 68) + (((4 * OutP->port_info_outCnt)));
 
 	__AfterRcvRpc(3217, "mach_port_get_attributes")
 }
@@ -3565,7 +3566,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_set_attributes_t(__at
 	if ( In0P->port_infoCnt > 17 )
 		return MIG_BAD_ARGUMENTS;
 	if (((msgh_size - (sizeof(__Request) - 68)) / 4 < In0P->port_infoCnt) ||
-	    (msgh_size != (sizeof(__Request) - 68) + _WALIGN_(4 * In0P->port_infoCnt)))
+	    (msgh_size != (sizeof(__Request) - 68) + (4 * In0P->port_infoCnt)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
 

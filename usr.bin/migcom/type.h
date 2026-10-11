@@ -280,7 +280,7 @@ typedef struct ipc_type
 
 #define	itNULL		((ipc_type_t *) 0)
 
-#define itWordAlign     (sizeof(void *))
+#define itWordAlign     4UL
 
 extern ipc_type_t *itLookUp(identifier_t name);
 extern void itInsert(identifier_t name, ipc_type_t *it);
