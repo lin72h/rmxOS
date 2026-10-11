@@ -360,6 +360,7 @@ fn execute(m: *Model, a: Action, id: i32, o: *Observer) void {
     var acquired: c.mach_msg_type_name_t = 0;
     var result_id: i32 = 0;
     const rc = switch (a.call) {
+        .names => unreachable, // Inventory runs outside generated state transitions.
         .allocate => c.mach_port_allocate(self, @intFromEnum(a.right), &new_name),
         .insert => c.mach_port_insert_right(self, name, name, c.MACH_MSG_TYPE_MAKE_SEND),
         .mod_refs => c.mach_port_mod_refs(self, name, @intFromEnum(a.right), a.delta),
