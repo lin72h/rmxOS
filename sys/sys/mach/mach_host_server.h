@@ -3,8 +3,6 @@
 
 /* Module mach_host */
 
-#pragma GCC diagnostic ignored "-Wredundant-decls"
-
 #include <sys/cdefs.h>
 #include <sys/types.h>
 #ifdef _KERNEL
@@ -43,6 +41,7 @@ typedef function_table_entry   *function_table_t;
 
 #include <sys/mach/std_types.h>
 #include <sys/mach/mig.h>
+#include <sys/mach/thread_status.h>
 #include <sys/mach/ipc_sync.h>
 #include <sys/mach/ipc/ipc_voucher.h>
 #include <sys/mach/ipc_host.h>
@@ -871,9 +870,6 @@ extern const struct mach_host_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		host_flavor_t flavor;
 		mach_msg_type_number_t host_info_outCnt;
@@ -887,9 +883,6 @@ extern const struct mach_host_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 	} __Request__host_kernel_version_t;
 #ifdef  __MigPackStructs
 #pragma pack()
@@ -900,9 +893,6 @@ extern const struct mach_host_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 	} __Request__host_page_size_t;
 #ifdef  __MigPackStructs
 #pragma pack()
@@ -931,9 +921,6 @@ extern const struct mach_host_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		processor_flavor_t flavor;
 	} __Request__host_processor_info_t;
@@ -946,9 +933,6 @@ extern const struct mach_host_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		clock_id_t clock_id;
 	} __Request__host_get_clock_service_t;
@@ -961,9 +945,6 @@ extern const struct mach_host_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 	} __Request__host_virtual_physical_table_info_t;
 #ifdef  __MigPackStructs
 #pragma pack()
@@ -974,9 +955,6 @@ extern const struct mach_host_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 	} __Request__processor_set_default_t;
 #ifdef  __MigPackStructs
 #pragma pack()
@@ -987,9 +965,6 @@ extern const struct mach_host_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 	} __Request__processor_set_create_t;
 #ifdef  __MigPackStructs
 #pragma pack()
@@ -1018,9 +993,6 @@ extern const struct mach_host_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		host_flavor_t flavor;
 		mach_msg_type_number_t host_info_outCnt;
@@ -1050,9 +1022,6 @@ extern const struct mach_host_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		host_flavor_t flavor;
 		mach_msg_type_number_t host_info64_outCnt;
@@ -1066,9 +1035,6 @@ extern const struct mach_host_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 	} __Request__mach_zone_info_t;
 #ifdef  __MigPackStructs
 #pragma pack()
@@ -1079,9 +1045,6 @@ extern const struct mach_host_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_msg_type_number_t recipesCnt;
 		uint8_t recipes[5120];

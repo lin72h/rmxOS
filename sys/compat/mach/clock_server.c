@@ -1,7 +1,7 @@
 /*
  * IDENTIFICATION:
- * stub generated Sun Oct 11 18:36:48 2026
- * with a MiG generated Sun Oct 11 18:35:57 NZDT 2026 by me@bdw-fx15-x64z
+ * stub generated Sun Oct 11 19:23:07 2026
+ * with a MiG generated Sun Oct 11 19:20:48 NZDT 2026 by me@bdw-fx15-x64z
  * OPTIONS: 
  *	KernelServer
  */
@@ -133,9 +133,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 	} __Request__clock_get_time_t;
 #ifdef  __MigPackStructs
 #pragma pack()
@@ -146,9 +143,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		clock_flavor_t flavor;
 		mach_msg_type_number_t clock_attrCnt;
@@ -254,8 +248,7 @@ mig_internal kern_return_t __MIG_check__Request__clock_get_time_t(__attribute__(
 
 	typedef __Request__clock_get_time_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -296,9 +289,6 @@ mig_internal novalue _Xclock_get_time
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		mach_msg_trailer_t trailer;
 	} Request;
 #ifdef  __MigPackStructs
@@ -326,7 +316,7 @@ mig_internal novalue _Xclock_get_time
 #endif /* __MigKernelSpecificCode */
 	__DeclareRcvRpc(1000, "clock_get_time")
 	__BeforeRcvRpc(1000, "clock_get_time")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__clock_get_time_t__defined)
 	check_result = __MIG_check__Request__clock_get_time_t((__Request *)In0P);
@@ -358,8 +348,7 @@ mig_internal kern_return_t __MIG_check__Request__clock_get_attributes_t(__attrib
 
 	typedef __Request__clock_get_attributes_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -404,9 +393,6 @@ mig_internal novalue _Xclock_get_attributes
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		clock_flavor_t flavor;
 		mach_msg_type_number_t clock_attrCnt;
@@ -437,7 +423,7 @@ mig_internal novalue _Xclock_get_attributes
 #endif /* __MigKernelSpecificCode */
 	__DeclareRcvRpc(1001, "clock_get_attributes")
 	__BeforeRcvRpc(1001, "clock_get_attributes")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__clock_get_attributes_t__defined)
 	check_result = __MIG_check__Request__clock_get_attributes_t((__Request *)In0P);

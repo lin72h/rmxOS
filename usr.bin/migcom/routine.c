@@ -1757,10 +1757,7 @@ rtCheckRoutine(register routine_t *rt)
 	 * kernel cannot change a message from simple to complex,
 	 * therefore SimpleSendReply and SimpleRcvReply become SimpleReply
 	 */
-#ifdef notyet
-	/* Setting this to true causes MIG to generate incorrect code */
 	rtCheckSimple(rt->rtArgs, akbRequest, &rt->rtSimpleRequest);
-#endif
 	rtCheckSimple(rt->rtArgs, akbReply, &rt->rtSimpleReply);
 
 	rt->rtRequestKPDs = rtCountKPDs(rt->rtArgs, akbSendKPD);

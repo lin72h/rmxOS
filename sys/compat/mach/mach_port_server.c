@@ -1,7 +1,7 @@
 /*
  * IDENTIFICATION:
- * stub generated Sun Oct 11 18:36:48 2026
- * with a MiG generated Sun Oct 11 18:35:57 NZDT 2026 by me@bdw-fx15-x64z
+ * stub generated Sun Oct 11 19:23:07 2026
+ * with a MiG generated Sun Oct 11 19:20:48 NZDT 2026 by me@bdw-fx15-x64z
  * OPTIONS: 
  *	KernelServer
  */
@@ -133,9 +133,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 	} __Request__mach_port_names_t;
 #ifdef  __MigPackStructs
 #pragma pack()
@@ -146,9 +143,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 	} __Request__mach_port_type_t;
@@ -161,9 +155,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t old_name;
 		mach_port_name_t new_name;
@@ -177,9 +168,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_right_t right;
 		mach_port_name_t name;
@@ -193,9 +181,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_right_t right;
 	} __Request__mach_port_allocate_t;
@@ -208,9 +193,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 	} __Request__mach_port_deallocate_t;
@@ -239,9 +221,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_msg_type_name_t msgt_name;
@@ -255,9 +234,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_port_right_t right;
@@ -272,9 +248,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t member;
 		mach_port_name_t after;
@@ -288,9 +261,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 	} __Request__mach_port_destroy_t;
@@ -303,9 +273,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_port_right_t right;
@@ -319,9 +286,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_msg_trailer_type_t trailer_type;
@@ -337,9 +301,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_port_mscount_t mscount;
@@ -353,9 +314,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 	} __Request__mach_port_get_set_status_t;
@@ -386,9 +344,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_port_seqno_t seqno;
@@ -402,9 +357,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_port_flavor_t flavor;
@@ -419,9 +371,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_port_flavor_t flavor;
@@ -437,9 +386,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_right_t right;
 		mach_port_qos_t qos;
@@ -471,9 +417,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		int table_entries;
 	} __Request__task_set_port_space_t;
@@ -486,9 +429,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 	} __Request__mach_port_get_srights_t;
@@ -501,9 +441,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 	} __Request__mach_port_space_info_t;
 #ifdef  __MigPackStructs
 #pragma pack()
@@ -514,9 +451,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 	} __Request__mach_port_dnrequest_info_t;
@@ -529,9 +463,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_port_name_t pset;
@@ -545,9 +476,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_port_name_t pset;
@@ -561,9 +489,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 	} __Request__mach_port_get_context_t;
@@ -576,9 +501,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_vm_address_t context;
@@ -592,9 +514,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 	} __Request__mach_port_kobject_t;
@@ -623,9 +542,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_port_delta_t srdelta;
@@ -640,9 +556,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		uint64_t guard;
@@ -657,9 +570,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		uint64_t guard;
@@ -673,9 +583,6 @@
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 	} __Request__mach_port_space_basic_info_t;
 #ifdef  __MigPackStructs
 #pragma pack()
@@ -1313,8 +1220,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_names_t(__attribute__
 
 	typedef __Request__mach_port_names_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -1361,9 +1267,6 @@ mig_internal novalue _Xmach_port_names
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		mach_msg_trailer_t trailer;
 	} Request;
 #ifdef  __MigPackStructs
@@ -1434,7 +1337,7 @@ mig_internal novalue _Xmach_port_names
 
 	__DeclareRcvRpc(3200, "mach_port_names")
 	__BeforeRcvRpc(3200, "mach_port_names")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_names_t__defined)
 	check_result = __MIG_check__Request__mach_port_names_t((__Request *)In0P);
@@ -1497,8 +1400,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_type_t(__attribute__(
 
 	typedef __Request__mach_port_type_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -1541,9 +1443,6 @@ mig_internal novalue _Xmach_port_type
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_msg_trailer_t trailer;
@@ -1575,7 +1474,7 @@ mig_internal novalue _Xmach_port_type
 
 	__DeclareRcvRpc(3201, "mach_port_type")
 	__BeforeRcvRpc(3201, "mach_port_type")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_type_t__defined)
 	check_result = __MIG_check__Request__mach_port_type_t((__Request *)In0P);
@@ -1610,8 +1509,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_rename_t(__attribute_
 
 	typedef __Request__mach_port_rename_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -1654,9 +1552,6 @@ mig_internal novalue _Xmach_port_rename
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t old_name;
 		mach_port_name_t new_name;
@@ -1689,7 +1584,7 @@ mig_internal novalue _Xmach_port_rename
 
 	__DeclareRcvRpc(3202, "mach_port_rename")
 	__BeforeRcvRpc(3202, "mach_port_rename")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_rename_t__defined)
 	check_result = __MIG_check__Request__mach_port_rename_t((__Request *)In0P);
@@ -1720,8 +1615,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_allocate_name_t(__att
 
 	typedef __Request__mach_port_allocate_name_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -1764,9 +1658,6 @@ mig_internal novalue _Xmach_port_allocate_name
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_right_t right;
 		mach_port_name_t name;
@@ -1799,7 +1690,7 @@ mig_internal novalue _Xmach_port_allocate_name
 
 	__DeclareRcvRpc(3203, "mach_port_allocate_name")
 	__BeforeRcvRpc(3203, "mach_port_allocate_name")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_allocate_name_t__defined)
 	check_result = __MIG_check__Request__mach_port_allocate_name_t((__Request *)In0P);
@@ -1830,8 +1721,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_allocate_t(__attribut
 
 	typedef __Request__mach_port_allocate_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -1874,9 +1764,6 @@ mig_internal novalue _Xmach_port_allocate
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_right_t right;
 		mach_msg_trailer_t trailer;
@@ -1908,7 +1795,7 @@ mig_internal novalue _Xmach_port_allocate
 
 	__DeclareRcvRpc(3204, "mach_port_allocate")
 	__BeforeRcvRpc(3204, "mach_port_allocate")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_allocate_t__defined)
 	check_result = __MIG_check__Request__mach_port_allocate_t((__Request *)In0P);
@@ -1943,8 +1830,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_deallocate_t(__attrib
 
 	typedef __Request__mach_port_deallocate_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -1985,9 +1871,6 @@ mig_internal novalue _Xmach_port_deallocate
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_msg_trailer_t trailer;
@@ -2019,7 +1902,7 @@ mig_internal novalue _Xmach_port_deallocate
 
 	__DeclareRcvRpc(3205, "mach_port_deallocate")
 	__BeforeRcvRpc(3205, "mach_port_deallocate")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_deallocate_t__defined)
 	check_result = __MIG_check__Request__mach_port_deallocate_t((__Request *)In0P);
@@ -2167,8 +2050,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_extract_right_t(__att
 
 	typedef __Request__mach_port_extract_right_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -2215,9 +2097,6 @@ mig_internal novalue _Xmach_port_extract_right
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_msg_type_name_t msgt_name;
@@ -2268,7 +2147,7 @@ mig_internal novalue _Xmach_port_extract_right
 
 	__DeclareRcvRpc(3207, "mach_port_extract_right")
 	__BeforeRcvRpc(3207, "mach_port_extract_right")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_extract_right_t__defined)
 	check_result = __MIG_check__Request__mach_port_extract_right_t((__Request *)In0P);
@@ -2318,8 +2197,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_mod_refs_t(__attribut
 
 	typedef __Request__mach_port_mod_refs_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -2364,9 +2242,6 @@ mig_internal novalue _Xmach_port_mod_refs
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_port_right_t right;
@@ -2400,7 +2275,7 @@ mig_internal novalue _Xmach_port_mod_refs
 
 	__DeclareRcvRpc(3208, "mach_port_mod_refs")
 	__BeforeRcvRpc(3208, "mach_port_mod_refs")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_mod_refs_t__defined)
 	check_result = __MIG_check__Request__mach_port_mod_refs_t((__Request *)In0P);
@@ -2431,8 +2306,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_move_member_t(__attri
 
 	typedef __Request__mach_port_move_member_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -2475,9 +2349,6 @@ mig_internal novalue _Xmach_port_move_member
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t member;
 		mach_port_name_t after;
@@ -2510,7 +2381,7 @@ mig_internal novalue _Xmach_port_move_member
 
 	__DeclareRcvRpc(3209, "mach_port_move_member")
 	__BeforeRcvRpc(3209, "mach_port_move_member")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_move_member_t__defined)
 	check_result = __MIG_check__Request__mach_port_move_member_t((__Request *)In0P);
@@ -2541,8 +2412,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_destroy_t(__attribute
 
 	typedef __Request__mach_port_destroy_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -2583,9 +2453,6 @@ mig_internal novalue _Xmach_port_destroy
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_msg_trailer_t trailer;
@@ -2617,7 +2484,7 @@ mig_internal novalue _Xmach_port_destroy
 
 	__DeclareRcvRpc(3210, "mach_port_destroy")
 	__BeforeRcvRpc(3210, "mach_port_destroy")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_destroy_t__defined)
 	check_result = __MIG_check__Request__mach_port_destroy_t((__Request *)In0P);
@@ -2648,8 +2515,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_get_refs_t(__attribut
 
 	typedef __Request__mach_port_get_refs_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -2694,9 +2560,6 @@ mig_internal novalue _Xmach_port_get_refs
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_port_right_t right;
@@ -2729,7 +2592,7 @@ mig_internal novalue _Xmach_port_get_refs
 
 	__DeclareRcvRpc(3211, "mach_port_get_refs")
 	__BeforeRcvRpc(3211, "mach_port_get_refs")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_get_refs_t__defined)
 	check_result = __MIG_check__Request__mach_port_get_refs_t((__Request *)In0P);
@@ -2764,8 +2627,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_peek_t(__attribute__(
 
 	typedef __Request__mach_port_peek_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -2818,9 +2680,6 @@ mig_internal novalue _Xmach_port_peek
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_msg_trailer_type_t trailer_type;
@@ -2855,7 +2714,7 @@ mig_internal novalue _Xmach_port_peek
 
 	__DeclareRcvRpc(3212, "mach_port_peek")
 	__BeforeRcvRpc(3212, "mach_port_peek")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_peek_t__defined)
 	check_result = __MIG_check__Request__mach_port_peek_t((__Request *)In0P);
@@ -2896,8 +2755,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_set_mscount_t(__attri
 
 	typedef __Request__mach_port_set_mscount_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -2940,9 +2798,6 @@ mig_internal novalue _Xmach_port_set_mscount
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_port_mscount_t mscount;
@@ -2975,7 +2830,7 @@ mig_internal novalue _Xmach_port_set_mscount
 
 	__DeclareRcvRpc(3213, "mach_port_set_mscount")
 	__BeforeRcvRpc(3213, "mach_port_set_mscount")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_set_mscount_t__defined)
 	check_result = __MIG_check__Request__mach_port_set_mscount_t((__Request *)In0P);
@@ -3006,8 +2861,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_get_set_status_t(__at
 
 	typedef __Request__mach_port_get_set_status_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -3052,9 +2906,6 @@ mig_internal novalue _Xmach_port_get_set_status
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_msg_trailer_t trailer;
@@ -3107,7 +2958,7 @@ mig_internal novalue _Xmach_port_get_set_status
 
 	__DeclareRcvRpc(3214, "mach_port_get_set_status")
 	__BeforeRcvRpc(3214, "mach_port_get_set_status")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_get_set_status_t__defined)
 	check_result = __MIG_check__Request__mach_port_get_set_status_t((__Request *)In0P);
@@ -3314,8 +3165,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_set_seqno_t(__attribu
 
 	typedef __Request__mach_port_set_seqno_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -3358,9 +3208,6 @@ mig_internal novalue _Xmach_port_set_seqno
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_port_seqno_t seqno;
@@ -3393,7 +3240,7 @@ mig_internal novalue _Xmach_port_set_seqno
 
 	__DeclareRcvRpc(3216, "mach_port_set_seqno")
 	__BeforeRcvRpc(3216, "mach_port_set_seqno")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_set_seqno_t__defined)
 	check_result = __MIG_check__Request__mach_port_set_seqno_t((__Request *)In0P);
@@ -3424,8 +3271,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_get_attributes_t(__at
 
 	typedef __Request__mach_port_get_attributes_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -3472,9 +3318,6 @@ mig_internal novalue _Xmach_port_get_attributes
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_port_flavor_t flavor;
@@ -3508,7 +3351,7 @@ mig_internal novalue _Xmach_port_get_attributes
 
 	__DeclareRcvRpc(3217, "mach_port_get_attributes")
 	__BeforeRcvRpc(3217, "mach_port_get_attributes")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_get_attributes_t__defined)
 	check_result = __MIG_check__Request__mach_port_get_attributes_t((__Request *)In0P);
@@ -3552,8 +3395,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_set_attributes_t(__at
 
 #if	__MigTypeCheck
 	msgh_size = In0P->Head.msgh_size;
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (msgh_size < (sizeof(__Request) - 68)) ||  (msgh_size > (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -3612,9 +3454,6 @@ mig_internal novalue _Xmach_port_set_attributes
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_port_flavor_t flavor;
@@ -3649,7 +3488,7 @@ mig_internal novalue _Xmach_port_set_attributes
 
 	__DeclareRcvRpc(3218, "mach_port_set_attributes")
 	__BeforeRcvRpc(3218, "mach_port_set_attributes")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_set_attributes_t__defined)
 	check_result = __MIG_check__Request__mach_port_set_attributes_t((__Request *)In0P);
@@ -3680,8 +3519,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_allocate_qos_t(__attr
 
 	typedef __Request__mach_port_allocate_qos_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -3726,9 +3564,6 @@ mig_internal novalue _Xmach_port_allocate_qos
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_right_t right;
 		mach_port_qos_t qos;
@@ -3761,7 +3596,7 @@ mig_internal novalue _Xmach_port_allocate_qos
 
 	__DeclareRcvRpc(3219, "mach_port_allocate_qos")
 	__BeforeRcvRpc(3219, "mach_port_allocate_qos")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_allocate_qos_t__defined)
 	check_result = __MIG_check__Request__mach_port_allocate_qos_t((__Request *)In0P);
@@ -3928,8 +3763,7 @@ mig_internal kern_return_t __MIG_check__Request__task_set_port_space_t(__attribu
 
 	typedef __Request__task_set_port_space_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -3970,9 +3804,6 @@ mig_internal novalue _Xtask_set_port_space
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		int table_entries;
 		mach_msg_trailer_t trailer;
@@ -4004,7 +3835,7 @@ mig_internal novalue _Xtask_set_port_space
 
 	__DeclareRcvRpc(3221, "task_set_port_space")
 	__BeforeRcvRpc(3221, "task_set_port_space")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__task_set_port_space_t__defined)
 	check_result = __MIG_check__Request__task_set_port_space_t((__Request *)In0P);
@@ -4035,8 +3866,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_get_srights_t(__attri
 
 	typedef __Request__mach_port_get_srights_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -4079,9 +3909,6 @@ mig_internal novalue _Xmach_port_get_srights
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_msg_trailer_t trailer;
@@ -4113,7 +3940,7 @@ mig_internal novalue _Xmach_port_get_srights
 
 	__DeclareRcvRpc(3222, "mach_port_get_srights")
 	__BeforeRcvRpc(3222, "mach_port_get_srights")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_get_srights_t__defined)
 	check_result = __MIG_check__Request__mach_port_get_srights_t((__Request *)In0P);
@@ -4148,8 +3975,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_space_info_t(__attrib
 
 	typedef __Request__mach_port_space_info_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -4198,9 +4024,6 @@ mig_internal novalue _Xmach_port_space_info
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		mach_msg_trailer_t trailer;
 	} Request;
 #ifdef  __MigPackStructs
@@ -4271,7 +4094,7 @@ mig_internal novalue _Xmach_port_space_info
 
 	__DeclareRcvRpc(3223, "mach_port_space_info")
 	__BeforeRcvRpc(3223, "mach_port_space_info")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_space_info_t__defined)
 	check_result = __MIG_check__Request__mach_port_space_info_t((__Request *)In0P);
@@ -4334,8 +4157,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_dnrequest_info_t(__at
 
 	typedef __Request__mach_port_dnrequest_info_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -4380,9 +4202,6 @@ mig_internal novalue _Xmach_port_dnrequest_info
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_msg_trailer_t trailer;
@@ -4414,7 +4233,7 @@ mig_internal novalue _Xmach_port_dnrequest_info
 
 	__DeclareRcvRpc(3224, "mach_port_dnrequest_info")
 	__BeforeRcvRpc(3224, "mach_port_dnrequest_info")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_dnrequest_info_t__defined)
 	check_result = __MIG_check__Request__mach_port_dnrequest_info_t((__Request *)In0P);
@@ -4449,8 +4268,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_insert_member_t(__att
 
 	typedef __Request__mach_port_insert_member_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -4493,9 +4311,6 @@ mig_internal novalue _Xmach_port_insert_member
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_port_name_t pset;
@@ -4528,7 +4343,7 @@ mig_internal novalue _Xmach_port_insert_member
 
 	__DeclareRcvRpc(3226, "mach_port_insert_member")
 	__BeforeRcvRpc(3226, "mach_port_insert_member")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_insert_member_t__defined)
 	check_result = __MIG_check__Request__mach_port_insert_member_t((__Request *)In0P);
@@ -4559,8 +4374,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_extract_member_t(__at
 
 	typedef __Request__mach_port_extract_member_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -4603,9 +4417,6 @@ mig_internal novalue _Xmach_port_extract_member
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_port_name_t pset;
@@ -4638,7 +4449,7 @@ mig_internal novalue _Xmach_port_extract_member
 
 	__DeclareRcvRpc(3227, "mach_port_extract_member")
 	__BeforeRcvRpc(3227, "mach_port_extract_member")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_extract_member_t__defined)
 	check_result = __MIG_check__Request__mach_port_extract_member_t((__Request *)In0P);
@@ -4669,8 +4480,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_get_context_t(__attri
 
 	typedef __Request__mach_port_get_context_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -4713,9 +4523,6 @@ mig_internal novalue _Xmach_port_get_context
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_msg_trailer_t trailer;
@@ -4747,7 +4554,7 @@ mig_internal novalue _Xmach_port_get_context
 
 	__DeclareRcvRpc(3228, "mach_port_get_context")
 	__BeforeRcvRpc(3228, "mach_port_get_context")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_get_context_t__defined)
 	check_result = __MIG_check__Request__mach_port_get_context_t((__Request *)In0P);
@@ -4782,8 +4589,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_set_context_t(__attri
 
 	typedef __Request__mach_port_set_context_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -4826,9 +4632,6 @@ mig_internal novalue _Xmach_port_set_context
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_vm_address_t context;
@@ -4861,7 +4664,7 @@ mig_internal novalue _Xmach_port_set_context
 
 	__DeclareRcvRpc(3229, "mach_port_set_context")
 	__BeforeRcvRpc(3229, "mach_port_set_context")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_set_context_t__defined)
 	check_result = __MIG_check__Request__mach_port_set_context_t((__Request *)In0P);
@@ -4892,8 +4695,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_kobject_t(__attribute
 
 	typedef __Request__mach_port_kobject_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -4938,9 +4740,6 @@ mig_internal novalue _Xmach_port_kobject
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_msg_trailer_t trailer;
@@ -4972,7 +4771,7 @@ mig_internal novalue _Xmach_port_kobject
 
 	__DeclareRcvRpc(3230, "mach_port_kobject")
 	__BeforeRcvRpc(3230, "mach_port_kobject")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_kobject_t__defined)
 	check_result = __MIG_check__Request__mach_port_kobject_t((__Request *)In0P);
@@ -5132,8 +4931,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_destruct_t(__attribut
 
 	typedef __Request__mach_port_destruct_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -5178,9 +4976,6 @@ mig_internal novalue _Xmach_port_destruct
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_port_delta_t srdelta;
@@ -5214,7 +5009,7 @@ mig_internal novalue _Xmach_port_destruct
 
 	__DeclareRcvRpc(3232, "mach_port_destruct")
 	__BeforeRcvRpc(3232, "mach_port_destruct")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_destruct_t__defined)
 	check_result = __MIG_check__Request__mach_port_destruct_t((__Request *)In0P);
@@ -5245,8 +5040,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_guard_t(__attribute__
 
 	typedef __Request__mach_port_guard_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -5291,9 +5085,6 @@ mig_internal novalue _Xmach_port_guard
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		uint64_t guard;
@@ -5327,7 +5118,7 @@ mig_internal novalue _Xmach_port_guard
 
 	__DeclareRcvRpc(3233, "mach_port_guard")
 	__BeforeRcvRpc(3233, "mach_port_guard")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_guard_t__defined)
 	check_result = __MIG_check__Request__mach_port_guard_t((__Request *)In0P);
@@ -5358,8 +5149,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_unguard_t(__attribute
 
 	typedef __Request__mach_port_unguard_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -5402,9 +5192,6 @@ mig_internal novalue _Xmach_port_unguard
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		uint64_t guard;
@@ -5437,7 +5224,7 @@ mig_internal novalue _Xmach_port_unguard
 
 	__DeclareRcvRpc(3234, "mach_port_unguard")
 	__BeforeRcvRpc(3234, "mach_port_unguard")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_unguard_t__defined)
 	check_result = __MIG_check__Request__mach_port_unguard_t((__Request *)In0P);
@@ -5468,8 +5255,7 @@ mig_internal kern_return_t __MIG_check__Request__mach_port_space_basic_info_t(__
 
 	typedef __Request__mach_port_space_basic_info_t __Request;
 #if	__MigTypeCheck
-	if (!(In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    (In0P->msgh_body.msgh_descriptor_count != 0) ||
+	if ((In0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    (In0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Request)))
 		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
@@ -5510,9 +5296,6 @@ mig_internal novalue _Xmach_port_space_basic_info
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		mach_msg_trailer_t trailer;
 	} Request;
 #ifdef  __MigPackStructs
@@ -5542,7 +5325,7 @@ mig_internal novalue _Xmach_port_space_basic_info
 
 	__DeclareRcvRpc(3235, "mach_port_space_basic_info")
 	__BeforeRcvRpc(3235, "mach_port_space_basic_info")
-/* RetCArg=0x0 rtSimpleRequest=0 */
+/* RetCArg=0x0 rtSimpleRequest=1 */
 
 #if	defined(__MIG_check__Request__mach_port_space_basic_info_t__defined)
 	check_result = __MIG_check__Request__mach_port_space_basic_info_t((__Request *)In0P);

@@ -949,9 +949,6 @@ extern const struct mach_vm_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_vm_address_t address;
 		mach_vm_size_t size;
@@ -967,9 +964,6 @@ extern const struct mach_vm_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_vm_address_t address;
 		mach_vm_size_t size;
@@ -984,9 +978,6 @@ extern const struct mach_vm_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_vm_address_t address;
 		mach_vm_size_t size;
@@ -1000,9 +991,6 @@ extern const struct mach_vm_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_vm_read_entry_t data_list;
 		natural_t count;
@@ -1033,9 +1021,6 @@ extern const struct mach_vm_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_vm_address_t source_address;
 		mach_vm_size_t size;
@@ -1050,9 +1035,6 @@ extern const struct mach_vm_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_vm_address_t address;
 		mach_vm_size_t size;
@@ -1067,9 +1049,6 @@ extern const struct mach_vm_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_vm_address_t address;
 		mach_vm_size_t size;
@@ -1084,9 +1063,6 @@ extern const struct mach_vm_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_vm_address_t address;
 		mach_vm_size_t size;
@@ -1101,9 +1077,6 @@ extern const struct mach_vm_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_vm_address_t address;
 		mach_vm_size_t size;
@@ -1141,9 +1114,6 @@ extern const struct mach_vm_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_vm_offset_t offset;
 	} __Request__mach_vm_page_query_t;
@@ -1156,9 +1126,6 @@ extern const struct mach_vm_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_vm_address_t address;
 		natural_t nesting_depth;
@@ -1173,9 +1140,6 @@ extern const struct mach_vm_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_vm_address_t address;
 		vm_region_flavor_t flavor;
@@ -1208,9 +1172,6 @@ extern const struct mach_vm_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_vm_address_t address;
 		vm_purgable_t control;
@@ -1225,9 +1186,6 @@ extern const struct mach_vm_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		mach_vm_address_t address;
 		vm_page_info_flavor_t flavor;

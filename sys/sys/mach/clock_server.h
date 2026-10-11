@@ -41,6 +41,7 @@ typedef function_table_entry   *function_table_t;
 
 #include <sys/mach/std_types.h>
 #include <sys/mach/mig.h>
+#include <sys/mach/thread_status.h>
 #include <sys/mach/ipc_sync.h>
 #include <sys/mach/ipc/ipc_voucher.h>
 #include <sys/mach/ipc_host.h>
@@ -54,6 +55,73 @@ typedef function_table_entry   *function_table_t;
 __BeforeMigServerHeader
 #endif /* __BeforeMigServerHeader */
 
+
+/* Routine clock_get_time */
+#ifdef	mig_external
+mig_external
+#else
+extern
+#endif	/* mig_external */
+kern_return_t clock_get_time
+#if	defined(LINTLIBRARY)
+    (clock_serv, cur_time)
+	clock_serv_t clock_serv;
+	mach_timespec_t *cur_time;
+{ return clock_get_time(clock_serv, cur_time); }
+#else
+(
+	clock_serv_t clock_serv,
+	mach_timespec_t *cur_time
+);
+#endif	/* defined(LINTLIBRARY) */
+
+/* Routine clock_get_attributes */
+#ifdef	mig_external
+mig_external
+#else
+extern
+#endif	/* mig_external */
+kern_return_t clock_get_attributes
+#if	defined(LINTLIBRARY)
+    (clock_serv, flavor, clock_attr, clock_attrCnt)
+	clock_serv_t clock_serv;
+	clock_flavor_t flavor;
+	clock_attr_t clock_attr;
+	mach_msg_type_number_t *clock_attrCnt;
+{ return clock_get_attributes(clock_serv, flavor, clock_attr, clock_attrCnt); }
+#else
+(
+	clock_serv_t clock_serv,
+	clock_flavor_t flavor,
+	clock_attr_t clock_attr,
+	mach_msg_type_number_t *clock_attrCnt
+);
+#endif	/* defined(LINTLIBRARY) */
+
+/* Routine clock_alarm */
+#ifdef	mig_external
+mig_external
+#else
+extern
+#endif	/* mig_external */
+kern_return_t clock_alarm
+#if	defined(LINTLIBRARY)
+    (clock_serv, alarm_type, alarm_time, alarm_port, alarm_portPoly)
+	clock_serv_t clock_serv;
+	alarm_type_t alarm_type;
+	mach_timespec_t alarm_time;
+	clock_reply_t alarm_port;
+	mach_msg_type_name_t alarm_portPoly;
+{ return clock_alarm(clock_serv, alarm_type, alarm_time, alarm_port, alarm_portPoly); }
+#else
+(
+	clock_serv_t clock_serv,
+	alarm_type_t alarm_type,
+	mach_timespec_t alarm_time,
+	clock_reply_t alarm_port,
+	mach_msg_type_name_t alarm_portPoly
+);
+#endif	/* defined(LINTLIBRARY) */
 
 /* Routine clock_get_time */
 #ifdef	mig_external
@@ -161,9 +229,6 @@ extern const struct clock_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 	} __Request__clock_get_time_t;
 #ifdef  __MigPackStructs
 #pragma pack()
@@ -174,9 +239,6 @@ extern const struct clock_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		clock_flavor_t flavor;
 		mach_msg_type_number_t clock_attrCnt;

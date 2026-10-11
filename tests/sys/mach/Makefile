@@ -92,3 +92,17 @@ mach_round2_test: ${.CURDIR}/mach_round2.zig ${.CURDIR}/file_message.zig
 	${ZIG} build-exe ${.CURDIR}/mach_round2.zig ${MACH_SO} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc \
 	    --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf \
 	    -I${SRCTOP}/sys -femit-bin=${.TARGET}
+
+SCRIPTS+= mig_notifications_test
+MIGCOM?= ${SYSROOT}/usr/bin/migcom
+OP631_MIG= sh ${SRCTOP}/usr.bin/migcom/mig.sh -migcom ${MIGCOM}
+OP631_FLAGS= -DPRIVATE -I${SRCTOP}/sys -I${SRCTOP}/sys/sys -I${SYSROOT}/usr/include -I${SRCTOP}/include/apple
+op631_dispatchServer.c op631_dispatchServer.h: ${SRCTOP}/lib/libdispatch/src/protocol.defs
+	${OP631_MIG} ${OP631_FLAGS} -header /dev/null -user /dev/null -server op631_dispatchServer.c -sheader op631_dispatchServer.h ${.ALLSRC}
+op631_notifyServer.c op631_notifyServer.h: ${SRCTOP}/sbin/launchd/notify.defs
+	${OP631_MIG} ${OP631_FLAGS} -header /dev/null -user /dev/null -server op631_notifyServer.c -sheader op631_notifyServer.h ${.ALLSRC}
+mig_notifications_test: ${.CURDIR}/mig_notifications.zig ${.CURDIR}/file_message.zig op631_dispatchServer.c op631_notifyServer.c
+	${ZIG} build-exe ${.CURDIR}/mig_notifications.zig ${MACH_SO} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc \
+	    --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys \
+	    -I. -cflags -D__MigTypeCheck=1 -- op631_dispatchServer.c op631_notifyServer.c -femit-bin=${.TARGET}
+CLEANFILES+= op631_dispatchServer.c op631_dispatchServer.h op631_notifyServer.c op631_notifyServer.h

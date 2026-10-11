@@ -41,6 +41,7 @@ typedef function_table_entry   *function_table_t;
 
 #include <sys/mach/std_types.h>
 #include <sys/mach/mig.h>
+#include <sys/mach/thread_status.h>
 #include <sys/mach/ipc_sync.h>
 #include <sys/mach/ipc/ipc_voucher.h>
 #include <sys/mach/ipc_host.h>
@@ -1103,9 +1104,6 @@ extern const struct host_priv_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 	} __Request__host_get_boot_info_t;
 #ifdef  __MigPackStructs
 #pragma pack()
@@ -1116,9 +1114,6 @@ extern const struct host_priv_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		int options;
 	} __Request__host_reboot_t;
@@ -1131,9 +1126,6 @@ extern const struct host_priv_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		host_flavor_t flavor;
 		mach_msg_type_number_t host_info_outCnt;
@@ -1215,9 +1207,6 @@ extern const struct host_priv_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 	} __Request__host_processors_t;
 #ifdef  __MigPackStructs
 #pragma pack()
@@ -1228,9 +1217,6 @@ extern const struct host_priv_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		clock_id_t clock_id;
 	} __Request__host_get_clock_control_t;
@@ -1243,9 +1229,6 @@ extern const struct host_priv_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		int node;
 		int which;
@@ -1293,9 +1276,6 @@ extern const struct host_priv_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		exception_mask_t exception_mask;
 	} __Request__host_get_exception_ports_t;
@@ -1344,9 +1324,6 @@ extern const struct host_priv_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 	} __Request__host_processor_sets_t;
 #ifdef  __MigPackStructs
 #pragma pack()
@@ -1385,9 +1362,6 @@ extern const struct host_priv_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 	} __Request__get_dp_control_port_t;
 #ifdef  __MigPackStructs
 #pragma pack()
@@ -1412,9 +1386,6 @@ extern const struct host_priv_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 	} __Request__host_get_UNDServer_t;
 #ifdef  __MigPackStructs
 #pragma pack()
