@@ -9,6 +9,7 @@ void op468_event(int, unsigned, uintptr_t, uintptr_t, unsigned);
 void op468_move(unsigned);
 void op468_deallocate(unsigned);
 void op468_received(unsigned, unsigned, unsigned, int);
+void op622_sent(unsigned, unsigned, int);
 void op468_registered(unsigned, unsigned, int);
 void op468_notification(unsigned, unsigned, unsigned);
 void op478_previous(unsigned, unsigned, unsigned, int);
@@ -52,6 +53,8 @@ kern_return_t mach_port_request_notification(mach_port_t task,mach_port_t p,mach
 }
 
 mach_msg_return_t mach_msg(mach_msg_header_t *h,mach_msg_option_t opts,mach_msg_size_t send_size,mach_msg_size_t recv_size,mach_port_name_t name,mach_msg_timeout_t timeout,mach_port_name_t notify) {
+ unsigned destination=h->msgh_remote_port;
  pthread_once(&once,resolve);mach_msg_return_t kr=real_msg(h,opts,send_size,recv_size,name,timeout,notify);
+ op622_sent(destination,opts,kr);
  op468_received(opts,name,timeout,kr);return op478_receive(h,opts,kr);
 }

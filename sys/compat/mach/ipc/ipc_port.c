@@ -285,6 +285,9 @@ ipc_port_dnrequest(
 	table->ipr_next = ipr->ipr_next;
 	ipr->ipr_name = name;
 	ipr->ipr_soright = soright;
+	ipr->ipr_generation = ++port->ip_request_generation;
+	ipr->ipr_spreq = FALSE;
+	ipr->ipr_sparm = FALSE;
 
 	*indexp = index;
 	return KERN_SUCCESS;
@@ -437,6 +440,8 @@ ipc_port_dncancel(
 	/* return ipr to the free list inside the table */
 
 	ipr->ipr_name = MACH_PORT_NAME_NULL;
+	ipr->ipr_spreq = FALSE;
+	ipr->ipr_sparm = FALSE;
 	ipr->ipr_next = table->ipr_next;
 	table->ipr_next = index;
 
@@ -662,6 +667,8 @@ ipc_port_init(
 	port->ip_nsrequest = IP_NULL;
 	port->ip_pdrequest = IP_NULL;
 	port->ip_dnrequests = IPR_NULL;
+	port->ip_sprequests = 0;
+	port->ip_request_generation = 0;
 
 	port->ip_pset = IPS_NULL;
 	port->ip_seqno = 0;
@@ -774,8 +781,8 @@ ipc_port_alloc_name(
 /*
  * Generate dead name notifications.  Called from ipc_port_destroy
  * and (#if DIPC) from dproc_dn_notify.  Port is unlocked but still
- * has reference(s); dnrequests was taken from port while the port
- * was locked but the port now has port->ip_dnrequests set to IPR_NULL.
+ * has reference(s); the inactive table remains attached to the port
+ * until final release so lazy dead-name conversion can inspect consumed slots.
  */
 void
 ipc_port_dnnotify(
@@ -795,12 +802,12 @@ ipc_port_dnnotify(
 			continue;
 
 		soright = ipr->ipr_soright;
-		assert(soright != IP_NULL);
-
-		ipc_notify_dead_name(soright, name);
+		/* A send-possible delivery may already have consumed this right. */
+		if (soright != IP_NULL)
+			ipc_notify_dead_name(soright, name);
 	}
 
-	it_dnrequests_free(its, dnrequests);
+	/* Retained until final port release for accurate dead-name urefs. */
 }
 
 /*
@@ -889,7 +896,7 @@ ipc_port_destroy(
 
 	/* save for later */
 	dnrequests = port->ip_dnrequests;
-	port->ip_dnrequests = IPR_NULL;
+	port->ip_sprequests = 0;
 	ip_unlock(port);
 	/* wakeup any threads waiting on this pool port for an activation */
 	if ((thread_pool = &port->ip_thread_pool) != THREAD_POOL_NULL)
@@ -2218,3 +2225,124 @@ db_find_rcvr(
 #endif	/* MACH_ASSERT */
 
 #endif	/* MACH_KDB */
+
+/* Port lock protects the request table and queue counters in this adapter. */
+boolean_t
+ipc_port_request_pending(ipc_port_t port, ipc_port_request_index_t index)
+{
+    return index != 0 && port->ip_dnrequests != IPR_NULL &&
+        port->ip_dnrequests[index].ipr_soright != IP_NULL;
+}
+
+void
+ipc_port_request_sparm(ipc_space_t space, mach_port_name_t name, ipc_port_t port,
+    const struct ipc_send_notify_token *token)
+{
+    ipc_entry_t entry;
+    ipc_port_request_t request;
+    boolean_t armed = FALSE;
+
+    is_read_lock(space);
+    entry = ipc_entry_lookup(space, name);
+    if (space->is_active && entry != IE_NULL && entry == token->entry &&
+        port == token->port && entry->ie_object == (ipc_object_t)port &&
+        (entry->ie_bits & MACH_PORT_TYPE_SEND) != 0) {
+        ip_lock(port);
+        if (ip_active(port) && ipc_port_request_pending(port, entry->ie_request)) {
+            request = &port->ip_dnrequests[entry->ie_request];
+            if (request->ipr_name == name && request->ipr_spreq &&
+                request->ipr_generation == token->generation) {
+                request->ipr_sparm = TRUE;
+                port->ip_sprequests = 1;
+                armed = TRUE;
+            }
+        }
+        ip_unlock(port);
+    }
+    is_read_unlock(space);
+    /* Recheck space after arming: a drain before enrollment is not lost. */
+    if (armed)
+        ipc_port_spnotify(port);
+}
+
+/* No locks on entry or exit; caller holds a port reference. */
+void
+ipc_port_spnotify(ipc_port_t port)
+{
+    ipc_port_request_index_t index = 0;
+    ipc_table_elems_t size = 0;
+
+    ip_lock(port);
+    if (!port->ip_sprequests) {
+        ip_unlock(port);
+        return;
+    }
+    while (ip_active(port) && port->ip_msgcount < port->ip_qlimit) {
+        ipc_port_request_t table = port->ip_dnrequests;
+        ipc_port_t notify = IP_NULL;
+        mach_port_name_t name = MACH_PORT_NAME_NULL;
+
+        if (table == IPR_NULL)
+            break;
+        if (size == 0)
+            size = table->ipr_size->its_size;
+        while (++index < size) {
+            ipc_port_request_t request = &table[index];
+            if (request->ipr_name != MACH_PORT_NAME_NULL &&
+                request->ipr_sparm && request->ipr_soright != IP_NULL) {
+                name = request->ipr_name;
+                notify = request->ipr_soright;
+                request->ipr_soright = IP_NULL;
+                request->ipr_sparm = FALSE;
+                break;
+            }
+        }
+        if (notify == IP_NULL) {
+            /* All originally visible slots were scanned. A registration while
+             * unlocked may have armed an earlier slot; retain its hint. */
+            boolean_t pending = FALSE;
+            for (ipc_port_request_index_t i = 1; i < table->ipr_size->its_size; i++)
+                if (table[i].ipr_name != MACH_PORT_NAME_NULL &&
+                    table[i].ipr_sparm && table[i].ipr_soright != IP_NULL)
+                    pending = TRUE;
+            port->ip_sprequests = pending;
+            break;
+        }
+        ip_unlock(port);
+        ipc_notify_send_possible(notify, name);
+        ip_lock(port);
+        /* Reload table and active/queue state after every unlock. */
+    }
+    ip_unlock(port);
+}
+
+/* Capture storage and port pins, plus the registration generation. A replaced
+ * name/entry/request must not be armed by a previously admitted send. */
+void
+ipc_port_request_capture(ipc_space_t space, mach_port_name_t name,
+    struct ipc_send_notify_token *token)
+{
+    ipc_entry_t entry;
+    ipc_port_t port;
+
+    token->entry = IE_NULL;
+    token->port = IP_NULL;
+    token->generation = 0;
+    is_read_lock(space);
+    entry = ipc_entry_lookup(space, name);
+    if (space->is_active && entry != IE_NULL &&
+        (entry->ie_bits & MACH_PORT_TYPE_SEND) != 0) {
+        port = (ipc_port_t)entry->ie_object;
+        ip_lock(port);
+        if (ip_active(port) && ipc_port_request_pending(port, entry->ie_request) &&
+            port->ip_dnrequests[entry->ie_request].ipr_spreq) {
+            token->generation = port->ip_dnrequests[entry->ie_request].ipr_generation;
+            ipc_entry_reference(entry);
+            ip_reference(port);
+            token->entry = entry;
+            token->port = port;
+        }
+        ip_unlock(port);
+    }
+    is_read_unlock(space);
+}

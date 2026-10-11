@@ -793,6 +793,10 @@ ipc_mqueue_receive(natural_t bits, mach_msg_option_t option,
     io_unlock(admitted);
     is_read_unlock(space);
 out:
+    /* The dequeued message pins its destination while queue and space
+     * locks are dropped; notify only after ordinary sender admission. */
+    if (*kmsgp != IKM_NULL)
+        ipc_port_spnotify((ipc_port_t)(*kmsgp)->ikm_header->msgh_remote_port);
     thread->ith_state = mr;
     thread->ith_kmsg = IKM_NULL;
     thread->ith_object = IO_NULL;

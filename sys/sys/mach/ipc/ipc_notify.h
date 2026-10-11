@@ -86,6 +86,8 @@ extern void ipc_notify_port_deleted(
 	ipc_port_t	port,
 	mach_port_name_t	name);
 
+extern void ipc_notify_send_possible(ipc_port_t port, mach_port_name_t name);
+
 /* Send a port-destroyed notification */
 extern void ipc_notify_port_destroyed(
 	ipc_port_t	port,

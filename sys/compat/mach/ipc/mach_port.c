@@ -1250,11 +1250,13 @@ mach_port_request_notification(
 		break;
 	}
 
+	case MACH_NOTIFY_SEND_POSSIBLE:
 	case MACH_NOTIFY_DEAD_NAME: {
 		if (!MACH_PORT_NAME_VALID(name))
 			return KERN_INVALID_RIGHT;
 
-		kr = ipc_right_dnrequest(space, name, sync != 0, notify,
+		kr = ipc_right_dnrequest(space, name, sync != 0,
+		    id == MACH_NOTIFY_SEND_POSSIBLE, notify,
 		    previousp);
 		if (kr != KERN_SUCCESS)
 			return kr;
@@ -1501,7 +1503,10 @@ mach_port_set_attributes(
                 /* port is locked and active */
 
                 ipc_port_set_qlimit(port, mplp->mpl_qlimit);
+                ip_reference(port);
                 ip_unlock(port);
+                ipc_port_spnotify(port);
+                ip_release(port);
                 break;
         }
 		case MACH_PORT_DNREQUESTS_SIZE: {

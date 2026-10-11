@@ -29,3 +29,5 @@ atf_test_program{name="mach_vm_contract_test"}
 atf_test_program{name="mach_host_vm_test"}
 atf_test_program{name="mach_round2_test"}
 atf_test_program{name="mach_round3_test"}
+
+atf_test_program{name="mach_send_possible_test"}

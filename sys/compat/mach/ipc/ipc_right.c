@@ -263,6 +263,7 @@ ipc_right_dnrequest(
 	ipc_space_t	space,
 	mach_port_name_t	name,
 	boolean_t	immediate,
+	boolean_t	send_possible,
 	ipc_port_t	notify,
 	ipc_port_t	*previousp)
 {
@@ -330,12 +331,22 @@ ipc_right_dnrequest(
 					continue;
 				}
 
-				assert(request != 0);
-				ip_unlock(port);
+                assert(request != 0);
+                if (send_possible) {
+                    port->ip_dnrequests[request].ipr_spreq = TRUE;
+                    port->ip_dnrequests[request].ipr_sparm = immediate;
+                    if (immediate)
+                        port->ip_sprequests = 1;
+                }
+                ip_reference(port);
+                ip_unlock(port);
 
-				entry->ie_request = request;
-				is_write_unlock(space);
-				break;
+                entry->ie_request = request;
+                is_write_unlock(space);
+                if (send_possible && immediate)
+                    ipc_port_spnotify(port);
+                ip_release(port);
+                break;
 			}
 
 			bits = entry->ie_bits;
@@ -445,6 +456,7 @@ ipc_right_check(
 	ipc_entry_t	entry)
 {
 	ipc_entry_bits_t bits;
+	boolean_t pending;
 
 	assert(space->is_active);
 	assert(port == (ipc_port_t) entry->ie_object);
@@ -453,6 +465,7 @@ ipc_right_check(
 	if (ip_active(port)) {
 		return FALSE;
 	}
+	pending = ipc_port_request_pending(port, entry->ie_request);
 	ip_unlock(port);
 
 	/* this was either a pure send right or a send-once right */
@@ -477,7 +490,8 @@ ipc_right_check(
 
 	if (entry->ie_request != 0) {
 		entry->ie_request = 0;
-		bits++; /* dead-name notification adds one user reference */
+		if (pending)
+			bits++; /* only an unconsumed notification adds a reference */
 	}
 
 	entry->ie_bits = bits;
@@ -997,8 +1011,9 @@ ipc_right_delta(
 			bits |= MACH_PORT_TYPE_DEAD_NAME;
 
 			if (entry->ie_request != 0) {
+				if (ipc_port_request_pending(port, entry->ie_request))
+					bits++; /* only an unconsumed notification adds a reference */
 				entry->ie_request = 0;
-				bits++; /* dead-name notification adds one user reference */
 			}
 
 				entry->ie_bits = bits;
@@ -1235,22 +1250,23 @@ ipc_right_info(
 	mach_port_urefs_t	*urefsp)
 {
 	ipc_entry_bits_t bits = entry->ie_bits;
-	ipc_port_request_index_t request;
+	ipc_port_request_index_t request = 0;
 	mach_port_type_t type;
 
-	if (bits & MACH_PORT_TYPE_SEND_RIGHTS) {
+	if (bits & MACH_PORT_TYPE_PORT_RIGHTS) {
 		ipc_port_t port = (ipc_port_t) entry->ie_object;
 
 		if (ipc_right_check(space, port, name, entry)) {
 			bits = entry->ie_bits;
 			assert(IE_BITS_TYPE(bits) == MACH_PORT_TYPE_DEAD_NAME);
-		} else
+		} else {
+			if (ipc_port_request_pending(port, entry->ie_request))
+				request = entry->ie_request;
 			ip_unlock(port);
+		}
 	}
 
 	type = IE_BITS_TYPE(bits);
-	request = entry->ie_request;
-
 	if (request != 0)
 		type |= MACH_PORT_TYPE_DNREQUEST;
 

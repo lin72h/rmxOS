@@ -135,8 +135,8 @@ extern uma_zone_t ipc_object_zones[IOT_NUMBER];
 #define	io_alloc(otype)		\
 	((ipc_object_t) uma_zalloc(ipc_object_zones[(otype)], M_WAITOK|M_ZERO))
 
-#define	io_free(otype, io)	\
-		uma_zfree(ipc_object_zones[(otype)], (io))
+extern void ipc_object_free(unsigned int otype, ipc_object_t object);
+#define io_free(otype, io) ipc_object_free((otype), (io))
 /*
  * Here we depend on the ipc_object being first within the ipc_common_data,
  * which is first within the rpc_common_data, which in turn must be first

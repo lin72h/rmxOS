@@ -514,3 +514,28 @@ export fn rmx_extract_observe(name: u32, out: *ExtractObservation) c_int {
     }
     return 0;
 }
+
+const SendNotifyToken = extern struct { entry: ?*anyopaque, port: ?*anyopaque, generation: u64 };
+const SendNotifyControl = extern struct { command: u32, name: u32 };
+extern fn ipc_port_request_capture(?*anyopaque, u32, *SendNotifyToken) void;
+extern fn ipc_port_request_sparm(?*anyopaque, u32, *anyopaque, *const SendNotifyToken) void;
+extern fn ipc_entry_put(*anyopaque) void;
+var send_notify_token = SendNotifyToken{ .entry = null, .port = null, .generation = 0 };
+var send_notify_name: u32 = 0;
+export fn rmx_send_notify_control(control: *const SendNotifyControl, generation: *u64) c_int {
+    if (control.command == 1) {
+        if (send_notify_token.entry != null) return 16;
+        send_notify_name = control.name;
+        ipc_port_request_capture(rmx_fixture_space(), control.name, &send_notify_token);
+        generation.* = send_notify_token.generation;
+        return 0;
+    }
+    if (control.command == 2) {
+        if (send_notify_token.port) |port| ipc_port_request_sparm(rmx_fixture_space(), send_notify_name, port, &send_notify_token);
+    } else if (control.command != 3) return 22;
+    generation.* = send_notify_token.generation;
+    if (send_notify_token.entry) |entry| ipc_entry_put(entry);
+    if (send_notify_token.port) |port| rmx_fixture_port_drop(port);
+    send_notify_token = .{ .entry = null, .port = null, .generation = 0 };
+    return 0;
+}

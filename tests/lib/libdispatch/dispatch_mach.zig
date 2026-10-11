@@ -428,14 +428,82 @@ fn pendingRequest(_: [*c]const c.atf_tc_t) callconv(.c) void {
     _ = c.mach_port_deallocate(c.mach_task_self(), p);
     if (c.mach_port_mod_refs(c.mach_task_self(), p, c.MACH_PORT_RIGHT_RECEIVE, -1) != 0) c.atf_tc_fail("pending watched receive release");
 }
-const names = [_][*:0]const u8{ "channel_two", "set_large_retry", "stale_readiness", "cancel_copied", "send_death_registration", "late_death", "partial_receive_cleanup", "pending_request_cancel" };
-const bodies = .{ &two, &large, &stale, &cancelCopied, &deathRegistration, &lateDeath, &partialReceive, &pendingRequest };
-var cases: [8]c.atf_tc_t = undefined;
+
+extern fn dispatch_mach_msg_create(?*c.mach_msg_header_t, usize, c_int, *?*c.mach_msg_header_t) Object;
+extern fn dispatch_mach_send(Object, Object, u32) void;
+var sp_peer: u32 = 0;
+var sp_timeouts: u32 = 0;
+var sp_completions: u32 = 0;
+var sp_error: c_int = 0;
+pub export fn op622_sent(destination: u32, options: u32, result: c_int) void {
+    if (destination == @atomicLoad(u32, &sp_peer, .seq_cst) and
+        (options & (c.MACH_SEND_TIMEOUT | c.MACH_SEND_NOTIFY)) == (c.MACH_SEND_TIMEOUT | c.MACH_SEND_NOTIFY) and result == c.MACH_SEND_TIMED_OUT)
+        _ = @atomicRmw(u32, &sp_timeouts, .Add, 1, .seq_cst);
+}
+fn sendPossibleCall(_: Object, reason: c_ulong, _: Object, error_code: c_int) callconv(.c) void {
+    if (reason == 3) {
+        @atomicStore(c_int, &sp_error, error_code, .seq_cst);
+        _ = @atomicRmw(u32, &sp_completions, .Add, 1, .seq_cst);
+        _ = c.sem_post(&sem);
+    } else if (reason == 4 or reason == 5) {
+        @atomicStore(c_int, &sp_error, if (error_code == 0) -1 else error_code, .seq_cst);
+        _ = c.sem_post(&sem);
+    } else if (reason == 8) {
+        _ = c.sem_post(&registered);
+    }
+}
+fn sendPossible(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    setup();
+    const peer = port();
+    sendRight(peer);
+    op468_configure(0, peer);
+    @atomicStore(u32, &sp_peer, peer, .seq_cst);
+    var limits: c.mach_port_limits_t = .{ .mpl_qlimit = 1 };
+    if (c.mach_port_set_attributes(c.mach_task_self(), peer, c.MACH_PORT_LIMITS_INFO, @ptrCast(&limits), c.MACH_PORT_LIMITS_INFO_COUNT) != 0) c.atf_tc_fail("queue limit setup");
+    send(peer, 62210, @sizeOf(c.mach_msg_header_t));
+    const queue = dispatch_queue_create("op622.send", null);
+    const channel_object = dispatch_mach_create_f("op622.channel", queue, null, &sendPossibleCall);
+    dispatch_mach_connect(channel_object, 0, peer, null);
+    var header: ?*c.mach_msg_header_t = null;
+    const message = dispatch_mach_msg_create(null, @sizeOf(c.mach_msg_header_t), 0, &header);
+    if (message == null or header == null) c.atf_tc_fail("dispatch message setup");
+    header.?.* = std.mem.zeroes(c.mach_msg_header_t);
+    header.?.msgh_bits = c.MACH_MSG_TYPE_COPY_SEND;
+    header.?.msgh_size = @sizeOf(c.mach_msg_header_t);
+    header.?.msgh_id = 62211;
+    dispatch_mach_send(channel_object, message, 0);
+    dispatch_release(message);
+    for (0..3000) |_| {
+        if (@atomicLoad(u32, &sp_timeouts, .seq_cst) != 0) break;
+        _ = c.usleep(1000);
+    }
+    const timeouts = @atomicLoad(u32, &sp_timeouts, .seq_cst);
+    if (timeouts == 0 or @atomicLoad(u32, &sp_completions, .seq_cst) != 0) c.atf_tc_fail("channel did not wait on full queue");
+    var buffer: [256]u8 align(8) = @splat(0);
+    const first = c.mach_msg(@ptrCast(&buffer), c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, buffer.len, peer, 1000, 0);
+    const first_id = @as(*c.mach_msg_header_t, @ptrCast(&buffer)).msgh_id;
+    const completed = wait(&sem);
+    const second = c.mach_msg(@ptrCast(&buffer), c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, buffer.len, peer, 1000, 0);
+    const second_id = @as(*c.mach_msg_header_t, @ptrCast(&buffer)).msgh_id;
+    const count = @atomicLoad(u32, &sp_completions, .seq_cst);
+    const error_code = @atomicLoad(c_int, &sp_error, .seq_cst);
+    _ = c.printf("dispatch_send_possible timeouts_expected_min=1 timeouts_observed=%u completions_expected=1 completions_observed=%u first_expected=62210 first_observed=%d second_expected=62211 second_observed=%d first_rc=%d wait_rc=%d second_rc=%d error_expected=0 error_observed=%d\n", timeouts, count, first_id, second_id, first, completed, second, error_code);
+    if (first != 0 or first_id != 62210 or completed != 0 or second != 0 or second_id != 62211 or count != 1 or error_code != 0) c.atf_tc_fail("pending channel send did not recover");
+    dispatch_mach_cancel(channel_object);
+    if (wait(&registered) != 0) c.atf_tc_fail("send channel cancellation timeout");
+    dispatch_release(channel_object);
+    dispatch_release(queue);
+    _ = c.mach_port_deallocate(c.mach_task_self(), peer);
+    if (c.mach_port_mod_refs(c.mach_task_self(), peer, c.MACH_PORT_RIGHT_RECEIVE, -1) != 0) c.atf_tc_fail("peer cleanup");
+}
+const names = [_][*:0]const u8{ "channel_two", "set_large_retry", "stale_readiness", "cancel_copied", "send_death_registration", "late_death", "partial_receive_cleanup", "pending_request_cancel", "send_possible" };
+const bodies = .{ &two, &large, &stale, &cancelCopied, &deathRegistration, &lateDeath, &partialReceive, &pendingRequest, &sendPossible };
+var cases: [9]c.atf_tc_t = undefined;
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "20");
 }
 fn addTests(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    inline for (0..8) |i| {
+    inline for (0..9) |i| {
         const err = c.atf_tc_init(&cases[i], names[i], &head, bodies[i], null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
         const added = c.atf_tp_add_tc(tp, &cases[i]);

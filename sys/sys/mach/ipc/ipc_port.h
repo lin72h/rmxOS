@@ -233,6 +233,7 @@ struct ipc_port {
 	struct ipc_port *ip_nsrequest;
 	struct ipc_port *ip_pdrequest;
 	struct ipc_port_request *ip_dnrequests;
+	uint64_t ip_request_generation;
 
 	struct ipc_pset *ip_pset;
 	mach_port_seqno_t ip_seqno;		/* locked by message queue */
@@ -308,6 +309,9 @@ typedef struct ipc_port_request {
 		mach_port_name_t name;
 		struct ipc_table_size *size;
 	} name;
+	uint64_t ipr_generation;
+	boolean_t ipr_spreq;
+	boolean_t ipr_sparm;
 } *ipc_port_request_t;
 
 #define	ipr_next		notify.index
@@ -462,6 +466,22 @@ extern kern_return_t ipc_port_alloc_name(
 	ipc_port_t	*portp);
 
 /* Generate dead name notifications */
+/* Nothing locked, a reference on port required. */
+extern void ipc_port_spnotify(ipc_port_t port);
+/* Revalidate the sending name and registered slot after a queue timeout. */
+struct ipc_send_notify_token {
+    struct ipc_entry *entry;
+    ipc_port_t port;
+    uint64_t generation;
+};
+extern void ipc_port_request_capture(ipc_space_t space, mach_port_name_t name,
+    struct ipc_send_notify_token *token);
+extern void ipc_port_request_sparm(ipc_space_t space, mach_port_name_t name,
+    ipc_port_t port, const struct ipc_send_notify_token *token);
+/* Port locked or inactive; slot remains allocated after one-shot delivery. */
+extern boolean_t ipc_port_request_pending(ipc_port_t port,
+    ipc_port_request_index_t index);
+
 extern void ipc_port_dnnotify(
 	ipc_port_t		port,
 	ipc_port_request_t	dnrequests);

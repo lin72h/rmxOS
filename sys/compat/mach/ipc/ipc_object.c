@@ -98,8 +98,25 @@
 #include <sys/mach/ipc/ipc_right.h>
 #include <sys/mach/ipc/ipc_notify.h>
 #include <sys/mach/ipc/ipc_pset.h>
+#include <sys/mach/ipc/ipc_port.h>
+#include <sys/mach/ipc/ipc_table.h>
 
 uma_zone_t ipc_object_zones[IOT_NUMBER];
+
+/* Inactive request slots retain whether dead-name delivery added a uref.
+ * Their table follows the port lifetime, including lazy dead-name conversion. */
+void
+ipc_object_free(unsigned int otype, ipc_object_t object)
+{
+    if (otype == IOT_PORT) {
+        ipc_port_t port = (ipc_port_t)object;
+        ipc_port_request_t table = port->ip_dnrequests;
+        if (table != IPR_NULL)
+            it_dnrequests_free(table->ipr_size, table);
+    }
+    uma_zfree(ipc_object_zones[otype], object);
+}
+
 
 /*
  *	Routine:	ipc_object_translate

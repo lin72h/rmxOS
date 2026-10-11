@@ -452,3 +452,24 @@ ipc_notify_dead_name(
 	ipc_kmsg_init_kernel_trailer(kmsg);
 	ipc_mqueue_send_always(kmsg);
 }
+
+/* Same NDR/name wire body as port-deleted; selector 66 reports queue space. */
+void
+ipc_notify_send_possible(ipc_port_t port, mach_port_name_t name)
+{
+    ipc_kmsg_t kmsg;
+    mach_send_possible_notification_t *n;
+
+    kmsg = ikm_alloc(sizeof(*n));
+    if (kmsg == IKM_NULL) {
+        ipc_port_release_sonce(port);
+        return;
+    }
+    n = (mach_send_possible_notification_t *)kmsg->ikm_header;
+    *n = ipc_notify_port_deleted_template;
+    n->not_header.msgh_id = MACH_NOTIFY_SEND_POSSIBLE;
+    n->not_header.msgh_remote_port = (mach_port_t)port;
+    n->not_port = name;
+    ipc_kmsg_init_kernel_trailer(kmsg);
+    ipc_mqueue_send_always(kmsg);
+}

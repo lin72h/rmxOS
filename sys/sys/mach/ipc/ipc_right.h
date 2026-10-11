@@ -100,6 +100,7 @@ extern kern_return_t ipc_right_dnrequest(
 	ipc_space_t	space,
 	mach_port_name_t	name,
 	boolean_t	immediate,
+	boolean_t	send_possible,
 	ipc_port_t	notify,
 	ipc_port_t	*previousp);
 

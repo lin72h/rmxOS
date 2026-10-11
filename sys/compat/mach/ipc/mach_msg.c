@@ -266,6 +266,8 @@ mach_msg_send(
 	ipc_space_t space = current_space();
 	vm_map_t map = current_map();
 	ipc_kmsg_t kmsg;
+	mach_port_name_t destination;
+	struct ipc_send_notify_token token = {0};
 	mach_msg_return_t mr;
 
 	mr = ipc_kmsg_get(msg, send_size, &kmsg, space);
@@ -276,18 +278,34 @@ mach_msg_send(
 	MDPRINTF(("send to remote port %d notify %d id %d name %s\n", (int)kmsg->ikm_header->msgh_remote_port,
 			  notify, kmsg->ikm_header->msgh_id, curproc->p_comm));
 
+	destination = (mach_port_name_t)(uintptr_t)kmsg->ikm_header->msgh_remote_port;
+	if (option & MACH_SEND_NOTIFY)
+		ipc_port_request_capture(space, destination, &token);
 	mr = ipc_kmsg_copyin(kmsg, space, map, MACH_PORT_NAME_NULL);
 	if (mr != MACH_MSG_SUCCESS) {
 		ikm_free(kmsg);
+		if (token.entry != IE_NULL) {
+			ipc_entry_put(token.entry);
+			ip_release(token.port);
+		}
 		return mr;
 	}
 
 	mr = ipc_mqueue_send(kmsg, option & MACH_SEND_TIMEOUT, timeout);
 
+	if (mr == MACH_SEND_TIMED_OUT && (option & MACH_SEND_NOTIFY))
+		ipc_port_request_sparm(space, destination,
+		    (ipc_port_t)kmsg->ikm_header->msgh_remote_port, &token);
+
 	if (mr != MACH_MSG_SUCCESS) {
 	    mr |= ipc_kmsg_copyout_pseudo(kmsg, space, map, MACH_MSG_BODY_NULL);
 	    (void) ipc_kmsg_put(msg, kmsg, kmsg->ikm_header->msgh_size);
 	}
+
+	if (token.entry != IE_NULL) {
+        ipc_entry_put(token.entry);
+        ip_release(token.port);
+    }
 
 	return mr;
 }

@@ -569,3 +569,16 @@ static int extract_sysctl(SYSCTL_HANDLER_ARGS) {
 SYSCTL_PROC(_debug, OID_AUTO, rmx_extract_observe,
  CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0,
  extract_sysctl, "S,extract_observation", "Kernel named extraction result and outputs");
+
+struct send_notify_control { uint32_t command, name; };
+extern int rmx_send_notify_control(const struct send_notify_control *, uint64_t *);
+static int send_notify_sysctl(SYSCTL_HANDLER_ARGS) {
+ struct send_notify_control control; uint64_t generation = 0;
+ int error = SYSCTL_IN(req, &control, sizeof(control));
+ if (error == 0) error = rmx_send_notify_control(&control, &generation);
+ if (error == 0) error = SYSCTL_OUT(req, &generation, sizeof(generation));
+ return (error);
+}
+SYSCTL_PROC(_debug, OID_AUTO, rmx_send_notify_control,
+ CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_MPSAFE, NULL, 0,
+ send_notify_sysctl, "Q", "Captured notification registration and delayed arming");
