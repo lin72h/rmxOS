@@ -255,6 +255,13 @@ fn bindName(m: *Model, slot: usize, name: u32) void {
     };
     m.entries[slot].name = name;
 }
+fn argumentName(e: Entry) u32 {
+    return if (e.name == 0) 0x7ffffffe else e.name;
+}
+test "forgotten numeric names never become NULL call arguments" {
+    try std.testing.expectEqual(@as(u32, 0x7ffffffe), argumentName(.{}));
+    try std.testing.expectEqual(@as(u32, 42), argumentName(.{ .name = 42 }));
+}
 fn observe(o: *Observer, m: Model) void {
     for (m.entries[0..m.count]) |e| {
         if (e.name == 0) continue;
@@ -297,7 +304,7 @@ fn execute(m: *Model, a: Action, id: i32, o: *Observer) void {
     const self = c.mach_task_self();
     // Zero marks a forgotten tombstone after numeric reuse. Query a valid
     // but unallocated name instead of MACH_PORT_NULL's special semantics.
-    const name = if (before.entries[a.slot].name == 0) @as(u32, 0x7ffffffe) else before.entries[a.slot].name;
+    const name = argumentName(before.entries[a.slot]);
     var new_name: u32 = 0;
     var acquired: c.mach_msg_type_name_t = 0;
     var result_id: i32 = 0;
@@ -307,7 +314,7 @@ fn execute(m: *Model, a: Action, id: i32, o: *Observer) void {
         .mod_refs => c.mach_port_mod_refs(self, name, @intFromEnum(a.right), a.delta),
         .deallocate => c.mach_port_deallocate(self, name),
         .destroy => c.mach_port_destroy(self, name),
-        .move_member => c.mach_port_move_member(self, name, if (a.other == 60) 0 else before.entries[a.other].name),
+        .move_member => c.mach_port_move_member(self, name, if (a.other == 60) 0 else argumentName(before.entries[a.other])),
         .extract => c.mach_port_extract_right(self, name, if (a.once) c.MACH_MSG_TYPE_MAKE_SEND_ONCE else c.MACH_MSG_TYPE_MAKE_SEND, &new_name, &acquired),
         .send => blk: {
             var h: Header = .{ .bits = if (before.entries[a.slot].refs[2] != 0) c.MACH_MSG_TYPE_MOVE_SEND_ONCE else c.MACH_MSG_TYPE_MAKE_SEND, .size = 24, .remote = name, .local = 0, .voucher = 0, .id = id };
