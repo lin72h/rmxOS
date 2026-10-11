@@ -5,6 +5,7 @@ const builtin = @import("builtin");
 const c = @cImport({
     @cInclude("atf-c.h");
     @cInclude("mach/mach.h");
+    @cInclude("op644_extract.h");
     @cInclude("stdio.h");
 });
 const invalid_name = 15;
@@ -262,9 +263,13 @@ test "forgotten numeric names never become NULL call arguments" {
     try std.testing.expectEqual(@as(u32, 0x7ffffffe), argumentName(.{}));
     try std.testing.expectEqual(@as(u32, 42), argumentName(.{ .name = 42 }));
 }
-fn observe(o: *Observer, m: Model) void {
-    for (m.entries[0..m.count]) |e| {
+fn observe(o: *Observer, m: Model, before: ?Model) void {
+    for (m.entries[0..m.count], 0..) |e, slot| {
         if (e.name == 0) continue;
+        if (before) |old| {
+            const involved = slot == o.action.slot or (o.action.call == .move_member and slot == o.action.other) or slot >= old.count;
+            if (!involved and std.mem.eql(u32, &e.refs, &old.entries[slot].refs)) continue;
+        }
         var ty: u32 = 0;
         const expected_rc: i32 = if (e.live()) 0 else invalid_name;
         o.equal("type_rc", e.name, 0, expected_rc, c.mach_port_type(c.mach_task_self(), e.name, &ty));
@@ -315,7 +320,7 @@ fn execute(m: *Model, a: Action, id: i32, o: *Observer) void {
         .deallocate => c.mach_port_deallocate(self, name),
         .destroy => c.mach_port_destroy(self, name),
         .move_member => c.mach_port_move_member(self, name, if (a.other == 60) 0 else argumentName(before.entries[a.other])),
-        .extract => c.mach_port_extract_right(self, name, if (a.once) c.MACH_MSG_TYPE_MAKE_SEND_ONCE else c.MACH_MSG_TYPE_MAKE_SEND, &new_name, &acquired),
+        .extract => c.op644_extract_right(self, name, if (a.once) c.MACH_MSG_TYPE_MAKE_SEND_ONCE else c.MACH_MSG_TYPE_MAKE_SEND, &new_name, &acquired),
         .send => blk: {
             var h: Header = .{ .bits = if (before.entries[a.slot].refs[2] != 0) c.MACH_MSG_TYPE_MOVE_SEND_ONCE else c.MACH_MSG_TYPE_MAKE_SEND, .size = 24, .remote = name, .local = 0, .voucher = 0, .id = id };
             break :blk c.mach_msg(@ptrCast(&h), c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, 24, 0, 0, 0, 0);
@@ -339,7 +344,7 @@ fn execute(m: *Model, a: Action, id: i32, o: *Observer) void {
     }
     if (rc == 0 and a.call == .receive) o.equal("message_id", name, 0, before.entries[a.slot].queue[0], result_id);
     // Never continue a sequence with a divergent oracle; clean its known names.
-    observe(o, m.*);
+    observe(o, m.*, before);
 }
 fn cleanup(o: *Observer, m: *Model) void {
     for (m.entries[0..m.count]) |e| if (e.name != 0) {
@@ -348,7 +353,7 @@ fn cleanup(o: *Observer, m: *Model) void {
         if (rc == 0) o.equal("cleanup_destroy", e.name, 0, 0, c.mach_port_destroy(c.mach_task_self(), e.name));
     };
     for (m.entries[0..m.count]) |*e| e.refs = @splat(0);
-    observe(o, m.*);
+    observe(o, m.*, null);
     inventory(o, m.*);
 }
 fn runSeed(seed: u32, shortest: bool) bool {

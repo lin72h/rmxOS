@@ -1,0 +1,12 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Same routine number and signature as mach_port.defs: mach_port_extract_right.
+ * The public libmach wrapper is ENOSYS, so this test-local client exercises
+ * the normal kernel RPC without changing that library. */
+subsystem op644_extract 3207;
+#include <sys/mach/std_types.defs>
+#include <sys/mach/mach_types.defs>
+routine op644_extract_right(
+    task : ipc_space_t;
+    name : mach_port_name_t;
+    msgt_name : mach_msg_type_name_t;
+    out poly : mach_port_poly_t);

@@ -1,9 +1,12 @@
 TESTSDIR= ${TESTSBASE}/sys/mach
 SCRIPTS+= mach_port_model_test
-mach_port_model_test: ${.CURDIR}/mach_port_model.zig
+op644_extract.h op644_extractUser.c: ${.CURDIR}/op644_extract.defs
+	${OP631_MIG} ${OP631_FLAGS} -header op644_extract.h -user op644_extractUser.c -server /dev/null ${.ALLSRC}
+mach_port_model_test: ${.CURDIR}/mach_port_model.zig op644_extract.h op644_extractUser.c
 	${ZIG} build-exe ${.CURDIR}/mach_port_model.zig ${MACH_SO} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc \
 	    --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf \
-	    -I${SRCTOP}/sys -femit-bin=${.TARGET}
+	    -I${SRCTOP}/sys -I. op644_extractUser.c -femit-bin=${.TARGET}
+CLEANFILES+= op644_extract.h op644_extractUser.c
 SCRIPTS+= mach_vm_contract_test
 mach_vm_contract_test: ${.CURDIR}/mach_vm_contract.zig ${.CURDIR}/file_message.zig
 	${ZIG} build-exe ${.CURDIR}/mach_vm_contract.zig ${MACH_SO} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc \
