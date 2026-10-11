@@ -1,4 +1,9 @@
 TESTSDIR= ${TESTSBASE}/sys/mach
+SCRIPTS+= mach_port_model_test
+mach_port_model_test: ${.CURDIR}/mach_port_model.zig
+	${ZIG} build-exe ${.CURDIR}/mach_port_model.zig ${MACH_SO} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc \
+	    --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf \
+	    -I${SRCTOP}/sys -femit-bin=${.TARGET}
 SCRIPTS+= mach_vm_contract_test
 mach_vm_contract_test: ${.CURDIR}/mach_vm_contract.zig ${.CURDIR}/file_message.zig
 	${ZIG} build-exe ${.CURDIR}/mach_vm_contract.zig ${MACH_SO} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc \
