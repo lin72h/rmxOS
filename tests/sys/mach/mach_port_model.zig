@@ -7,6 +7,8 @@ const c = @cImport({
     @cInclude("mach/mach.h");
     @cInclude("op644_extract.h");
     @cInclude("stdio.h");
+    @cInclude("sys/mman.h");
+    @cInclude("errno.h");
 });
 const invalid_name = 15;
 const invalid_right = 17;
@@ -39,7 +41,7 @@ const Entry = struct {
     }
 };
 const Model = struct {
-    entries: [60]Entry = @splat(.{}),
+    entries: [128]Entry = @splat(.{}),
     count: usize = 0,
     fn add(m: *Model, right: Right, owner: ?usize) usize {
         const slot = m.count;
@@ -255,7 +257,7 @@ test "unused send-once notifies and bypasses the queue limit" {
 }
 
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-var cases: [3]c.atf_tc_t = undefined;
+var cases: [4]c.atf_tc_t = undefined;
 var cleanup_failures: u32 = 0;
 const Header = extern struct { bits: u32, size: u32, remote: u32, local: u32, voucher: u32, id: i32 };
 const Observer = struct {
@@ -263,7 +265,7 @@ const Observer = struct {
     step: usize = 0,
     action: Action = .{ .call = .allocate },
     bad: bool = false,
-    owned: [60]u32 = @splat(0),
+    owned: [128]u32 = @splat(0),
     owned_count: usize = 0,
     first_field: ?[*:0]const u8 = null,
     first_expected: i64 = 0,
@@ -451,8 +453,8 @@ fn namesInventory(_: [*c]const c.atf_tc_t) callconv(.c) void {
     if (o.bad or clean.bad) c.atf_tc_fail("known 1.0 names gap or type/refs cleanup contract differs");
 }
 fn addTests(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "sequences", "extract_make_send", "names_inventory" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &sequences, &extractMakeSend, &namesInventory };
+    const names = [_][*:0]const u8{ "sequences", "extract_make_send", "names_inventory", "descriptor_sequences" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &sequences, &extractMakeSend, &namesInventory, &descriptorSequences };
     for (names, bodies, 0..) |name, body, i| {
         const err = c.atf_tc_init(&cases[i], name, &head, body, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
@@ -466,4 +468,380 @@ pub fn main(argc: c_int, argv: [*c][*c]u8) callconv(.c) c_int {
 }
 comptime {
     if (!builtin.is_test) @export(&main, .{ .name = "main" });
+}
+
+// Descriptor ownership is escrowed in the message, independently of namespace
+// urefs. References: XNU ipc_kmsg_copyin_body/copyout_body/clean_descriptors,
+// ipc_right_copyin/copyout. Every endpoint below is distinct from the channel.
+const Disposition = enum(u8) { move_receive = 16, move_send = 17, move_once = 18, copy_send = 19, make_send = 20, make_once = 21 };
+const DescriptorKind = enum(u8) { port = 0, memory = 1, array = 2 };
+const Descriptor = struct {
+    kind: DescriptorKind = .port,
+    disposition: Disposition = .copy_send,
+    count: usize = 1,
+    pages: usize = 1,
+    deallocate: bool = false,
+    urefs: u32 = 1,
+    retain_send: bool = true,
+    slots: [8]usize = @splat(0),
+    inputs: [8]usize = @splat(0),
+    names: [8]u32 = @splat(0),
+    address: usize = 0,
+};
+const DescriptorPlan = struct {
+    descriptors: [4]Descriptor = @splat(.{}),
+    count: usize,
+    discard: bool,
+    fn generate(seed: u32) DescriptorPlan {
+        var g: Generator = .{ .state = seed };
+        var p: DescriptorPlan = .{ .count = 1 + g.next() % 4, .discard = g.next() % 3 == 0 };
+        for (p.descriptors[0..p.count]) |*d| {
+            d.kind = @enumFromInt(g.next() % 3);
+            d.disposition = @enumFromInt(16 + g.next() % 6);
+            d.count = if (d.kind == .array) 1 + g.next() % 8 else 1;
+            d.pages = 1 + g.next() % 3;
+            d.deallocate = g.next() % 2 != 0;
+            d.urefs = 1 + g.next() % 3;
+            d.retain_send = g.next() % 2 != 0;
+        }
+        return p;
+    }
+    fn send(p: DescriptorPlan, m: *Model) void {
+        for (p.descriptors[0..p.count]) |d| {
+            if (d.kind == .memory) continue;
+            for (d.inputs[0..d.count]) |slot| switch (d.disposition) {
+                .move_receive => m.entries[slot].refs[1] = 0, // limbo, not death
+                .move_send => m.entries[slot].refs[0] -= 1,
+                .move_once => m.entries[slot].refs[2] = 0,
+                .copy_send, .make_send, .make_once => {},
+            };
+        }
+        m.entries[0].queue[0] = 64800;
+        m.entries[0].queued = 1;
+    }
+    fn deliver(p: DescriptorPlan, m: *Model) void {
+        m.entries[0].queued = 0;
+        for (p.descriptors[0..p.count]) |d| {
+            if (d.kind == .memory) continue;
+            for (d.slots[0..d.count]) |slot| switch (d.disposition) {
+                .move_receive => m.entries[slot].refs[1] = 1,
+                .move_send, .copy_send, .make_send => m.entries[slot].refs[0] += 1,
+                .move_once, .make_once => {
+                    _ = m.add(.once, slot);
+                },
+            };
+        }
+    }
+    fn release(p: DescriptorPlan, m: *Model) void {
+        _ = m.apply(.{ .call = .destroy }, 0);
+        for (p.descriptors[0..p.count]) |d| {
+            if (d.kind == .memory) continue;
+            for (d.slots[0..d.count]) |slot| switch (d.disposition) {
+                .move_receive => m.retireReceive(slot),
+                .move_once, .make_once => {
+                    // Destruction of a carried once right sends the unused-once
+                    // notification to its still-live receive endpoint.
+                    const e = &m.entries[slot];
+                    e.queue[e.queued] = 71;
+                    e.queued += 1;
+                },
+                .move_send, .copy_send, .make_send => {},
+            };
+        }
+    }
+};
+fn descriptorStep(m: *Model, a: Action, o: ?*Observer) void {
+    if (builtin.is_test) {
+        std.debug.assert(m.apply(a, 64800) == 0);
+    } else if (o) |obs| {
+        obs.action = a;
+        execute(m, a, 64800, obs);
+        obs.step += 1;
+    } else std.debug.assert(m.apply(a, 64800) == 0);
+}
+fn descriptorSetup(p: *DescriptorPlan, m: *Model, o: ?*Observer) void {
+    descriptorStep(m, .{ .call = .allocate }, o);
+    descriptorStep(m, .{ .call = .insert }, o);
+    for (p.descriptors[0..p.count]) |*d| {
+        if (d.kind == .memory) continue;
+        for (0..d.count) |j| {
+            const slot = m.count;
+            d.slots[j] = slot;
+            d.inputs[j] = slot;
+            descriptorStep(m, .{ .call = .allocate }, o);
+            if (d.disposition == .move_send or d.disposition == .copy_send or (d.disposition == .move_receive and d.retain_send)) {
+                descriptorStep(m, .{ .call = .insert, .slot = slot }, o);
+                if (d.urefs > 1) descriptorStep(m, .{ .call = .mod_refs, .slot = slot, .right = .send, .delta = @intCast(d.urefs - 1) }, o);
+            }
+            if (d.disposition == .move_once) {
+                d.inputs[j] = m.count;
+                descriptorStep(m, .{ .call = .extract, .slot = slot, .once = true }, o);
+            }
+            if (d.disposition == .move_receive) {
+                // A dependent once witness must stay live in limbo, then become
+                // dead if the queued receive right is destroyed.
+                descriptorStep(m, .{ .call = .extract, .slot = slot, .once = true }, o);
+            }
+            d.names[j] = m.entries[d.inputs[j]].name;
+        }
+    }
+}
+test "descriptor fixed seeds cover dimensions and escrow transitions" {
+    var kinds: [3]usize = @splat(0);
+    var dispositions: [2][6]usize = @splat(@splat(0));
+    var widths: [8]usize = @splat(0);
+    var pages: [2][3]usize = @splat(@splat(0));
+    var counts: [4]usize = @splat(0);
+    var outcomes: [2]usize = @splat(0);
+    for (0..2000) |seed| {
+        var p = DescriptorPlan.generate(@intCast(seed));
+        try std.testing.expectEqualDeep(p, DescriptorPlan.generate(@intCast(seed)));
+        var m: Model = .{};
+        descriptorSetup(&p, &m, null);
+        const initial = m;
+        p.send(&m);
+        counts[p.count - 1] += 1;
+        outcomes[@intFromBool(p.discard)] += 1;
+        for (p.descriptors[0..p.count]) |d| {
+            kinds[@intFromEnum(d.kind)] += 1;
+            if (d.kind == .memory) {
+                pages[@intFromBool(d.deallocate)][d.pages - 1] += 1;
+                continue;
+            }
+            dispositions[@intFromBool(d.kind == .array)][@intFromEnum(d.disposition) - 16] += 1;
+            if (d.kind == .array) widths[d.count - 1] += 1;
+            for (d.inputs[0..d.count]) |slot| {
+                const before = initial.entries[slot].refs;
+                var expected = before;
+                switch (d.disposition) {
+                    .move_receive => expected[1] = 0,
+                    .move_send => expected[0] -= 1,
+                    .move_once => expected[2] = 0,
+                    else => {},
+                }
+                try std.testing.expectEqualDeep(expected, m.entries[slot].refs);
+            }
+        }
+        const escrow = m;
+        if (p.discard) p.release(&m) else p.deliver(&m);
+        var new_slot = escrow.count;
+        for (p.descriptors[0..p.count]) |d| {
+            if (d.kind == .memory) continue;
+            for (d.slots[0..d.count]) |slot| {
+                var expected = escrow.entries[slot].refs;
+                if (p.discard) {
+                    if (d.disposition == .move_receive) {
+                        expected[4] += expected[0];
+                        expected[0] = 0;
+                    }
+                    if (d.disposition == .move_once or d.disposition == .make_once) try std.testing.expectEqual(@as(i32, 71), m.entries[slot].queue[0]);
+                } else switch (d.disposition) {
+                    .move_receive => expected[1] = 1,
+                    .move_send, .copy_send, .make_send => expected[0] += 1,
+                    .move_once, .make_once => {
+                        try std.testing.expectEqualDeep([_]u32{ 0, 0, 1, 0, 0 }, m.entries[new_slot].refs);
+                        try std.testing.expectEqual(@as(?usize, slot), m.entries[new_slot].owner);
+                        new_slot += 1;
+                    },
+                }
+                try std.testing.expectEqualDeep(expected, m.entries[slot].refs);
+            }
+        }
+    }
+    for (kinds) |n| try std.testing.expect(n > 0);
+    for (counts) |n| try std.testing.expect(n > 0);
+    for (outcomes) |n| try std.testing.expect(n > 0);
+    for (widths) |n| try std.testing.expect(n > 0);
+    for (dispositions) |row| for (row) |n| {
+        try std.testing.expect(n > 0);
+    };
+    for (pages) |row| for (row) |n| {
+        try std.testing.expect(n > 0);
+    };
+}
+// LP64 Mach user descriptors have four-byte alignment, and heterogeneous
+// descriptor sizes. Do not use a fixed-stride union to pack the wire message.
+const PortWire = extern struct { name: u32, pad: u32 = 0, pad2: u16 = 0, disposition: u8, kind: u8 = 0 };
+const OolWire = extern struct { address: u64 align(4), deallocate: u8, copy: u8 = 1, disposition: u8 = 0, kind: u8, size: u32 };
+comptime {
+    if (@sizeOf(PortWire) != 12 or @offsetOf(PortWire, "kind") != 11 or @sizeOf(OolWire) != 16 or @offsetOf(OolWire, "kind") != 11) @compileError("Mach LP64 descriptor layout");
+}
+fn payloadByte(seed: u32, index: usize, offset: usize) u8 {
+    return @truncate(@as(usize, seed) *% 131 +% index *% 47 +% offset *% 17 +% (offset >> 8));
+}
+fn rangeMapped(address: usize, size: usize) bool {
+    var vector: [3]u8 = undefined;
+    if (address == 0 or address % 4096 != 0 or size == 0 or size > 12288) return false;
+    return c.mincore(@ptrFromInt(address), size, &vector) == 0;
+}
+fn checkSender(p: *DescriptorPlan, seed: u32, o: *Observer) void {
+    for (p.descriptors[0..p.count], 0..) |*d, i| {
+        if (d.kind != .memory or d.address == 0) continue;
+        // Check every page, not merely the first one. A retained source is
+        // overwritten after send to check that receive sees the sent snapshot.
+        for (0..d.pages) |page| {
+            var vec: u8 = 0;
+            const rc = c.mincore(@ptrFromInt(d.address + page * 4096), 4096, &vec);
+            o.equal("sender_mapping_rc", 0, i, if (d.deallocate) -1 else 0, rc);
+            if (d.deallocate and rc == -1) o.equal("sender_unmapped_errno", 0, i, c.ENOMEM, c.__error().*);
+        }
+        if (d.deallocate) {
+            if (!rangeMapped(d.address, d.pages * 4096)) d.address = 0;
+        } else if (rangeMapped(d.address, d.pages * 4096)) {
+            const bytes: [*]u8 = @ptrFromInt(d.address);
+            for (0..d.pages * 4096) |j| {
+                o.equal("sender_bytes", 0, i, payloadByte(seed, i, j), bytes[j]);
+                bytes[j] ^= 0xff;
+            }
+        }
+    }
+}
+fn returnedName(m: *Model, before: Model, d: Descriptor, j: usize, name: u32, once_slot: *usize, o: *Observer) void {
+    o.remember(name);
+    o.equal("descriptor_name_valid", name, j, 1, @intFromBool(name != 0 and name != 0xffffffff));
+    const slot = d.slots[j];
+    // Copyout may reuse any vanished input name, including a later slot.
+    for (m.entries[0..m.count], 0..) |*e, k| {
+        if (k != slot and e.name == name and !e.live()) e.name = 0;
+    }
+    if (d.disposition == .move_once or d.disposition == .make_once) {
+        for (before.entries[0..before.count]) |e| o.equal("descriptor_once_fresh", name, j, 0, @intFromBool(e.live() and e.name == name));
+        bindName(m, once_slot.*, name);
+        once_slot.* += 1;
+    } else if (before.entries[slot].live()) {
+        o.equal("descriptor_coalesced_name", name, j, before.entries[slot].name, name);
+    } else {
+        for (before.entries[0..before.count]) |e| o.equal("descriptor_receive_fresh", name, j, 0, @intFromBool(e.live() and e.name == name));
+        bindName(m, slot, name);
+    }
+}
+fn descriptorSeed(seed: u32) bool {
+    var p = DescriptorPlan.generate(seed);
+    var m: Model = .{};
+    var o: Observer = .{ .seed = seed };
+    descriptorSetup(&p, &m, &o);
+    var wire: [256]u8 align(8) = @splat(0);
+    var offset: usize = 28;
+    for (p.descriptors[0..p.count], 0..) |*d, i| {
+        if (d.kind == .port) {
+            const w: PortWire = .{ .name = d.names[0], .disposition = @intFromEnum(d.disposition) };
+            @memcpy(wire[offset..][0..12], std.mem.asBytes(&w));
+            offset += 12;
+        } else {
+            if (d.kind == .memory) {
+                const ptr = c.mmap(null, d.pages * 4096, c.PROT_READ | c.PROT_WRITE, c.MAP_ANON | c.MAP_PRIVATE, -1, 0);
+                o.equal("source_mmap", 0, i, 0, @intFromBool(ptr == c.MAP_FAILED));
+                if (ptr != c.MAP_FAILED) {
+                    d.address = @intFromPtr(ptr);
+                    const bytes: [*]u8 = @ptrCast(ptr);
+                    for (0..d.pages * 4096) |j| bytes[j] = payloadByte(seed, i, j);
+                }
+            }
+            const w: OolWire = .{ .address = if (d.kind == .memory) d.address else @intFromPtr(&d.names), .deallocate = @intFromBool(d.kind == .memory and d.deallocate), .disposition = if (d.kind == .array) @intFromEnum(d.disposition) else 0, .kind = @intFromEnum(d.kind), .size = @intCast(if (d.kind == .memory) d.pages * 4096 else d.count) };
+            @memcpy(wire[offset..][0..16], std.mem.asBytes(&w));
+            offset += 16;
+        }
+    }
+    const h: *Header = @ptrCast(&wire);
+    h.* = .{ .bits = c.MACH_MSGH_BITS_COMPLEX | c.MACH_MSG_TYPE_COPY_SEND, .size = @intCast(offset), .remote = m.entries[0].name, .local = 0, .voucher = 0, .id = 64800 };
+    const n: *u32 = @ptrCast(@alignCast(wire[24..].ptr));
+    n.* = @intCast(p.count);
+    if (!o.bad) {
+        const before = m;
+        o.action = .{ .call = .send };
+        p.send(&m);
+        o.equal("descriptor_send_return", h.remote, 0, 0, c.mach_msg(@ptrCast(&wire), c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, h.size, 0, 0, 0, 0));
+        observe(&o, m, before);
+        checkSender(&p, seed, &o);
+        o.step += 1;
+    }
+    if (!o.bad) {
+        const before = m;
+        if (p.discard) {
+            o.action = .{ .call = .destroy };
+            p.release(&m);
+            o.equal("queued_destroy_return", before.entries[0].name, 0, 0, c.mach_port_destroy(c.mach_task_self(), before.entries[0].name));
+            observe(&o, m, null);
+            // The carried once release is observable as an exact notification,
+            // followed by an empty queue. Also query transferred receive death.
+            for (p.descriptors[0..p.count]) |d| {
+                if (d.kind == .memory) continue;
+                for (d.slots[0..d.count]) |slot| {
+                    if (d.disposition == .make_once or d.disposition == .move_once) descriptorStep(&m, .{ .call = .receive, .slot = slot }, &o);
+                    descriptorStep(&m, .{ .call = .receive, .slot = slot }, &o);
+                }
+            }
+        } else {
+            o.action = .{ .call = .receive };
+            p.deliver(&m);
+            var received: [256]u8 align(8) = @splat(0);
+            const rc = c.mach_msg(@ptrCast(&received), c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, received.len, before.entries[0].name, 0, 0);
+            o.equal("descriptor_receive_return", 0, 0, 0, rc);
+            if (rc == 0) {
+                const rh: *Header = @ptrCast(&received);
+                const rn: *u32 = @ptrCast(@alignCast(received[24..].ptr));
+                o.equal("descriptor_message_id", 0, 0, 64800, rh.id);
+                o.equal("descriptor_message_size", 0, 0, @intCast(offset), rh.size);
+                o.equal("descriptor_complex", 0, 0, c.MACH_MSGH_BITS_COMPLEX, rh.bits & c.MACH_MSGH_BITS_COMPLEX);
+                o.equal("descriptor_count", 0, 0, @intCast(p.count), rn.*);
+                var pos: usize = 28;
+                var once_slot = before.count;
+                for (p.descriptors[0..p.count], 0..) |d, i| {
+                    const expected_disp: u8 = switch (d.disposition) {
+                        .move_receive => 16,
+                        .move_once, .make_once => 18,
+                        else => 17,
+                    };
+                    if (d.kind == .port) {
+                        const w: *align(1) const PortWire = @ptrCast(received[pos..].ptr);
+                        o.equal("descriptor_kind", 0, i, 0, w.kind);
+                        o.equal("descriptor_disposition", 0, i, expected_disp, w.disposition);
+                        returnedName(&m, before, d, 0, w.name, &once_slot, &o);
+                        pos += 12;
+                    } else {
+                        const w: *align(1) const OolWire = @ptrCast(received[pos..].ptr);
+                        o.equal("descriptor_kind", 0, i, @intFromEnum(d.kind), w.kind);
+                        const size = if (d.kind == .memory) d.pages * 4096 else d.count * 4;
+                        o.equal("descriptor_size", 0, i, @intCast(if (d.kind == .memory) size else d.count), w.size);
+                        const mapped = rangeMapped(@intCast(w.address), size);
+                        o.equal("descriptor_mapping", 0, i, 1, @intFromBool(mapped));
+                        if (mapped) {
+                            if (d.kind == .memory) {
+                                const bytes: [*]const u8 = @ptrFromInt(w.address);
+                                for (0..size) |j| o.equal("descriptor_bytes", 0, i, payloadByte(seed, i, j), bytes[j]);
+                            } else {
+                                o.equal("descriptor_disposition", 0, i, expected_disp, w.disposition);
+                                const names: [*]const u32 = @ptrFromInt(w.address);
+                                for (0..d.count) |j| returnedName(&m, before, d, j, names[j], &once_slot, &o);
+                            }
+                            o.equal("descriptor_vm_cleanup", 0, i, 0, c.mach_vm_deallocate(c.mach_task_self(), w.address, size));
+                        }
+                        pos += 16;
+                    }
+                }
+            }
+            observe(&o, m, null);
+            descriptorStep(&m, .{ .call = .receive }, &o); // queue emptied exactly once
+        }
+    }
+    if (o.bad) {
+        _ = c.printf("descriptor_model named_seed=descriptor_seed_%u count=%zu discard=%u\n", seed, p.count, @as(u32, @intFromBool(p.discard)));
+        for (p.descriptors[0..p.count], 0..) |d, i| _ = c.printf("descriptor_model seed=%u index=%zu kind=%u disposition=%u names=%zu pages=%zu deallocate=%u urefs=%u retain_send=%u\n", seed, i, @as(u32, @intFromEnum(d.kind)), @as(u32, @intFromEnum(d.disposition)), d.count, d.pages, @as(u32, @intFromBool(d.deallocate)), d.urefs, @as(u32, @intFromBool(d.retain_send)));
+        _ = c.fflush(null);
+    }
+    for (p.descriptors[0..p.count], 0..) |d, i| {
+        if (d.kind == .memory and d.address != 0) o.equal("sender_vm_cleanup", 0, i, 0, c.munmap(@ptrFromInt(d.address), d.pages * 4096));
+    }
+    var clean: Observer = .{ .seed = seed, .step = o.step + 1, .action = .{ .call = .destroy }, .owned = o.owned, .owned_count = o.owned_count };
+    cleanup(&clean, &m);
+    cleanup_failures += @intFromBool(clean.bad);
+    return o.bad or clean.bad;
+}
+fn descriptorSequences(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    var mismatches: u32 = 0;
+    cleanup_failures = 0;
+    for (0..2000) |seed| mismatches += @intFromBool(descriptorSeed(@intCast(seed)));
+    _ = c.printf("descriptor_model summary seeds=2000 mismatches=%u cleanup_failures=%u\n", mismatches, cleanup_failures);
+    _ = c.fflush(null);
+    if (mismatches != 0) c.atf_tc_fail("descriptor rights or memory differ from model; see named seed and step");
 }
