@@ -554,6 +554,7 @@ fn descriptorStep(m: *Model, a: Action, o: ?*Observer) void {
     if (builtin.is_test) {
         std.debug.assert(m.apply(a, 64800) == 0);
     } else if (o) |obs| {
+        if (obs.bad) return;
         obs.action = a;
         execute(m, a, 64800, obs);
         obs.step += 1;
@@ -747,11 +748,11 @@ fn descriptorSeed(seed: u32) bool {
     const n: *u32 = @ptrCast(@alignCast(wire[24..].ptr));
     n.* = @intCast(p.count);
     if (!o.bad) {
-        const before = m;
         o.action = .{ .call = .send };
         p.send(&m);
         o.equal("descriptor_send_return", h.remote, 0, 0, c.mach_msg(@ptrCast(&wire), c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, h.size, 0, 0, 0, 0));
-        observe(&o, m, before);
+        // COPY/MAKE dispositions must leave input urefs unchanged too.
+        observe(&o, m, null);
         checkSender(&p, seed, &o);
         o.step += 1;
     }
