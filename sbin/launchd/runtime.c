@@ -279,7 +279,8 @@ launchd_runtime_wait_for_shutdown(unsigned int milliseconds)
 	int error = 0;
 	bool stopping;
 
-	os_assert_zero(pthread_mutex_lock(&helper_lock));
+	error = pthread_mutex_lock(&helper_lock);
+	os_assert_zero(error);
 	if (!helpers_stopping && milliseconds != 0) {
 		posix_assert_zero(clock_gettime(CLOCK_REALTIME, &deadline));
 		deadline.tv_sec += milliseconds / 1000;
@@ -296,24 +297,30 @@ launchd_runtime_wait_for_shutdown(unsigned int milliseconds)
 		}
 	}
 	stopping = helpers_stopping;
-	os_assert_zero(pthread_mutex_unlock(&helper_lock));
+	error = pthread_mutex_unlock(&helper_lock);
+	os_assert_zero(error);
 	return stopping;
 }
 
 void
 launchd_runtime_shutdown(void)
 {
+	int error;
+
 	/* Finish all user code and TLS destructors before reboot unmounts text.
 	 * Helpers use bounded waits, including the internal Mach RPC, so this
 	 * cannot depend on the reboot/event thread servicing another request. */
-	os_assert_zero(pthread_mutex_lock(&helper_lock));
+	error = pthread_mutex_lock(&helper_lock);
+	os_assert_zero(error);
 	if (helpers_stopping) {
-		os_assert_zero(pthread_mutex_unlock(&helper_lock));
+		error = pthread_mutex_unlock(&helper_lock);
+		os_assert_zero(error);
 		return;
 	}
 	helpers_stopping = true;
 	os_assert_zero(pthread_cond_broadcast(&helper_cond));
-	os_assert_zero(pthread_mutex_unlock(&helper_lock));
+	error = pthread_mutex_unlock(&helper_lock);
+	os_assert_zero(error);
 	os_assert_zero(pthread_join(kqueue_demand_thread, NULL));
 	os_assert_zero(pthread_join(waitpid_thread, NULL));
 	launchd_stop_update_thread();
