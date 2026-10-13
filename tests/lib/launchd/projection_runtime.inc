@@ -4,3 +4,5 @@ unsigned op484_demand_set(void) { return demand_port_set; }
 
 size_t op484_callback_slots(void) { return mig_cb_table_sz / sizeof(*mig_cb_table); }
 size_t op484_port_index(unsigned name) { return MACH_PORT_INDEX(name); }
+/* Expose the existing console stream so the Zig test can flush its reason. */
+FILE *op666_console(void) { return launchd_console; }

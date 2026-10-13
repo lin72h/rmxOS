@@ -22,12 +22,12 @@ pub fn countPorts(bytes: []const u8) !usize {
     return count;
 }
 test "packed file records count Mach ports and reject bad extents" {
-    const size = std.mem.alignForward(usize, @offsetOf(c.kinfo_file, "kf_path") + 1, 8);
+    const size = comptime std.mem.alignForward(usize, @offsetOf(c.kinfo_file, "kf_path") + 1, 8);
     var bytes: [size * 3]u8 = @splat(0);
     for (0..3) |i| {
         const f: *align(1) c.kinfo_file = @ptrCast(&bytes[i * size]);
         f.kf_structsize = size;
-        f.kf_type = @intCast(if (i == 0) 1 else if (i == 1) 17 else 18);
+        f.kf_type = if (i == 0) @as(c_int, 1) else if (i == 1) @as(c_int, 17) else @as(c_int, 18);
     }
     try std.testing.expect(size < @sizeOf(c.kinfo_file));
     try std.testing.expectEqual(@as(usize, 2), try countPorts(&bytes));
