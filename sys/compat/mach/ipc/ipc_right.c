@@ -375,7 +375,8 @@ ipc_right_dnrequest(
 			assert(IE_BITS_TYPE(bits) == MACH_PORT_TYPE_DEAD_NAME);
 			assert(ipc_entry_refs(entry) > 0);
 
-			ipc_entry_hold(entry); /* increment urefs */
+			if (ipc_entry_refs(entry) < MACH_PORT_UREFS_MAX)
+				ipc_entry_hold(entry); /* increment urefs */
 			is_write_unlock(space);
 
 			ipc_notify_dead_name(notify, name);
@@ -506,7 +507,7 @@ ipc_right_check(
 
 	if (entry->ie_request != 0) {
 		entry->ie_request = 0;
-		if (pending)
+		if (pending && IE_BITS_UREFS(bits) < MACH_PORT_UREFS_MAX)
 			bits++; /* only an unconsumed notification adds a reference */
 	}
 
@@ -776,7 +777,8 @@ ipc_right_dealloc(
 		assert(entry->ie_object == IO_NULL);
 
 		if (ipc_entry_refs(entry) > 1) {
-			ipc_entry_release(entry);
+			if (ipc_entry_refs(entry) < MACH_PORT_UREFS_MAX)
+				ipc_entry_release(entry);
 			is_write_unlock(space);
 		} else
 			ipc_entry_dealloc(space, name, entry);
@@ -838,7 +840,8 @@ ipc_right_dealloc(
 
 		if (ipc_entry_refs(entry) > 1) {
 			ip_unlock(port);
-			ipc_entry_release(entry); /* decrement urefs */
+			if (ipc_entry_refs(entry) < MACH_PORT_UREFS_MAX)
+				ipc_entry_release(entry); /* decrement urefs */
 			is_write_unlock(space);
 		} else {
 			if (--port->ip_srights == 0
@@ -890,7 +893,8 @@ ipc_right_dealloc(
 		assert(port->ip_srights > 0);
 
 		if (ipc_entry_refs(entry) > 1) {
-			ipc_entry_release(entry);
+			if (ipc_entry_refs(entry) < MACH_PORT_UREFS_MAX)
+				ipc_entry_release(entry);
 		} else {
 			if (--port->ip_srights == 0
 			    ) {
@@ -1027,7 +1031,8 @@ ipc_right_delta(
 			bits |= MACH_PORT_TYPE_DEAD_NAME;
 
 			if (entry->ie_request != 0) {
-				if (ipc_port_request_pending(port, entry->ie_request))
+				if (ipc_port_request_pending(port, entry->ie_request) &&
+				    IE_BITS_UREFS(bits) < MACH_PORT_UREFS_MAX)
 					bits++; /* only an unconsumed notification adds a reference */
 				entry->ie_request = 0;
 			}
@@ -1122,12 +1127,19 @@ ipc_right_delta(
 		assert(entry->ie_object == IO_NULL);
 		assert(entry->ie_request == 0);
 
-		urefs = ipc_entry_refs(entry);
-		if (MACH_PORT_UREFS_UNDERFLOW(urefs, delta))
+		if (delta > (mach_port_delta_t)MACH_PORT_UREFS_MAX ||
+		    delta < -(mach_port_delta_t)MACH_PORT_UREFS_MAX)
 			goto invalid_value;
-		if (MACH_PORT_UREFS_OVERFLOW(urefs, delta)) {
-			is_write_unlock(space);
-			return (KERN_UREFS_OVERFLOW);
+		urefs = ipc_entry_refs(entry);
+		if (urefs == MACH_PORT_UREFS_MAX) {
+			/* Only removing all refs can change a pegged count. */
+			if (delta != -(mach_port_delta_t)MACH_PORT_UREFS_MAX)
+				delta = 0;
+		} else {
+			if (MACH_PORT_UREFS_UNDERFLOW(urefs, delta))
+				goto invalid_value;
+			if (MACH_PORT_UREFS_OVERFLOW(urefs, delta))
+				delta = MACH_PORT_UREFS_MAX - urefs;
 		}
 
 		if ((urefs + delta) == 0) {
@@ -1150,8 +1162,6 @@ ipc_right_delta(
 		if ((bits & MACH_PORT_TYPE_SEND) == 0)
 			goto invalid_right;
 
-		/* maximum urefs for send is MACH_PORT_UREFS_MAX-1 */
-
 		port = (ipc_port_t) entry->ie_object;
 		assert(port != IP_NULL);
 
@@ -1163,16 +1173,23 @@ ipc_right_delta(
 
 		assert(port->ip_srights > 0);
 
-		urefs = ipc_entry_refs(entry);
-		if (MACH_PORT_UREFS_UNDERFLOW(urefs, delta)) {
+		if (delta > (mach_port_delta_t)MACH_PORT_UREFS_MAX ||
+		    delta < -(mach_port_delta_t)MACH_PORT_UREFS_MAX) {
 			ip_unlock(port);
 			goto invalid_value;
 		}
-		if (MACH_PORT_UREFS_OVERFLOW(urefs, delta) ||
-		    (int64_t)urefs + delta >= MACH_PORT_UREFS_MAX) {
-			ip_unlock(port);
-			is_write_unlock(space);
-			return (KERN_UREFS_OVERFLOW);
+		urefs = ipc_entry_refs(entry);
+		if (urefs == MACH_PORT_UREFS_MAX) {
+			/* Only removing all refs can change a pegged count. */
+			if (delta != -(mach_port_delta_t)MACH_PORT_UREFS_MAX)
+				delta = 0;
+		} else {
+			if (MACH_PORT_UREFS_UNDERFLOW(urefs, delta)) {
+				ip_unlock(port);
+				goto invalid_value;
+			}
+			if (MACH_PORT_UREFS_OVERFLOW(urefs, delta))
+				delta = MACH_PORT_UREFS_MAX - urefs;
 		}
 
 		if ((urefs + delta) == 0) {
@@ -1611,14 +1628,16 @@ ipc_right_copyin(
 								name, entry);
 				OBJECT_CLEAR(entry, name);
 			}
-			ipc_entry_release(entry); /* decrement urefs */
+			if (ipc_entry_refs(entry) < MACH_PORT_UREFS_MAX)
+				ipc_entry_release(entry); /* decrement urefs */
 			entry->ie_bits = bits &~
 				(IE_BITS_UREFS_MASK|MACH_PORT_TYPE_SEND);
 		} else {
 			MPASS(urefs > 1);
 			port->ip_srights++;
 			ip_reference(port);
-			ipc_entry_release(entry); /* decrement urefs */
+			if (ipc_entry_refs(entry) < MACH_PORT_UREFS_MAX)
+				ipc_entry_release(entry); /* decrement urefs */
 		}
 
 		ip_unlock(port);
@@ -1707,9 +1726,10 @@ ipc_right_copyin(
 		ELOG;
 		goto invalid_right;
 	}
-	if (ipc_entry_refs(entry) > 1)
-		ipc_entry_release(entry); /* decrement urefs */
-	else
+	if (ipc_entry_refs(entry) > 1) {
+		if (ipc_entry_refs(entry) < MACH_PORT_UREFS_MAX)
+			ipc_entry_release(entry); /* decrement urefs */
+	} else
 		entry->ie_bits = bits &~ MACH_PORT_TYPE_DEAD_NAME;
 
 	*objectp = IO_DEAD;
@@ -1730,7 +1750,7 @@ ipc_right_copyin(
  *		The space is write-locked and active.
  */
 
-void
+kern_return_t
 ipc_right_copyin_undo(
 	ipc_space_t		space,
 	mach_port_name_t		name,
@@ -1740,6 +1760,7 @@ ipc_right_copyin_undo(
 	ipc_port_t		soright)
 {
 	ipc_entry_bits_t bits = entry->ie_bits;
+	kern_return_t kr = KERN_SUCCESS;
 
 	assert(space->is_active);
 
@@ -1769,7 +1790,11 @@ ipc_right_copyin_undo(
 		assert(ipc_entry_refs(entry) > 0);
 
 		if (msgt_name != MACH_MSG_TYPE_COPY_SEND) {
-			ipc_entry_hold(entry);/* increment urefs */
+			/* This legacy undo has no XNU-12377 counterpart. */
+			if (MACH_PORT_UREFS_OVERFLOW(ipc_entry_refs(entry), 1))
+				kr = KERN_UREFS_OVERFLOW;
+			else
+				ipc_entry_hold(entry);
 		}
 	} else {
 		assert((msgt_name == MACH_MSG_TYPE_MOVE_SEND) ||
@@ -1780,7 +1805,11 @@ ipc_right_copyin_undo(
 		assert(ipc_entry_refs(entry) > 0);
 
 		if (msgt_name != MACH_MSG_TYPE_COPY_SEND) {
-			ipc_entry_hold(entry); /* increment urefs */
+			/* This legacy undo has no XNU-12377 counterpart. */
+			if (MACH_PORT_UREFS_OVERFLOW(ipc_entry_refs(entry), 1))
+				kr = KERN_UREFS_OVERFLOW;
+			else
+				ipc_entry_hold(entry);
 		}
 
 		/*
@@ -1798,6 +1827,7 @@ ipc_right_copyin_undo(
 
 	if (object != IO_DEAD)
 		ipc_object_release(object);
+	return (kr);
 }
 
 /*
@@ -1873,7 +1903,8 @@ ipc_right_copyin_two(
 		port->ip_srights += 2;
 		ip_reference(port);
 		ip_reference(port);
-		entry->ie_bits = bits-2; /* decrement urefs */
+		if (urefs < MACH_PORT_UREFS_MAX)
+			entry->ie_bits = bits-2; /* decrement urefs */
 	}
 	ip_unlock(port);
 

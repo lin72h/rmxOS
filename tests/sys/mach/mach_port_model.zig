@@ -5,6 +5,7 @@ const builtin = @import("builtin");
 const c = @cImport({
     @cInclude("atf-c.h");
     @cInclude("mach/mach.h");
+    @cInclude("mach/notify.h");
     @cInclude("op644_extract.h");
     @cInclude("stdio.h");
     @cInclude("sys/mman.h");
@@ -257,7 +258,7 @@ test "unused send-once notifies and bypasses the queue limit" {
 }
 
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-var cases: [5]c.atf_tc_t = undefined;
+var cases: [8]c.atf_tc_t = undefined;
 var cleanup_failures: u32 = 0;
 const Header = extern struct { bits: u32, size: u32, remote: u32, local: u32, voucher: u32, id: i32 };
 const Observer = struct {
@@ -453,8 +454,8 @@ fn namesInventory(_: [*c]const c.atf_tc_t) callconv(.c) void {
     if (o.bad or clean.bad) c.atf_tc_fail("known 1.0 names gap or type/refs cleanup contract differs");
 }
 fn addTests(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "sequences", "extract_make_send", "names_inventory", "descriptor_sequences", "thread_self_saturation" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &sequences, &extractMakeSend, &namesInventory, &descriptorSequences, &threadSelfSaturation };
+    const names = [_][*:0]const u8{ "sequences", "extract_make_send", "names_inventory", "descriptor_sequences", "thread_self_saturation", "urefs_delta_limits", "urefs_notifications", "urefs_moves" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &sequences, &extractMakeSend, &namesInventory, &descriptorSequences, &threadSelfSaturation, &urefsDeltaLimits, &urefsNotifications, &urefsMoves };
     for (names, bodies, 0..) |name, body, i| {
         const err = c.atf_tc_init(&cases[i], name, &head, body, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
@@ -490,6 +491,143 @@ fn threadSelfSaturation(_: [*c]const c.atf_tc_t) callconv(.c) void {
     if (c.mach_port_get_refs(c.mach_task_self(), thread, c.MACH_PORT_RIGHT_SEND, &refs) != 0 or refs != c.MACH_PORT_UREFS_MAX) c.atf_tc_fail("descriptor copyout count=%u", refs);
     _ = c.printf("thread_self_saturation calls=70000 expected=%u observed=%u descriptor_copyout=0\n", @as(u32, c.MACH_PORT_UREFS_MAX), refs);
     if (c.mach_port_destroy(c.mach_task_self(), destination) != 0 or c.mach_port_destroy(c.mach_task_self(), thread) != 0) c.atf_tc_fail("saturation cleanup");
+}
+
+const urefs_max: i32 = 65535;
+fn limitCheck(label: [*:0]const u8, expected: i32, observed: i32) void {
+    if (expected != observed) c.atf_tc_fail("%s expected=%d observed=%d", label, expected, observed);
+}
+fn limitRefs(name: u32, right: u32, expected: u32) void {
+    var refs: u32 = 0;
+    limitCheck("get refs", 0, c.mach_port_get_refs(c.mach_task_self(), name, right, &refs));
+    limitCheck("urefs", @intCast(expected), @intCast(refs));
+}
+fn limitPort(right: u32) u32 {
+    var name: u32 = 0;
+    limitCheck("allocate", 0, c.mach_port_allocate(c.mach_task_self(), right, &name));
+    return name;
+}
+fn limitSendPort() u32 {
+    const name = limitPort(c.MACH_PORT_RIGHT_RECEIVE);
+    limitCheck("make send", 0, c.mach_port_insert_right(c.mach_task_self(), name, name, c.MACH_MSG_TYPE_MAKE_SEND));
+    return name;
+}
+fn limitDestroy(name: u32) void {
+    limitCheck("destroy", 0, c.mach_port_destroy(c.mach_task_self(), name));
+}
+fn urefsDeltaLimits(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const task = c.mach_task_self();
+    for ([_]u32{ c.MACH_PORT_RIGHT_SEND, c.MACH_PORT_RIGHT_DEAD_NAME }) |right| {
+        // Landing on MAX and crossing MAX both peg, as XNU-12377 does.
+        for ([_]i32{ 1, 2, urefs_max }) |cross| {
+            const name = if (right == c.MACH_PORT_RIGHT_SEND) limitSendPort() else limitPort(right);
+            limitCheck("to MAX-1", 0, c.mach_port_mod_refs(task, name, right, urefs_max - 2));
+            limitRefs(name, right, urefs_max - 1);
+            limitCheck("cross MAX", 0, c.mach_port_mod_refs(task, name, right, cross));
+            limitRefs(name, right, urefs_max);
+            for ([_]i32{ -1, 0, 1, urefs_max, -urefs_max + 1 }) |delta| {
+                limitCheck("pegged delta", 0, c.mach_port_mod_refs(task, name, right, delta));
+                limitRefs(name, right, urefs_max);
+            }
+            for ([_]i32{ urefs_max + 1, -urefs_max - 1, std.math.minInt(i32), std.math.maxInt(i32) }) |delta| {
+                limitCheck("delta magnitude", invalid_value, c.mach_port_mod_refs(task, name, right, delta));
+                limitRefs(name, right, urefs_max);
+            }
+            limitCheck("deallocate pegged", 0, c.mach_port_deallocate(task, name));
+            limitRefs(name, right, urefs_max);
+            limitCheck("remove all", 0, c.mach_port_mod_refs(task, name, right, -urefs_max));
+            var refs: u32 = 99;
+            limitCheck("removed right", if (right == c.MACH_PORT_RIGHT_SEND) 0 else invalid_name, c.mach_port_get_refs(task, name, right, &refs));
+            if (right == c.MACH_PORT_RIGHT_SEND) {
+                limitCheck("removed send refs", 0, @intCast(refs));
+                limitDestroy(name);
+            }
+        }
+    }
+    _ = c.printf("urefs_delta_limits send=3 dead=3 pegged_deltas=30 invalid_magnitude=24 deallocate=6 remove_all=6\n");
+}
+fn limitRequest(name: u32, notify: u32) void {
+    var previous: u32 = 0;
+    limitCheck("dead name request", 0, c.mach_port_request_notification(c.mach_task_self(), name, c.MACH_NOTIFY_DEAD_NAME, 1, notify, c.MACH_MSG_TYPE_MAKE_SEND_ONCE, &previous));
+    limitCheck("previous", 0, @intCast(previous));
+}
+fn limitNotification(notify: u32, name: u32) void {
+    var bytes: [256]u8 align(8) = @splat(0);
+    const h: *c.mach_msg_header_t = @ptrCast(&bytes);
+    limitCheck("notification receive", 0, c.mach_msg(h, c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, bytes.len, notify, 1000, 0));
+    limitCheck("notification id", c.MACH_NOTIFY_DEAD_NAME, h.msgh_id);
+    const dn: *c.mach_dead_name_notification_t = @ptrCast(&bytes);
+    limitCheck("notification name", @intCast(name), @intCast(dn.not_port));
+}
+fn urefsNotifications(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const task = c.mach_task_self();
+    for ([_]i32{ urefs_max - 1, urefs_max }) |initial| {
+        const name = limitPort(c.MACH_PORT_RIGHT_DEAD_NAME);
+        const notify = limitPort(c.MACH_PORT_RIGHT_RECEIVE);
+        limitCheck("dead refs", 0, c.mach_port_mod_refs(task, name, c.MACH_PORT_RIGHT_DEAD_NAME, initial - 1));
+        limitRequest(name, notify);
+        limitRefs(name, c.MACH_PORT_RIGHT_DEAD_NAME, urefs_max);
+        limitNotification(notify, name);
+        limitDestroy(name);
+        limitDestroy(notify);
+    }
+    // RECEIVE delta conversion with an unconsumed request at MAX.
+    const name = limitSendPort();
+    const notify = limitPort(c.MACH_PORT_RIGHT_RECEIVE);
+    limitCheck("send refs", 0, c.mach_port_mod_refs(task, name, c.MACH_PORT_RIGHT_SEND, urefs_max - 1));
+    limitRequest(name, notify);
+    limitCheck("retire receive", 0, c.mach_port_mod_refs(task, name, c.MACH_PORT_RIGHT_RECEIVE, -1));
+    limitRefs(name, c.MACH_PORT_RIGHT_DEAD_NAME, urefs_max);
+    limitNotification(notify, name);
+    limitDestroy(name);
+    limitDestroy(notify);
+    _ = c.printf("urefs_notifications immediate=2 receive_delta=1 expected=65535 observed=65535\n");
+}
+fn limitSend(destination: u32, reply: u32, reply_type: u32, descriptor: u32, disposition: u8) void {
+    var bytes: [40]u8 align(8) = @splat(0);
+    const h: *Header = @ptrCast(&bytes);
+    h.* = .{ .bits = c.MACH_MSG_TYPE_COPY_SEND | (reply_type << 8) | (if (descriptor != 0) @as(u32, c.MACH_MSGH_BITS_COMPLEX) else 0), .size = if (descriptor != 0) 40 else 24, .remote = destination, .local = reply, .voucher = 0, .id = 67201 };
+    if (descriptor != 0) {
+        const count: *u32 = @ptrCast(@alignCast(bytes[24..].ptr));
+        count.* = 1;
+        const d: *align(1) PortWire = @ptrCast(bytes[28..].ptr);
+        d.* = .{ .name = descriptor, .disposition = disposition };
+    }
+    limitCheck("limit message send", 0, c.mach_msg(@ptrCast(h), c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, h.size, 0, 0, 0, 0));
+}
+fn urefsMoves(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const task = c.mach_task_self();
+    const channel = limitSendPort();
+    const name = limitSendPort();
+    limitCheck("saturate", 0, c.mach_port_mod_refs(task, name, c.MACH_PORT_RIGHT_SEND, urefs_max - 1));
+    limitSend(channel, 0, 0, name, c.MACH_MSG_TYPE_MOVE_SEND);
+    limitRefs(name, c.MACH_PORT_RIGHT_SEND, urefs_max);
+    // MOVE_RECEIVE into the queue leaves a live send-only entry.
+    limitSend(channel, 0, 0, name, c.MACH_MSG_TYPE_MOVE_RECEIVE);
+    limitCheck("send-only deallocate", 0, c.mach_port_deallocate(task, name));
+    limitRefs(name, c.MACH_PORT_RIGHT_SEND, urefs_max);
+    limitSend(channel, 0, 0, name, c.MACH_MSG_TYPE_MOVE_SEND);
+    limitRefs(name, c.MACH_PORT_RIGHT_SEND, urefs_max);
+    // Destroying the queue kills the receive right, exercising right_check.
+    const notify = limitPort(c.MACH_PORT_RIGHT_RECEIVE);
+    limitRequest(name, notify);
+    limitDestroy(channel);
+    limitRefs(name, c.MACH_PORT_RIGHT_DEAD_NAME, urefs_max);
+    limitNotification(notify, name);
+    const other = limitSendPort();
+    limitSend(other, name, c.MACH_MSG_TYPE_MOVE_SEND, 0, 0);
+    limitRefs(name, c.MACH_PORT_RIGHT_DEAD_NAME, urefs_max);
+    limitDestroy(name);
+    limitDestroy(notify);
+    limitDestroy(other);
+    // Same remote/reply name takes copyin_two's two MOVE_SEND path.
+    const two = limitSendPort();
+    limitCheck("saturate two", 0, c.mach_port_mod_refs(task, two, c.MACH_PORT_RIGHT_SEND, urefs_max - 1));
+    var h: Header = .{ .bits = c.MACH_MSG_TYPE_MOVE_SEND | (c.MACH_MSG_TYPE_MOVE_SEND << 8), .size = 24, .remote = two, .local = two, .voucher = 0, .id = 67202 };
+    limitCheck("move two", 0, c.mach_msg(@ptrCast(&h), c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, 24, 0, 0, 0, 0));
+    limitRefs(two, c.MACH_PORT_RIGHT_SEND, urefs_max);
+    limitDestroy(two);
+    _ = c.printf("urefs_moves move_send=2 send_only_deallocate=1 dead_move=1 move_two=1 right_check=1 expected=65535 observed=65535\n");
 }
 pub fn main(argc: c_int, argv: [*c][*c]u8) callconv(.c) c_int {
     return atf_tp_main(argc, argv, &addTests);

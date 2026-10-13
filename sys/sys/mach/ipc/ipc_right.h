@@ -180,7 +180,7 @@ extern kern_return_t ipc_right_copyin(
 	ipc_port_t		*sorightp);
 
 /* Undo the effects of an ipc_right_copyin */
-extern void ipc_right_copyin_undo(
+extern kern_return_t ipc_right_copyin_undo(
 	ipc_space_t		space,
 	mach_port_name_t		name,
 	ipc_entry_t		entry,

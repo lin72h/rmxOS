@@ -95,7 +95,7 @@ typedef mach_port_name_t mach_port_gen_t;		/* generation numbers */
 #define	MACH_PORT_UREFS_OVERFLOW(urefs, delta)				\
 		(((delta) > 0) &&					\
 		 ((((urefs) + (delta)) <= (urefs)) ||			\
-		  (((urefs) + (delta)) > MACH_PORT_UREFS_MAX)))
+		  (((urefs) + (delta)) >= MACH_PORT_UREFS_MAX)))
 
 #define	MACH_PORT_UREFS_UNDERFLOW(urefs, delta)				\
 		(((delta) < 0) && (-(delta) > (urefs)))

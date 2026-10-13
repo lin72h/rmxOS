@@ -1405,13 +1405,13 @@ ipc_kmsg_copyin_header(
 				 *	possibly generate a dead-name notif.
 				 */
 
-				ipc_right_copyin_undo(
+				kr = ipc_right_copyin_undo(
 						space, dest_name, dest_entry,
 						dest_type, dest_port,
 						dest_soright);
 				/* dest_entry may be deallocated now */
 
-				ipc_right_copyin_undo(
+				kern_return_t reply_kr = ipc_right_copyin_undo(
 						space, reply_name, reply_entry,
 						reply_type, reply_port,
 						reply_soright);
@@ -1426,6 +1426,9 @@ ipc_kmsg_copyin_header(
 
 				ipc_port_release(saved_reply);
 				printf("%s:%d\n", __FUNCTION__, __LINE__);
+				if (kr == KERN_UREFS_OVERFLOW ||
+				    reply_kr == KERN_UREFS_OVERFLOW)
+					return MACH_SEND_INVALID_RIGHT;
 				return MACH_SEND_INVALID_DEST;
 			}
 		}
