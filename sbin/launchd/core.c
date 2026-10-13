@@ -1406,6 +1406,7 @@ jobmgr_remove(jobmgr_t jm)
 			raise(SIGTERM);
 		}
 	} else if (pid1_magic) {
+		launchd_runtime_shutdown();
 		eliminate_double_reboot();
 		launchd_log_vm_stats();
 		jobmgr_log_stray_children(jm, true);

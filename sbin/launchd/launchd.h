@@ -39,6 +39,7 @@ extern uid_t launchd_uid;
 
 void launchd_SessionCreate(void);
 void launchd_shutdown(void);
+void launchd_stop_update_thread(void);
 
 enum {
 	LAUNCHD_PERSISTENT_STORE_DB,

@@ -84,6 +84,8 @@ void runtime_install_timer(void);
 void runtime_remove_timer(void);
 
 void launchd_runtime_init(void);
+void launchd_runtime_shutdown(void);
+bool launchd_runtime_wait_for_shutdown(unsigned int milliseconds);
 void launchd_runtime_init2(void);
 void launchd_runtime(void) __attribute__((noreturn));
 

@@ -25,6 +25,9 @@ subsystem internal 137000;
 
 serverprefix x_;
 
+/* The event thread may be joining its kqueue helper before reboot. */
+waittime 100;
+
 routine
 handle_kqueue(
 	p	: mach_port_t;

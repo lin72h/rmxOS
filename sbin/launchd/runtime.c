@@ -41,6 +41,7 @@ void op484_invoke(void *, struct kevent *);
 #include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <sys/time.h>
+#include <time.h>
 #include <sys/proc.h>
 #include <sys/proc_info.h>
 #include <libproc.h>
@@ -97,6 +98,11 @@ static int bulk_kev_cnt;
 
 static pthread_t kqueue_demand_thread;
 static pthread_t waitpid_thread;
+/* Only the event/reboot thread joins helpers. No helper owns this mutex
+ * while calling Mach or the job manager. */
+static pthread_mutex_t helper_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t helper_cond = PTHREAD_COND_INITIALIZER;
+static bool helpers_stopping;
 
 static void mportset_callback(void);
 static kq_callback kqmportset_callback = (kq_callback)mportset_callback;
@@ -258,14 +264,59 @@ launchd_runtime_init(void)
 
 	os_assert_zero(runtime_add_mport(launchd_internal_port, launchd_internal_demux));
 	os_assert_zero(pthread_create(&kqueue_demand_thread, NULL, kqueue_demand_loop, NULL));
-	os_assert_zero(pthread_detach(kqueue_demand_thread));
 
 	os_assert_zero(pthread_create(&waitpid_thread, NULL, waitpid_loop, NULL));
-	os_assert_zero(pthread_detach(waitpid_thread));
 
 #ifdef notyet
 	(void)posix_assumes_zero(sysctlbyname("vfs.generic.noremotehang", NULL, NULL, &p, sizeof(p)));
 #endif
+}
+
+bool
+launchd_runtime_wait_for_shutdown(unsigned int milliseconds)
+{
+	struct timespec deadline;
+	int error = 0;
+	bool stopping;
+
+	os_assert_zero(pthread_mutex_lock(&helper_lock));
+	if (!helpers_stopping && milliseconds != 0) {
+		posix_assert_zero(clock_gettime(CLOCK_REALTIME, &deadline));
+		deadline.tv_sec += milliseconds / 1000;
+		deadline.tv_nsec += (milliseconds % 1000) * 1000000L;
+		if (deadline.tv_nsec >= 1000000000L) {
+			deadline.tv_sec++;
+			deadline.tv_nsec -= 1000000000L;
+		}
+		while (!helpers_stopping && error != ETIMEDOUT) {
+			error = pthread_cond_timedwait(&helper_cond, &helper_lock,
+			    &deadline);
+			if (error != ETIMEDOUT)
+				os_assert_zero(error);
+		}
+	}
+	stopping = helpers_stopping;
+	os_assert_zero(pthread_mutex_unlock(&helper_lock));
+	return stopping;
+}
+
+void
+launchd_runtime_shutdown(void)
+{
+	/* Finish all user code and TLS destructors before reboot unmounts text.
+	 * Helpers use bounded waits, including the internal Mach RPC, so this
+	 * cannot depend on the reboot/event thread servicing another request. */
+	os_assert_zero(pthread_mutex_lock(&helper_lock));
+	if (helpers_stopping) {
+		os_assert_zero(pthread_mutex_unlock(&helper_lock));
+		return;
+	}
+	helpers_stopping = true;
+	os_assert_zero(pthread_cond_broadcast(&helper_cond));
+	os_assert_zero(pthread_mutex_unlock(&helper_lock));
+	os_assert_zero(pthread_join(kqueue_demand_thread, NULL));
+	os_assert_zero(pthread_join(waitpid_thread, NULL));
+	launchd_stop_update_thread();
 }
 
 static void
@@ -623,25 +674,25 @@ kqueue_demand_loop(void *arg __attribute__((unused)))
 {
 	fd_set rfds;
 
-	/*
-	 * Yes, at first glance, calling select() on a kqueue seems silly.
-	 *
-	 * This avoids a race condition between the main thread and this helper
-	 * thread by ensuring that we drain kqueue events on the same thread
-	 * that manipulates the kqueue.
-	 */
-
-	for (;;) {
+	/* The main/event thread still drains and manipulates the kqueue.
+	 * Both select and handle_kqueue have bounded waits so shutdown can
+	 * join this helper even while that same event thread calls reboot. */
+	while (!launchd_runtime_wait_for_shutdown(0)) {
+		struct timeval timeout = { 0, 100000 };
 		FD_ZERO(&rfds);
 		FD_SET(mainkq, &rfds);
-		int r = select(mainkq + 1, &rfds, NULL, NULL, NULL);
+		int r = select(mainkq + 1, &rfds, NULL, NULL, &timeout);
+		if (launchd_runtime_wait_for_shutdown(0))
+			break;
 		if (r == 1) {
-			(void)os_assumes_zero(handle_kqueue(launchd_internal_port, mainkq));
-		} else if (posix_assumes_zero(r) != -1) {
-			(void)os_assumes_zero(r);
+			kern_return_t kr = handle_kqueue(launchd_internal_port, mainkq);
+			if (kr != MACH_RCV_TIMED_OUT && kr != MACH_SEND_TIMED_OUT &&
+			    !launchd_runtime_wait_for_shutdown(0))
+				(void)os_assumes_zero(kr);
+		} else if (r == -1 && errno != EINTR) {
+			(void)posix_assumes_zero(r);
 		}
 	}
-
 	return NULL;
 }
 
@@ -650,12 +701,20 @@ waitpid_loop(void *arg __attribute__((unused)))
 {
 	pid_t pid;
 
-	for (;;) {
-		if ((pid = waitpid(-1, (int *) 0, WNOWAIT)) != -1)
+	while (!launchd_runtime_wait_for_shutdown(0)) {
+		pid = waitpid(-1, (int *)0, WNOWAIT | WNOHANG);
+		if (launchd_runtime_wait_for_shutdown(0))
+			break;
+		if (pid > 0)
 			jobmgr_reap_pid(root_jobmgr, pid);
+		else if (pid == -1 && errno != ECHILD && errno != EINTR)
+			(void)posix_assumes_zero(pid);
+		/* ECHILD, no exited child, and a WNOWAIT child awaiting the event
+		 * thread all need a wait, not an immediate retry. Shutdown wakes it. */
+		if (launchd_runtime_wait_for_shutdown(100))
+			break;
 	}
-
-	return (NULL);
+	return NULL;
 }
 
 kern_return_t

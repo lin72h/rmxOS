@@ -105,6 +105,8 @@ static int basic_fork(void);
 static bool do_pid1_crash_diagnosis_mode2(const char *msg);
 
 static void *update_thread(void *nothing);
+static pthread_t update_thread_id;
+static bool update_thread_started;
 
 static void *crash_addr;
 static pid_t crash_pid;
@@ -256,9 +258,9 @@ main(int argc, char *const *argv)
 		 *
 		 * <rdar://problem/5039559&6153301>
 		 */
-		pthread_t t = NULL;
-		(void)os_assumes_zero(pthread_create(&t, NULL, update_thread, NULL));
-		(void)os_assumes_zero(pthread_detach(t));
+		if (os_assumes_zero(pthread_create(&update_thread_id, NULL,
+		    update_thread, NULL)) == 0)
+			update_thread_started = true;
 
 		/* PID 1 doesn't have a flat namespace. */
 		launchd_flat_mach_namespace = false;
@@ -340,13 +342,23 @@ update_thread(void *nothing __attribute__((unused)))
 {
 	(void)posix_assumes_zero(setiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_THREAD, IOPOL_THROTTLE));
 
-	while (launchd_sync_frequency) {
+	while (launchd_sync_frequency &&
+	    !launchd_runtime_wait_for_shutdown(0)) {
 		sync();
-		sleep(launchd_sync_frequency);
+		if (launchd_runtime_wait_for_shutdown(
+		    (unsigned int)launchd_sync_frequency * 1000))
+			break;
 	}
-
-	launchd_syslog(LOG_DEBUG, "Update thread exiting.");
 	return NULL;
+}
+
+void
+launchd_stop_update_thread(void)
+{
+	if (update_thread_started) {
+		os_assert_zero(pthread_join(update_thread_id, NULL));
+		update_thread_started = false;
+	}
 }
 
 #define PID1_CRASH_LOGFILE "/var/log/launchd-pid1.crash"
