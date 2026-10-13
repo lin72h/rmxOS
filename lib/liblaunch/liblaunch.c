@@ -1225,7 +1225,7 @@ launch_msg_internal_socket(launch_data_t d)
 				FD_ZERO(&rfds);
 				FD_SET(fd2use, &rfds);
 
-				select(fd2use + 1, &rfds, NULL, NULL, 0, NULL);
+				select(fd2use + 1, &rfds, NULL, NULL, NULL);
 			}
 		}
 	}
