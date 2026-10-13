@@ -384,6 +384,14 @@ register_port(client_t *c)
 	notifyd_n2c2b_mach_send_source_resume(c->port, 1);
 }
 
+/* MIG counts include the terminator; never inspect outside that range. */
+static int
+received_string_valid(const char *value, mach_msg_type_number_t count)
+{
+	return value != NULL && count != 0 &&
+	    memchr(value, '\0', count) == value + count - 1;
+}
+
 static uint32_t
 server_preflight(caddr_t name, mach_msg_type_number_t nameCnt, audit_token_t audit, int token, uid_t *uid, gid_t *gid, pid_t *pid, uint64_t *cid)
 {
@@ -397,7 +405,7 @@ server_preflight(caddr_t name, mach_msg_type_number_t nameCnt, audit_token_t aud
 		return NOTIFY_STATUS_FAILED;
 	}
 
-	if ((name != NULL) && (name[nameCnt] != '\0'))
+	if ((name != NULL) && !received_string_valid(name, nameCnt))
 	{
 		vm_deallocate(mach_task_self(), (vm_address_t)name, nameCnt);
 		return NOTIFY_STATUS_INVALID_NAME;
@@ -1642,7 +1650,7 @@ kern_return_t __notify_server_regenerate
 		return KERN_SUCCESS;
 	}
 
-	if (name[nameCnt] != '\0')
+	if (!received_string_valid(name, nameCnt))
 	{
 		if (path != NULL) vm_deallocate(mach_task_self(), (vm_address_t)path, pathCnt);
 		vm_deallocate(mach_task_self(), (vm_address_t)name, nameCnt);
@@ -1650,7 +1658,8 @@ kern_return_t __notify_server_regenerate
 		return KERN_SUCCESS;
 	}
 
-	if ((path != NULL) && (path[pathCnt] != '\0'))
+	if ((path == NULL && pathCnt != 0) ||
+	    (path != NULL && !received_string_valid(path, pathCnt)))
 	{
 		vm_deallocate(mach_task_self(), (vm_address_t)name, nameCnt);
 		vm_deallocate(mach_task_self(), (vm_address_t)path, pathCnt);

@@ -1959,7 +1959,11 @@ ipc_right_copyout(
 			ipc_hash_insert(space, (ipc_object_t) port,
 					name, entry);
 		}
-		ipc_entry_hold(entry);
+		/* XNU 12377.121.6 ipc_right.c:2677: send copyout pegs urefs
+		 * at MACH_PORT_UREFS_MAX. The branches above consume the extra
+		 * kernel send right/reference even when no uref can be added. */
+		if (ipc_entry_refs(entry) != MACH_PORT_UREFS_MAX)
+			ipc_entry_hold(entry);
 		entry->ie_bits |= MACH_PORT_TYPE_SEND;
 		break;
 

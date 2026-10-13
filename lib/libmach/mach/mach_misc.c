@@ -13,6 +13,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #define HAVE_MACH
 #include <pthread.h>
@@ -213,14 +214,67 @@ mach_absolute_time(void)
 	return (tp.tv_sec*NSEC_PER_SEC + tp.tv_nsec);
 }
 
+struct mach_thread_port_cache {
+	pid_t pid;
+	mach_port_t port;
+};
+
+static pthread_once_t thread_port_once = PTHREAD_ONCE_INIT;
+static pthread_key_t thread_port_key;
+
+static void
+thread_port_destroy(void *value)
+{
+	struct mach_thread_port_cache *cache = value;
+
+	(void)mach_port_deallocate(mach_task_self(), cache->port);
+	free(cache);
+}
+
+static void
+thread_port_key_init(void)
+{
+	if (pthread_key_create(&thread_port_key, thread_port_destroy) != 0)
+		abort();
+}
+
 mach_port_t
 pthread_mach_thread_np(uintptr_t self)
 {
+	struct mach_thread_port_cache *cache;
+	pid_t pid;
 
 	if ((pthread_t)self != pthread_self()) {
 		printf("invalid pthread_mach_thread_np usage");
 		abort();
 	}
 
-	return (thread_self_trap());
+	if (pthread_once(&thread_port_once, thread_port_key_init) != 0)
+		abort();
+	cache = pthread_getspecific(thread_port_key);
+	pid = getpid();
+	/* After fork the inherited send right still names the parent thread. */
+	if (cache != NULL && cache->pid != pid) {
+		if (pthread_setspecific(thread_port_key, NULL) != 0)
+			abort();
+		thread_port_destroy(cache);
+		cache = NULL;
+	}
+	if (cache == NULL) {
+		cache = malloc(sizeof(*cache));
+		if (cache == NULL)
+			abort();
+		cache->pid = pid;
+		cache->port = thread_self_trap();
+		if (!MACH_PORT_VALID(cache->port)) {
+			free(cache);
+			return (MACH_PORT_NULL);
+		}
+		if (pthread_setspecific(thread_port_key, cache) != 0) {
+			thread_port_destroy(cache);
+			abort();
+		}
+	}
+	/* Borrowed from this thread's cache, as on Darwin. */
+	return (cache->port);
 }

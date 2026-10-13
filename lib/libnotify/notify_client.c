@@ -296,7 +296,7 @@ _notify_lib_init(uint32_t event)
 		globals->notify_ipc_version = 0;
 		globals->notify_server_pid = 0;
 
-		kstatus = _notify_server_register_plain(globals->notify_server_port, (char*)NOTIFY_IPC_VERSION_NAME, NOTIFY_IPC_VERSION_NAME_LEN, &cid, &status);
+		kstatus = _notify_server_register_plain(globals->notify_server_port, (char*)NOTIFY_IPC_VERSION_NAME, NOTIFY_IPC_VERSION_NAME_LEN + 1, &cid, &status);
 		if ((kstatus == KERN_SUCCESS) && (status == NOTIFY_STATUS_OK))
 		{
 			kstatus = _notify_server_get_state(globals->notify_server_port, cid, &state, &status);
@@ -605,7 +605,7 @@ _notify_lib_regenerate_token(token_table_node_t *t)
 	}
 
 	pathlen = 0;
-	if (t->path != NULL) pathlen = strlen(t->path);
+	if (t->path != NULL) pathlen = strlen(t->path) + 1;
 	type = t->flags & 0x000000ff;
 
 	kstatus = _notify_server_regenerate(globals->notify_server_port, (caddr_t)t->name, t->namelen, t->token, type, port, t->signal, t->slot, t->set_state_val, t->set_state_time, t->path, pathlen, t->path_flags, &new_slot, &new_nid, &status);
@@ -1073,13 +1073,13 @@ notify_post(const char *name)
 
 	if (globals->notify_ipc_version == 0)
 	{
-		namelen = strlen(name);
+		namelen = (strlen(name) + 1);
 		kstatus = _notify_server_post(globals->notify_server_port, (caddr_t)name, namelen, (int32_t *)&status);
 		if (kstatus != KERN_SUCCESS) return NOTIFY_STATUS_FAILED;
 		return status;
 	}
 
-	namelen = strlen(name);
+	namelen = (strlen(name) + 1);
 
 	/* Lock to prevent a race with notify cancel over the use of name IDs */
 	pthread_mutex_lock(&globals->notify_lock);
@@ -1163,7 +1163,7 @@ notify_set_owner(const char *name, uint32_t uid, uint32_t gid)
 		if (status != 0) return NOTIFY_STATUS_FAILED;
 	}
 
-	kstatus = _notify_server_set_owner(globals->notify_server_port, (caddr_t)name, strlen(name), uid, gid, (int32_t *)&status);
+	kstatus = _notify_server_set_owner(globals->notify_server_port, (caddr_t)name, (strlen(name) + 1), uid, gid, (int32_t *)&status);
 	if (kstatus != KERN_SUCCESS) return NOTIFY_STATUS_FAILED;
 	return status;
 }
@@ -1192,7 +1192,7 @@ notify_get_owner(const char *name, uint32_t *uid, uint32_t *gid)
 		if (status != 0) return NOTIFY_STATUS_FAILED;
 	}
 
-	kstatus = _notify_server_get_owner(globals->notify_server_port, (caddr_t)name, strlen(name), (int32_t *)uid, (int32_t *)gid, (int32_t *)&status);
+	kstatus = _notify_server_get_owner(globals->notify_server_port, (caddr_t)name, (strlen(name) + 1), (int32_t *)uid, (int32_t *)gid, (int32_t *)&status);
 	if (kstatus != KERN_SUCCESS) return NOTIFY_STATUS_FAILED;
 	return status;
 }
@@ -1221,7 +1221,7 @@ notify_set_access(const char *name, uint32_t access)
 		if (status != 0) return NOTIFY_STATUS_FAILED;
 	}
 
-	kstatus = _notify_server_set_access(globals->notify_server_port, (caddr_t)name, strlen(name), access, (int32_t *)&status);
+	kstatus = _notify_server_set_access(globals->notify_server_port, (caddr_t)name, (strlen(name) + 1), access, (int32_t *)&status);
 	if (kstatus != KERN_SUCCESS) return NOTIFY_STATUS_FAILED;
 	return status;
 }
@@ -1250,7 +1250,7 @@ notify_get_access(const char *name, uint32_t *access)
 		if (status != 0) return NOTIFY_STATUS_FAILED;
 	}
 
-	kstatus = _notify_server_get_access(globals->notify_server_port, (caddr_t)name, strlen(name), (int32_t *)access, (int32_t *)&status);
+	kstatus = _notify_server_get_access(globals->notify_server_port, (caddr_t)name, (strlen(name) + 1), (int32_t *)access, (int32_t *)&status);
 	if (kstatus != KERN_SUCCESS) return NOTIFY_STATUS_FAILED;
 	return status;
 }
@@ -1387,7 +1387,7 @@ notify_register_check(const char *name, int *out_token)
 	if (out_token == NULL) return NOTIFY_STATUS_FAILED;
 
 	*out_token = -1;
-	namelen = strlen(name);
+	namelen = (strlen(name) + 1);
 
 	if (!strncmp(name, SELF_PREFIX, SELF_PREFIX_LEN))
 	{
@@ -1463,7 +1463,7 @@ notify_register_plain(const char *name, int *out_token)
 
 	if (name == NULL) return NOTIFY_STATUS_INVALID_NAME;
 
-	namelen = strlen(name);
+	namelen = (strlen(name) + 1);
 
 	if (!strncmp(name, SELF_PREFIX, SELF_PREFIX_LEN))
 	{
@@ -1524,7 +1524,7 @@ notify_register_signal(const char *name, int sig, int *out_token)
 
 	if (name == NULL) return NOTIFY_STATUS_INVALID_NAME;
 
-	namelen = strlen(name);
+	namelen = (strlen(name) + 1);
 
 	if (!strncmp(name, SELF_PREFIX, SELF_PREFIX_LEN))
 	{
@@ -1595,7 +1595,7 @@ notify_register_mach_port(const char *name, mach_port_name_t *notify_port, int f
 	if (notify_port == NULL) return NOTIFY_STATUS_INVALID_PORT;
 
 	mine = 0;
-	namelen = strlen(name);
+	namelen = (strlen(name) + 1);
 
 	task = mach_task_self();
 
@@ -1798,7 +1798,7 @@ notify_register_file_descriptor(const char *name, int *notify_fd, int flags, int
 	if (name == NULL) return NOTIFY_STATUS_INVALID_NAME;
 	if (notify_fd == NULL) return NOTIFY_STATUS_INVALID_FILE;
 
-	namelen = strlen(name);
+	namelen = (strlen(name) + 1);
 
 	if ((flags & NOTIFY_REUSE) == 0)
 	{
@@ -2116,7 +2116,7 @@ notify_monitor_file(int token, char *path, int flags)
 		}
 	}
 
-	len = strlen(path);
+	len = strlen(path) + 1;
 	dup = strdup(path);
 	if (dup == NULL) return NOTIFY_STATUS_FAILED;
 

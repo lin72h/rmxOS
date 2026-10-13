@@ -257,7 +257,7 @@ test "unused send-once notifies and bypasses the queue limit" {
 }
 
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-var cases: [4]c.atf_tc_t = undefined;
+var cases: [5]c.atf_tc_t = undefined;
 var cleanup_failures: u32 = 0;
 const Header = extern struct { bits: u32, size: u32, remote: u32, local: u32, voucher: u32, id: i32 };
 const Observer = struct {
@@ -453,8 +453,8 @@ fn namesInventory(_: [*c]const c.atf_tc_t) callconv(.c) void {
     if (o.bad or clean.bad) c.atf_tc_fail("known 1.0 names gap or type/refs cleanup contract differs");
 }
 fn addTests(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "sequences", "extract_make_send", "names_inventory", "descriptor_sequences" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &sequences, &extractMakeSend, &namesInventory, &descriptorSequences };
+    const names = [_][*:0]const u8{ "sequences", "extract_make_send", "names_inventory", "descriptor_sequences", "thread_self_saturation" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &sequences, &extractMakeSend, &namesInventory, &descriptorSequences, &threadSelfSaturation };
     for (names, bodies, 0..) |name, body, i| {
         const err = c.atf_tc_init(&cases[i], name, &head, body, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
@@ -462,6 +462,34 @@ fn addTests(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
         if (c.atf_is_error(added)) return added;
     }
     return c.atf_no_error();
+}
+
+fn threadSelfSaturation(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    var thread: u32 = 0;
+    for (0..70000) |i| {
+        const p = c.mach_thread_self();
+        if (p == 0 or p == 0xffffffff or (i != 0 and p != thread)) c.atf_tc_fail("thread self changed at call %zu", i + 1);
+        thread = p;
+    }
+    var refs: u32 = 0;
+    if (c.mach_port_get_refs(c.mach_task_self(), thread, c.MACH_PORT_RIGHT_SEND, &refs) != 0 or refs != c.MACH_PORT_UREFS_MAX) c.atf_tc_fail("70000 calls: expected max=%u observed=%u", @as(u32, c.MACH_PORT_UREFS_MAX), refs);
+    var destination: u32 = 0;
+    if (c.mach_port_allocate(c.mach_task_self(), c.MACH_PORT_RIGHT_RECEIVE, &destination) != 0) c.atf_tc_fail("channel allocation");
+    var bytes: [256]u8 align(8) = @splat(0);
+    const h: *Header = @ptrCast(&bytes);
+    h.* = .{ .bits = c.MACH_MSGH_BITS_COMPLEX | c.MACH_MSG_TYPE_MAKE_SEND, .size = 40, .remote = destination, .local = 0, .voucher = 0, .id = 67200 };
+    const count: *u32 = @ptrCast(@alignCast(bytes[24..].ptr));
+    count.* = 1;
+    const d: *align(1) PortWire = @ptrCast(bytes[28..].ptr);
+    d.* = .{ .name = thread, .disposition = c.MACH_MSG_TYPE_COPY_SEND };
+    const sent = c.mach_msg(@ptrCast(h), c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, 40, 0, 0, 0, 0);
+    if (sent != 0) c.atf_tc_fail("saturated right send kr=%d", sent);
+    @memset(&bytes, 0);
+    const received = c.mach_msg(@ptrCast(h), c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, bytes.len, destination, 1000, 0);
+    if (received != 0 or h.id != 67200 or count.* != 1 or d.name != thread or d.disposition != c.MACH_MSG_TYPE_PORT_SEND) c.atf_tc_fail("saturated right copyout kr=%d", received);
+    if (c.mach_port_get_refs(c.mach_task_self(), thread, c.MACH_PORT_RIGHT_SEND, &refs) != 0 or refs != c.MACH_PORT_UREFS_MAX) c.atf_tc_fail("descriptor copyout count=%u", refs);
+    _ = c.printf("thread_self_saturation calls=70000 expected=%u observed=%u descriptor_copyout=0\n", @as(u32, c.MACH_PORT_UREFS_MAX), refs);
+    if (c.mach_port_destroy(c.mach_task_self(), destination) != 0 or c.mach_port_destroy(c.mach_task_self(), thread) != 0) c.atf_tc_fail("saturation cleanup");
 }
 pub fn main(argc: c_int, argv: [*c][*c]u8) callconv(.c) c_int {
     return atf_tp_main(argc, argv, &addTests);
