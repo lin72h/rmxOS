@@ -642,7 +642,7 @@ _spawn_via_launchd(const char *label, const char *const *argv, const struct spaw
 		goto out;
 	}
 
-	if ((indata_cnt = launch_data_pack(in_obj, buf, good_enough_size, NULL, NULL)) == 0) {
+	if ((indata_cnt = launch_data_pack(in_obj, buf, good_enough_size, NULL, 0, NULL)) == 0) {
 		goto out;
 	}
 
@@ -860,7 +860,7 @@ vproc_swap_complex(vproc_t vp, vproc_gsk_t key, launch_data_t inval, launch_data
 			goto out;
 		}
 
-		if ((indata_cnt = launch_data_pack(inval, buf, good_enough_size, NULL, NULL)) == 0) {
+		if ((indata_cnt = launch_data_pack(inval, buf, good_enough_size, NULL, 0, NULL)) == 0) {
 			goto out;
 		}
 
@@ -1044,7 +1044,7 @@ launch_socket_service_check_in(void)
 	if (buff) {
 		launch_data_t req = launch_data_new_string(LAUNCH_KEY_CHECKIN);
 		if (req) {
-			size_t sz = launch_data_pack(req, buff, big_enough, NULL, NULL);
+			size_t sz = launch_data_pack(req, buff, big_enough, NULL, 0, NULL);
 			if (sz) {
 				vm_address_t sreply = 0;
 				mach_msg_size_t sreplyCnt = 0;

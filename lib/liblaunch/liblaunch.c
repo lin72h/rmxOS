@@ -687,12 +687,14 @@ launchd_close(launch_t lh, typeof(close) closefunc)
 #define ROUND_TO_64BIT_WORD_SIZE(x)	((x + 7) & ~7)
 
 size_t
-launch_data_pack(launch_data_t d, uint8_t *where, size_t len, int *fd_where, size_t *fd_cnt)
+launch_data_pack(launch_data_t d, uint8_t *where, size_t len, int *fd_where, size_t fd_capacity, size_t *fd_cnt)
 {
 	launch_data_t o_in_w = (void *)where;
 	size_t i, rsz, node_data_len = sizeof(struct _launch_data);
+	errno = ENOMEM;
 
 	if (node_data_len > len) {
+		errno = ENOMEM;
 		return 0;
 	}
 
@@ -715,12 +717,11 @@ launch_data_pack(launch_data_t d, uint8_t *where, size_t len, int *fd_where, siz
 		o_in_w->err = host2wire(d->err);
 		break;
 	case LAUNCH_DATA_FD:
-		o_in_w->fd = host2wire(d->fd);
-		if (fd_where && d->fd != -1) {
-			fd_where[*fd_cnt] = d->fd;
-			(*fd_cnt)++;
-		}
-		break;
+		/* Fileports are not implemented in this release. Never store an FD
+		 * number in an array that MIG will interpret as Mach port names. */
+		(void)fd_capacity;
+		errno = ENOTSUP;
+		return 0;
 	case LAUNCH_DATA_STRING:
 		o_in_w->string_len = host2wire(d->string_len);
 		node_data_len += ROUND_TO_64BIT_WORD_SIZE(d->string_len + 1);
@@ -759,7 +760,7 @@ launch_data_pack(launch_data_t d, uint8_t *where, size_t len, int *fd_where, siz
 		where += d->_array_cnt * sizeof(uint64_t);
 
 		for (i = 0; i < d->_array_cnt; i++) {
-			rsz = launch_data_pack(d->_array[i], where, len - node_data_len, fd_where, fd_cnt);
+			rsz = launch_data_pack(d->_array[i], where, len - node_data_len, fd_where, fd_capacity, fd_cnt);
 			if (rsz == 0) {
 				return 0;
 			}
@@ -779,6 +780,7 @@ launch_data_unpack(uint8_t *data, size_t data_size, int *fds, size_t fd_cnt, siz
 {
 	launch_data_t r = (void*)(data + *data_offset);
 	size_t i, tmpcnt;
+	errno = EINVAL;
 
 	//Check for integer underflow
 	if (data_size < *data_offset)
@@ -833,11 +835,9 @@ launch_data_unpack(uint8_t *data, size_t data_size, int *fds, size_t fd_cnt, siz
 		*data_offset += ROUND_TO_64BIT_WORD_SIZE(tmpcnt);
 		break;
 	case LAUNCH_DATA_FD:
-		if (r->fd != -1 && fd_cnt > *fdoffset) {
-			r->fd = _fd(fds[*fdoffset]);
-			*fdoffset += 1;
-		}
-		break;
+		/* Packed numbers are never usable descriptors on this preview. */
+		errno = ENOTSUP;
+		return NULL;
 	case LAUNCH_DATA_INTEGER:
 		r->number = big2wire(r->number);
 		break;
@@ -865,159 +865,64 @@ launch_data_unpack(uint8_t *data, size_t data_size, int *fds, size_t fd_cnt, siz
 launch_data_t
 launch_msg_internal(launch_data_t d)
 {
-	vm_offset_t request = 0;
-	mach_msg_type_number_t requestCnt = 0;
-	mach_port_array_t request_fds = NULL;
-	mach_msg_type_number_t request_fdsCnt = 0;
-	vm_offset_t reply = 0;
-	mach_msg_type_number_t replyCnt = 0;
+	vm_offset_t request = 0, reply = 0;
+	mach_msg_type_number_t requestCnt = 1024 * 1024, replyCnt = 0;
 	mach_port_array_t reply_fds = NULL;
 	mach_msg_type_number_t reply_fdsCnt = 0;
-	launch_data_t ldreply = NULL;
-	launch_data_t safe_reply = NULL;
-	size_t i;
-	size_t nfds = 0;
+	launch_data_t safe_reply = NULL, ldreply;
+	size_t dataoff = 0, fdoff = 0, nout_fds = 0;
+	int out_fds[128];
+	int saved_errno = ENOMEM;
 	kern_return_t kr;
 
-	if (bootstrap_port == MACH_PORT_NULL && getenv(LAUNCHD_SOCKET_ENV) != NULL)
-		return (launch_msg_internal_socket(d));
-
-	requestCnt = 1024 * 1024;
 	mig_allocate(&request, requestCnt);
-
-	int out_fds[128];
-	size_t nout_fds = 0;
-	size_t sz = launch_data_pack(d, (void *)request, requestCnt, out_fds, &nout_fds);
-	if (!sz) {
-		goto out_bad;
+	if (!request)
+		goto out;
+	if (!launch_data_pack(d, (void *)request, requestCnt, out_fds,
+	    sizeof(out_fds) / sizeof(out_fds[0]), &nout_fds)) {
+		saved_errno = errno;
+		goto out;
 	}
-
-	if (nout_fds) {
-		if (nout_fds > 128) {
-			goto out_bad;
-		}
-
-		request_fdsCnt = nout_fds * sizeof(sizeof(out_fds[0]));
-		mig_allocate((vm_address_t *)&request_fds, request_fdsCnt);
-		if (!request_fds) {
-			goto out_bad;
-		}
-
-		for (i = 0; i < nout_fds; i++) {
-			mach_port_t fp = MACH_PORT_NULL;
-			/* Whatever. Worst case is that we insert MACH_PORT_NULL. Not a big
-			 * deal. Note, these get stuffed into an array whose disposition is
-			 * mach_port_move_send_t, so we don't have to worry about them after
-			 * returning.
-			 */
-			if (fileport_makeport(out_fds[i], &fp) != 0) {
-				fprintf(stderr, "Could not pack response descriptor at index: %zu: %d: %s", i, errno, strerror(errno));
-			}
-			request_fds[i] = fp;
-		}
-	} else {
-		request_fds = NULL;
-		request_fdsCnt = 0;
-	}
-
-	kr = vproc_mig_ipc_request(bootstrap_port,
-		request,
-		requestCnt,
-		request_fds,
-		request_fdsCnt,
-		&reply,
-		&replyCnt,
-		&reply_fds,
-		&reply_fdsCnt,
-		0);
-	/*
-	 * The generated MIG client sends the request OOL descriptor with
-	 * deallocate=TRUE. On success the kernel consumes that mapping, and the
-	 * reply OOL region may be mapped back at the same address. Do not
-	 * deallocate request here or the reply can be unmapped before callers
-	 * inspect it.
-	 */
-	request = 0;
-	requestCnt = 0;
-
-	if (kr != KERN_SUCCESS) {
-		fprintf(stderr, "vproc_mig_ipc_request: kr=%x\n", kr);
-		goto out_bad;
-	}
-
-	nfds = reply_fdsCnt / sizeof((reply_fds)[0]);
-	if (nfds > 128) {
-		fprintf(stderr, "Too many incoming descriptors: %zu", nfds);
-		goto out_bad;
-	}
-
-	int in_fds[128];
-	for (i = 0; i < nfds; i++) {
-		in_fds[i] = _fd(fileport_makefd(reply_fds[i]));
-		if (in_fds[i] == -1) {
-			fprintf(stderr, "Bad descriptor passed in legacy IPC request at index: %zu", i);
-		}
-	}
-
-
-	size_t dataoff = 0;
-	size_t fdoff = 0;
-	ldreply = launch_data_unpack((void *)reply, replyCnt, in_fds, nfds, &dataoff, &fdoff);
-	if (!ldreply) {
-		fprintf(stderr, "Invalid legacy IPC reply passed.");
-		goto out_bad;
-	}
-
-	/*
-	 * launch_data_unpack() deserializes in place. The returned tree points
-	 * into the vm-allocated OOL reply buffer, including string and opaque
-	 * payloads. Detach it before returning so callers can use
-	 * launch_data_free() normally.
-	 */
-	safe_reply = launch_data_copy(ldreply);
-	if (!safe_reply) {
-		goto out_bad;
-	}
-
-	if (reply) {
-		mig_deallocate(reply, replyCnt);
-		reply = 0;
-		replyCnt = 0;
-	}
-	if (reply_fds) {
-		mig_deallocate((vm_address_t)reply_fds, reply_fdsCnt);
-		reply_fds = NULL;
-		reply_fdsCnt = 0;
-	}
-
-	return (safe_reply);
-
-out_bad:
-	for (i = 0; i < nfds; i++) {
-		(void)close(in_fds[i]);
-	}
-
-//	for (i = 0; i < nout_fds; i++) {
-//		(void)launchd_mport_deallocate((*reply_fds)[i]);
-//	}
-
-	if (request) {
+	/* Packing rejects every FD node before either transport can send it. */
+	if (bootstrap_port == MACH_PORT_NULL && getenv(LAUNCHD_SOCKET_ENV)) {
 		mig_deallocate(request, requestCnt);
+		return launch_msg_internal_socket(d);
 	}
-
-	if (reply) {
+	kr = vproc_mig_ipc_request(bootstrap_port, request, requestCnt,
+	    NULL, 0, &reply, &replyCnt, &reply_fds, &reply_fdsCnt, 0);
+	/* The request descriptor retains the sender mapping. Cleanup owns it
+	 * on transport errors too, and the reply cannot reuse its address. */
+	if (kr != KERN_SUCCESS) {
+		saved_errno = kr == KERN_NOT_SUPPORTED ? ENOTSUP : EIO;
+		goto out;
+	}
+	/* The MIG array count is in port names, not bytes. No fileport may be
+	 * converted to an FD on this release, including an oversized reply. */
+	if (reply_fdsCnt != 0) {
+		saved_errno = ENOTSUP;
+		goto out;
+	}
+	ldreply = launch_data_unpack((void *)reply, replyCnt, NULL, 0,
+	    &dataoff, &fdoff);
+	if (!ldreply || fdoff != reply_fdsCnt) {
+		saved_errno = ldreply ? EINVAL : errno;
+		goto out;
+	}
+	safe_reply = launch_data_copy(ldreply);
+out:
+	if (request)
+		mig_deallocate(request, requestCnt);
+	if (reply)
 		mig_deallocate(reply, replyCnt);
-	}
-
 	if (reply_fds) {
-		mig_deallocate((vm_address_t)reply_fds, reply_fdsCnt);
+		for (size_t i = 0; i < reply_fdsCnt; i++)
+			(void)mach_port_deallocate(mach_task_self(), reply_fds[i]);
+		mig_deallocate((vm_address_t)reply_fds,
+		    reply_fdsCnt * sizeof(reply_fds[0]));
 	}
-
-	if (safe_reply) {
-		launch_data_free(safe_reply);
-	}
-
-	return (NULL);
+	if (!safe_reply)
+		errno = saved_errno;
+	return safe_reply;
 }
 
 int
@@ -1064,10 +969,9 @@ launchd_msg_send(launch_t lh, launch_data_t d)
 			return -1;
 		}
 
-		lh->sendlen = launch_data_pack(d, lh->sendbuf, good_enough_size, lh->sendfds, &fd_slots_used);
+		lh->sendlen = launch_data_pack(d, lh->sendbuf, good_enough_size, lh->sendfds, 4096 / sizeof(lh->sendfds[0]), &fd_slots_used);
 
 		if (lh->sendlen == 0) {
-			errno = ENOMEM;
 			return -1;
 		}
 
@@ -1321,7 +1225,7 @@ launch_msg_internal_socket(launch_data_t d)
 				FD_ZERO(&rfds);
 				FD_SET(fd2use, &rfds);
 
-				select(fd2use + 1, &rfds, NULL, NULL, NULL);
+				select(fd2use + 1, &rfds, NULL, NULL, 0, NULL);
 			}
 		}
 	}

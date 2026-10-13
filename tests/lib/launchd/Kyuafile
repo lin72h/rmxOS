@@ -1,3 +1,4 @@
 syntax(2)
 test_suite("FreeBSD")
 atf_test_program{name="launchd_consumer_test"}
+atf_test_program{name="legacy_ipc_test"}

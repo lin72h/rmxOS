@@ -3170,6 +3170,13 @@ jobmgr_import2(jobmgr_t jm, launch_data_t pload)
 		return NULL;
 	}
 
+	if (launch_data_dict_lookup(pload, LAUNCH_JOBKEY_SOCKETS)) {
+		jobmgr_log(jm, LOG_ERR | LOG_CONSOLE,
+		    "Socket activation is not supported in this release (Sockets key).");
+		errno = ENOTSUP;
+		return NULL;
+	}
+
 	if (unlikely(!(tmp = launch_data_dict_lookup(pload, LAUNCH_JOBKEY_LABEL)))) {
 		errno = EINVAL;
 		return NULL;
@@ -8312,7 +8319,7 @@ job_mig_swap_complex(job_t j, vproc_gsk_t inkey, vproc_gsk_t outkey,
 		}
 		jobmgr_export_env_from_other_jobs(j->mgr, output_obj);
 		runtime_ktrace0(RTKT_LAUNCHD_DATA_PACK);
-		if (!job_assumes(j, launch_data_pack(output_obj, (void *)*outval, *outvalCnt, NULL, NULL) != 0)) {
+		if (!job_assumes(j, launch_data_pack(output_obj, (void *)*outval, *outvalCnt, NULL, 0, NULL) != 0)) {
 			goto out_bad;
 		}
 		launch_data_free(output_obj);
@@ -8323,7 +8330,7 @@ job_mig_swap_complex(job_t j, vproc_gsk_t inkey, vproc_gsk_t outkey,
 		}
 		ipc_revoke_fds(output_obj);
 		runtime_ktrace0(RTKT_LAUNCHD_DATA_PACK);
-		packed_size = launch_data_pack(output_obj, (void *)*outval, *outvalCnt, NULL, NULL);
+		packed_size = launch_data_pack(output_obj, (void *)*outval, *outvalCnt, NULL, 0, NULL);
 		if (!job_assumes(j, packed_size != 0)) {
 			goto out_bad;
 		}
@@ -8333,7 +8340,7 @@ job_mig_swap_complex(job_t j, vproc_gsk_t inkey, vproc_gsk_t outkey,
 		if (!job_assumes(j, (output_obj = launch_data_new_string(j->mgr->name)) != NULL)) {
 			goto out_bad;
 		}
-		packed_size = launch_data_pack(output_obj, (void *)*outval, *outvalCnt, NULL, NULL);
+		packed_size = launch_data_pack(output_obj, (void *)*outval, *outvalCnt, NULL, 0, NULL);
 		if (!job_assumes(j, packed_size != 0)) {
 			goto out_bad;
 		}
@@ -8348,7 +8355,7 @@ job_mig_swap_complex(job_t j, vproc_gsk_t inkey, vproc_gsk_t outkey,
 		}
 
 		free(store);
-		packed_size = launch_data_pack(output_obj, (void *)*outval, *outvalCnt, NULL, NULL);
+		packed_size = launch_data_pack(output_obj, (void *)*outval, *outvalCnt, NULL, 0, NULL);
 		if (!job_assumes(j, packed_size != 0)) {
 			goto out_bad;
 		}
@@ -10119,7 +10126,7 @@ job_mig_take_subset(job_t j, mach_port_t *reqport, mach_port_t *rcvright,
 	(void)job_assumes(j, cnt == cnt2);
 
 	runtime_ktrace0(RTKT_LAUNCHD_DATA_PACK);
-	packed_size = launch_data_pack(outdata_obj_array, (void *)*outdata, *outdataCnt, NULL, NULL);
+	packed_size = launch_data_pack(outdata_obj_array, (void *)*outdata, *outdataCnt, NULL, 0, NULL);
 	if (!job_assumes(j, packed_size != 0)) {
 		goto out_bad;
 	}
@@ -11760,144 +11767,71 @@ job_do_ipc_request(job_t j, launch_data_t request, mach_port_t asport __attribut
 	return (ipc_process_msg(j, request));
 }
 
-#define LAUNCHD_MAX_LEGACY_FDS 128
-#define countof(x) (sizeof((x)) / sizeof((x[0])))
-#define LOG_USER_FAIL()											\
-do {															\
-		if (uflag)												\
-			printf("launchd ipc_request failed on line: %d\n", __LINE__);	\
-		goto out_bad;											\
-} while (0)
-
 kern_return_t
-job_mig_ipc_request(job_t j, vm_offset_t request, 
+job_mig_ipc_request(job_t j, vm_offset_t request,
 	mach_msg_type_number_t requestCnt, mach_port_array_t request_fds,
 	mach_msg_type_number_t request_fdsCnt, vm_offset_t *reply,
 	mach_msg_type_number_t *replyCnt, mach_port_array_t *reply_fdps,
 	mach_msg_type_number_t *reply_fdsCnt, mach_port_t asport)
 {
-	if (!j) {
-		RETURN_NO_MEMORY();
-	}
+	launch_data_t ldreply = NULL, ldrequest;
+	size_t dataoff = 0, fdoff = 0, nout_fds = 0;
+	int out_fds[128];
+	kern_return_t result = KERN_INVALID_ARGUMENT;
 
-	/* TODO: Once we support actions other than checking in, we must check the
-	 * sandbox capabilities and EUID of the requestort.
-	 */
-	size_t nout_fdps = 0;
-	size_t nfds = request_fdsCnt / sizeof(request_fds[0]);
-	if (nfds > LAUNCHD_MAX_LEGACY_FDS) {
-		job_log(j, LOG_ERR, "Too many incoming descriptors: %lu", nfds);
-		RETURN_NO_MEMORY();
-	}
-
-	int in_fds[LAUNCHD_MAX_LEGACY_FDS];
-	size_t i = 0;
-	for (i = 0; i < nfds; i++) {
-		in_fds[i] = _fd(fileport_makefd(request_fds[i]));
-		if (in_fds[i] == -1) {
-			job_log(j, LOG_ERR, "Bad descriptor passed in legacy IPC request at index: %lu", i);
-		}
-	}
-
-	// DON'T goto outbad before this point.
+	/* Initialize output ownership before any exit, even an unknown job. */
 	*reply = 0;
+	*replyCnt = 0;
 	*reply_fdps = NULL;
-	launch_data_t ldreply = NULL;
-
-	size_t dataoff = 0;
-	size_t fdoff = 0;
-	launch_data_t ldrequest = launch_data_unpack((void *)request, requestCnt, in_fds, nfds, &dataoff, &fdoff);
-	if (!ldrequest) {
-		job_log(j, LOG_ERR, "Invalid legacy IPC request passed.");
-		LOG_USER_FAIL();
+	*reply_fdsCnt = 0;
+	if (request_fdsCnt != 0) {
+		result = KERN_NOT_SUPPORTED;
+		goto out;
 	}
-
+	if (!j)
+		goto out;
+	ldrequest = launch_data_unpack((void *)request, requestCnt, NULL, 0,
+	    &dataoff, &fdoff);
+	if (!ldrequest || fdoff != request_fdsCnt) {
+		result = errno == ENOTSUP ? KERN_NOT_SUPPORTED : KERN_INVALID_ARGUMENT;
+		goto out;
+	}
 	ldreply = job_do_ipc_request(j, ldrequest, asport);
-	if (!ldreply) {
+	if (!ldreply)
 		ldreply = launch_data_new_errno(errno);
-		if (!ldreply) {
-			LOG_USER_FAIL();
-		}
+	if (!ldreply) {
+		result = KERN_RESOURCE_SHORTAGE;
+		goto out;
 	}
-
 	*replyCnt = 10 * 1024 * 1024;
 	mig_allocate(reply, *replyCnt);
 	if (!*reply) {
-		LOG_USER_FAIL();
+		result = KERN_RESOURCE_SHORTAGE;
+		goto out;
 	}
-
-	int out_fds[LAUNCHD_MAX_LEGACY_FDS];
-	size_t nout_fds = 0;
-	size_t sz = launch_data_pack(ldreply, (void *)*reply, *replyCnt, out_fds, &nout_fds);
-	if (!sz) {
-		job_log(j, LOG_ERR, "Could not pack legacy IPC reply.");
-		LOG_USER_FAIL();
+	if (!launch_data_pack(ldreply, (void *)*reply, *replyCnt, out_fds,
+	    sizeof(out_fds) / sizeof(out_fds[0]), &nout_fds)) {
+		result = errno == ENOTSUP ? KERN_NOT_SUPPORTED : KERN_RESOURCE_SHORTAGE;
+		goto out;
 	}
-
-	if (nout_fds) {
-		if (nout_fds > 128) {
-			job_log(j, LOG_ERR, "Too many outgoing descriptors: %lu", nout_fds);
-			LOG_USER_FAIL();
-		}
-
-		*reply_fdsCnt = nout_fds * sizeof((*reply_fdps)[0]);
-		mig_allocate((vm_address_t *)reply_fdps, *reply_fdsCnt);
-		if (!*reply_fdps) {
-			LOG_USER_FAIL();
-		}
-
-		for (i = 0; i < nout_fds; i++) {
-			mach_port_t fp = MACH_PORT_NULL;
-			/* Whatever. Worst case is that we insert MACH_PORT_NULL. Not a big
-			 * deal. Note, these get stuffed into an array whose disposition is
-			 * mach_port_move_send_t, so we don't have to worry about them after
-			 * returning.
-			 */
-			if (fileport_makeport(out_fds[i], &fp) != 0) {
-				job_log(j, LOG_ERR, "Could not pack response descriptor at index: %lu: %d: %s", i, errno, strerror(errno));
-			}
-			(*reply_fdps)[i] = fp;
-		}
-
-		nout_fdps = nout_fds;
-	} else {
-		*reply_fdsCnt = 0;
-	}
-
-	mig_deallocate(request, requestCnt);
-	launch_data_free(ldreply);
-	ldreply = NULL;
-
-	// Unused for now.
-	(void)launchd_mport_deallocate(asport);
-
-	return BOOTSTRAP_SUCCESS;
-
-out_bad:
-	for (i = 0; i < nfds; i++) {
-		(void)close(in_fds[i]);
-	}
-
-	for (i = 0; i < nout_fds; i++) {
-		(void)launchd_mport_deallocate((*reply_fdps)[i]);
-	}
-
-	if (*reply) {
-		mig_deallocate(*reply, *replyCnt);
-	}
-
-	/* We should never hit this since the last goto out is in the case that
-	 * allocating this fails.
-	 */
-	if (*reply_fdps) {
-		mig_deallocate((vm_address_t)*reply_fdps, *reply_fdsCnt);
-	}
-
-	if (ldreply) {
+	result = KERN_SUCCESS;
+out:
+	/* Received rights are handler-owned. The generated server frees the
+	 * received array mapping after this returns, on success or error. */
+	for (size_t i = 0; i < request_fdsCnt; i++)
+		(void)launchd_mport_deallocate(request_fds[i]);
+	if (request)
+		mig_deallocate(request, requestCnt);
+	if (asport != MACH_PORT_NULL)
+		(void)launchd_mport_deallocate(asport);
+	if (ldreply)
 		launch_data_free(ldreply);
+	if (result != KERN_SUCCESS && *reply) {
+		mig_deallocate(*reply, *replyCnt);
+		*reply = 0;
+		*replyCnt = 0;
 	}
-
-	RETURN_NO_MEMORY();
+	return result;
 }
 
 void
