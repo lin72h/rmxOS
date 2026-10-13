@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause
 const std = @import("std");
 const inventory = @import("fd_inventory.zig");
-const p = @import("protocol.zig");
 const c = @cImport({
     @cInclude("atf-c.h");
     @cInclude("launch.h");
@@ -11,9 +10,6 @@ const c = @cImport({
     @cInclude("sys/sysctl.h");
     @cInclude("sys/user.h");
     @cInclude("sys/stat.h");
-    @cInclude("sys/socket.h");
-    @cInclude("sys/un.h");
-    @cInclude("sys/time.h");
     @cInclude("fcntl.h");
     @cInclude("unistd.h");
     @cInclude("stdio.h");
@@ -104,23 +100,6 @@ fn sockets(_: [*c]const c.atf_tc_t) callconv(.c) void {
     defer c.launch_data_free(r);
     check(c.launch_data_get_type(r) == c.LAUNCH_DATA_ERRNO and c.launch_data_get_errno(r) == c.ENOTSUP, "Sockets job must return ENOTSUP");
     _ = c.printf("legacy_sockets errno_expected=%d errno_observed=%d\n", c.ENOTSUP, c.launch_data_get_errno(r));
-    // launchd's fdopen console stream is buffered. Flush through the existing
-    // test-only PID 1 control so its actual logged reason reaches serial.
-    const fd = c.socket(c.AF_UNIX, c.SOCK_SEQPACKET, 0);
-    check(fd >= 0, "log control socket");
-    defer _ = c.close(fd);
-    var timeout = c.timeval{ .tv_sec = 8, .tv_usec = 0 };
-    check(c.setsockopt(fd, c.SOL_SOCKET, c.SO_RCVTIMEO, &timeout, @sizeOf(c.timeval)) == 0, "log control timeout");
-    var addr = std.mem.zeroes(c.sockaddr_un);
-    addr.sun_len = @sizeOf(c.sockaddr_un);
-    addr.sun_family = c.AF_UNIX;
-    @memcpy(addr.sun_path[0..p.socket_path.len], p.socket_path);
-    check(c.connect(fd, @ptrCast(&addr), @sizeOf(c.sockaddr_un)) == 0, "log control connect");
-    const command = p.Request{ .operation = @intFromEnum(p.Operation.legacy_log_flush) };
-    check(c.send(fd, &command, @sizeOf(p.Request), 0) == @sizeOf(p.Request), "log control send");
-    var observed: p.Reply = undefined;
-    check(c.recv(fd, &observed, @sizeOf(p.Reply), 0) == @sizeOf(p.Reply), "log control reply");
-    check(observed.magic == 0x48400002 and observed.operation == command.operation and observed.pid == 1 and observed.setup_error == 0 and observed.facts[0] == 0, "PID 1 console flush");
     ordinary();
 }
 fn rawArray(_: [*c]const c.atf_tc_t) callconv(.c) void {

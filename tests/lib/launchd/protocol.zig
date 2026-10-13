@@ -14,7 +14,6 @@ pub const Operation = enum(u32) {
     late_dead_name = 6,
     close_unregistered = 7,
     setup_retry = 8,
-    legacy_log_flush = 9,
 };
 pub const Reply = extern struct {
     magic: u32 = 0x48400002,

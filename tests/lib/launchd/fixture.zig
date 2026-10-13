@@ -14,10 +14,8 @@ const c = @cImport({
     @cInclude("mach/mach.h");
     @cInclude("mach/notify.h");
     @cInclude("launch.h");
-    @cInclude("stdio.h");
 });
 const Job = ?*anyopaque;
-extern fn op666_console() ?*c.FILE;
 extern fn op495_job_port(Job) u32;
 extern fn op495_port_for_label(Job, [*:0]const u8, *u32) c_int;
 var setup_active = false;
@@ -339,10 +337,6 @@ fn serve(_: ?*anyopaque, _: *c.struct_kevent) callconv(.c) void {
     var reply = p.Reply{ .operation = q.operation, .pid = @intCast(c.getpid()) };
     const op = std.meta.intToEnum(p.Operation, q.operation) catch return;
     switch (op) {
-        .legacy_log_flush => {
-            const console = op666_console();
-            reply.facts[0] = if (console != null and c.fflush(console) == 0) 0 else 1;
-        },
         .demand_removed => demand(&reply),
         .close_unregistered => closeUnregistered(&reply),
         .late_dead_name => lateDead(&reply),
