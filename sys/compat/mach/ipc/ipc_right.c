@@ -85,6 +85,7 @@
 #include <sys/cdefs.h>
 #include <sys/types.h>
 #include <sys/param.h>
+#include <sys/sysctl.h>
 
 #include <sys/mach/kern_return.h>
 #include <sys/mach/port.h>
@@ -1384,7 +1385,16 @@ ipc_right_copyin_check(
  *		KERN_INVALID_RIGHT	Name doesn't denote correct right.
  */
 
-#define ELOG printf("%s:%d bits: %08x\n", __FILE__, __LINE__, bits)
+SYSCTL_DECL(_debug_mach);
+static int mach_ipc_right_copyin_failed_log;
+SYSCTL_INT(_debug_mach, OID_AUTO, ipc_right_copyin_failed_log,
+    CTLFLAG_RWTUN, &mach_ipc_right_copyin_failed_log, 0,
+    "Log ipc_right_copyin invalid-right results");
+
+#define ELOG do { \
+	if (mach_ipc_right_copyin_failed_log) \
+		printf("%s:%d bits: %08x\n", __FILE__, __LINE__, bits); \
+} while (0)
 
 kern_return_t
 ipc_right_copyin(
