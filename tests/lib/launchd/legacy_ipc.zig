@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause
 const std = @import("std");
+const inventory = @import("fd_inventory.zig");
 const c = @cImport({
     @cInclude("atf-c.h");
     @cInclude("launch.h");
@@ -37,16 +38,7 @@ fn portCount() usize {
     var bytes: [65536]u8 align(@alignOf(c.kinfo_file)) = undefined;
     var size: usize = bytes.len;
     check(c.sysctl(&mib, mib.len, &bytes, &size, null, 0) == 0, "port inventory sysctl");
-    var offset: usize = 0;
-    var count: usize = 0;
-    while (offset < size) {
-        check(size - offset >= @sizeOf(c.kinfo_file), "file inventory record size");
-        const f: *align(1) const c.kinfo_file = @ptrCast(&bytes[offset]);
-        check(f.kf_structsize >= @sizeOf(c.kinfo_file) and f.kf_structsize <= size - offset, "file inventory extent");
-        if (f.kf_type == 17 or f.kf_type == 18) count += 1;
-        offset += @intCast(f.kf_structsize);
-    }
-    return count;
+    return inventory.countPorts(bytes[0..size]) catch c.atf_tc_fail("file inventory invalid packed record");
 }
 fn launchdFdCount() usize {
     const fp = c.popen("/usr/bin/procstat -f 1", "r");
@@ -116,7 +108,9 @@ fn rawArray(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const ports_before = portCount();
     var port: u32 = 0;
     check(c.mach_port_allocate(c.mach_task_self(), c.MACH_PORT_RIGHT_RECEIVE, &port) == 0, "raw receive right");
-    defer _ = c.mach_port_destroy(c.mach_task_self(), port);
+    defer if (port != 0) {
+        _ = c.mach_port_destroy(c.mach_task_self(), port);
+    };
     check(c.mach_port_insert_right(c.mach_task_self(), port, port, c.MACH_MSG_TYPE_MAKE_SEND) == 0, "raw send right");
     var address: usize = 0;
     mig_allocate(&address, 4096);
@@ -132,6 +126,8 @@ fn rawArray(_: [*c]const c.atf_tc_t) callconv(.c) void {
     var reply_names: ?[*]u32 = null;
     var reply_names_count: u32 = 0;
     const rc = vproc_mig_ipc_request(c.bootstrap_port, address, @intCast(size), &names, 1, &reply, &reply_count, &reply_names, &reply_names_count, 0);
+    // The sender retains request data under the preview MIG contract.
+    check(c.mach_vm_deallocate(c.mach_task_self(), address, 4096) == 0, "raw sender mapping cleanup");
     check(rc == c.KERN_NOT_SUPPORTED, "raw array must return KERN_NOT_SUPPORTED");
     check(reply == 0 and reply_names == null, "refusal has no acquired reply resources");
     var typ: u32 = 0;
