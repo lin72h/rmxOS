@@ -121,6 +121,13 @@ mach_host_self(void)
 	return (host_self_trap());
 }
 
+mach_port_t
+mach_thread_self(void)
+{
+
+	return (thread_self_trap());
+}
+
 kern_return_t
 mach_vm_allocate(mach_port_name_t target, vm_address_t *addr, vm_size_t size, int flags)
 {
