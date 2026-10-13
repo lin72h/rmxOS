@@ -586,7 +586,7 @@ fn urefsNotifications(_: [*c]const c.atf_tc_t) callconv(.c) void {
 fn limitSend(destination: u32, reply: u32, reply_type: u32, descriptor: u32, disposition: u8) void {
     var bytes: [40]u8 align(8) = @splat(0);
     const h: *Header = @ptrCast(&bytes);
-    h.* = .{ .bits = c.MACH_MSG_TYPE_COPY_SEND | (reply_type << 8) | (if (descriptor != 0) @as(u32, c.MACH_MSGH_BITS_COMPLEX) else 0), .size = if (descriptor != 0) 40 else 24, .remote = destination, .local = reply, .voucher = 0, .id = 67201 };
+    h.* = .{ .bits = @as(u32, c.MACH_MSG_TYPE_COPY_SEND) | (reply_type << 8) | (if (descriptor != 0) @as(u32, c.MACH_MSGH_BITS_COMPLEX) else 0), .size = if (descriptor != 0) 40 else 24, .remote = destination, .local = reply, .voucher = 0, .id = 67201 };
     if (descriptor != 0) {
         const count: *u32 = @ptrCast(@alignCast(bytes[24..].ptr));
         count.* = 1;
