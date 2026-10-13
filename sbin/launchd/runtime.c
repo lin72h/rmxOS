@@ -62,6 +62,7 @@ void op484_invoke(void *, struct kevent *);
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <syslog.h>
 #include <signal.h>
 #include <dlfcn.h>
@@ -103,6 +104,10 @@ static pthread_t waitpid_thread;
 static pthread_mutex_t helper_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t helper_cond = PTHREAD_COND_INITIALIZER;
 static bool helpers_stopping;
+/* reboot(8) sends SIGTSTP before rebooting outside PID 1. Its handler
+ * must not lock, log, or join the thread on which the signal arrives. */
+static atomic_bool external_reboot_stop;
+_Static_assert(ATOMIC_BOOL_LOCK_FREE == 2, "signal stop flag must be lock-free");
 
 static void mportset_callback(void);
 static kq_callback kqmportset_callback = (kq_callback)mportset_callback;
@@ -145,7 +150,7 @@ static const int init_compat_signals[] = {
 };
 
 static const int sigigns[] = { SIGHUP, SIGPIPE, SIGALRM,
-	SIGURG, SIGTSTP, SIGCONT, SIGTTIN, SIGTTOU, SIGIO, SIGXCPU,
+	SIGURG, SIGCONT, SIGTTIN, SIGTTOU, SIGIO, SIGXCPU,
 	SIGXFSZ, SIGVTALRM, SIGPROF, SIGWINCH, SIGINFO,
 };
 static sigset_t sigign_set;
@@ -263,13 +268,34 @@ launchd_runtime_init(void)
 #endif
 
 	os_assert_zero(runtime_add_mport(launchd_internal_port, launchd_internal_demux));
-	os_assert_zero(pthread_create(&kqueue_demand_thread, NULL, kqueue_demand_loop, NULL));
+	os_assert_zero(launchd_runtime_create_helper(&kqueue_demand_thread,
+	    kqueue_demand_loop));
 
-	os_assert_zero(pthread_create(&waitpid_thread, NULL, waitpid_loop, NULL));
+	os_assert_zero(launchd_runtime_create_helper(&waitpid_thread, waitpid_loop));
 
 #ifdef notyet
 	(void)posix_assumes_zero(sysctlbyname("vfs.generic.noremotehang", NULL, NULL, &p, sizeof(p)));
 #endif
+}
+
+int
+launchd_runtime_create_helper(pthread_t *thread, void *(*start)(void *))
+{
+	sigset_t blocked, saved;
+	int error, mask_error;
+	size_t i;
+
+	/* Lifecycle handlers belong to the event thread, not a helper that
+	 * the reboot path will join. The child inherits this blocked mask. */
+	sigemptyset(&blocked);
+	for (i = 0; i < sizeof(init_compat_signals) / sizeof(int); i++)
+		sigaddset(&blocked, init_compat_signals[i]);
+	error = pthread_sigmask(SIG_BLOCK, &blocked, &saved);
+	os_assert_zero(error);
+	error = pthread_create(thread, NULL, start, NULL);
+	mask_error = pthread_sigmask(SIG_SETMASK, &saved, NULL);
+	os_assert_zero(mask_error);
+	return error;
 }
 
 bool
@@ -278,25 +304,35 @@ launchd_runtime_wait_for_shutdown(unsigned int milliseconds)
 	struct timespec deadline;
 	int error = 0;
 	bool stopping;
+	unsigned int slice;
 
 	error = pthread_mutex_lock(&helper_lock);
 	os_assert_zero(error);
-	if (!helpers_stopping && milliseconds != 0) {
+	while (!helpers_stopping &&
+	    !atomic_load_explicit(&external_reboot_stop, memory_order_relaxed) &&
+	    milliseconds != 0) {
+		/* A signal handler cannot broadcast the condition safely. Bound
+		 * even the update thread's long sleep so it sees SIGTSTP promptly. */
+		slice = milliseconds > 100 ? 100 : milliseconds;
 		posix_assert_zero(clock_gettime(CLOCK_REALTIME, &deadline));
-		deadline.tv_sec += milliseconds / 1000;
-		deadline.tv_nsec += (milliseconds % 1000) * 1000000L;
+		deadline.tv_nsec += slice * 1000000L;
 		if (deadline.tv_nsec >= 1000000000L) {
 			deadline.tv_sec++;
 			deadline.tv_nsec -= 1000000000L;
 		}
-		while (!helpers_stopping && error != ETIMEDOUT) {
+		error = 0;
+		while (!helpers_stopping &&
+		    !atomic_load_explicit(&external_reboot_stop, memory_order_relaxed) &&
+		    error != ETIMEDOUT) {
 			error = pthread_cond_timedwait(&helper_cond, &helper_lock,
 			    &deadline);
 			if (error != ETIMEDOUT)
 				os_assert_zero(error);
 		}
+		milliseconds -= slice;
 	}
-	stopping = helpers_stopping;
+	stopping = helpers_stopping ||
+	    atomic_load_explicit(&external_reboot_stop, memory_order_relaxed);
 	error = pthread_mutex_unlock(&helper_lock);
 	os_assert_zero(error);
 	return stopping;
@@ -331,6 +367,12 @@ sighandler_init_compat(int signo)
 {
 	int kr;
 	int rflags = 0;
+
+	if (signo == SIGTSTP) {
+		atomic_store_explicit(&external_reboot_stop, true,
+		    memory_order_relaxed);
+		return;
+	}
 	_launchd_syslog(LOG_CRIT, "%s(%d)", __FUNCTION__, signo);
 	switch (signo) {
 	case SIGUSR2:

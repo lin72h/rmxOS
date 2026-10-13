@@ -258,8 +258,8 @@ main(int argc, char *const *argv)
 		 *
 		 * <rdar://problem/5039559&6153301>
 		 */
-		if (os_assumes_zero(pthread_create(&update_thread_id, NULL,
-		    update_thread, NULL)) == 0)
+		if (os_assumes_zero(launchd_runtime_create_helper(&update_thread_id,
+		    update_thread)) == 0)
 			update_thread_started = true;
 
 		/* PID 1 doesn't have a flat namespace. */
@@ -712,6 +712,5 @@ pfsystem_callback(void *obj __attribute__((unused)), struct kevent *kev)
 		jobmgr_dispatch_all_semaphores(root_jobmgr);
 	}
 }
-
 
 

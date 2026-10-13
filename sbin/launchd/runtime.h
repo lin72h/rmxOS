@@ -26,6 +26,7 @@
 #include <sys/types.h>
 #include <bsm/libbsm.h>
 #include <stdbool.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <float.h>
 #include <syslog.h>
@@ -84,6 +85,7 @@ void runtime_install_timer(void);
 void runtime_remove_timer(void);
 
 void launchd_runtime_init(void);
+int launchd_runtime_create_helper(pthread_t *thread, void *(*start)(void *));
 void launchd_runtime_shutdown(void);
 bool launchd_runtime_wait_for_shutdown(unsigned int milliseconds);
 void launchd_runtime_init2(void);
