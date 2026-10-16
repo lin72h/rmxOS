@@ -5,7 +5,6 @@ const c = @cImport({
     @cInclude("atf-c.h");
     @cInclude("sys/types.h");
     @cInclude("sys/sysctl.h");
-    @cInclude("sys/user.h");
     @cInclude("sys/thrworkq.h");
     @cInclude("sys/syscall.h");
     @cInclude("pthread.h");
@@ -59,11 +58,16 @@ fn readInt(name: [*:0]const u8) u32 {
     return n;
 }
 fn threadCount() u32 {
-    var mib = [_]c_int{ c.CTL_KERN, c.KERN_PROC, c.KERN_PROC_PID, c.getpid() };
-    var info: c.struct_kinfo_proc = undefined;
-    var size: usize = @sizeOf(@TypeOf(info));
-    if (c.sysctl(&mib, mib.len, &info, &size, null, 0) != 0 or size != @sizeOf(@TypeOf(info))) c.atf_tc_fail("process thread count");
-    return @intCast(info.ki_numthreads);
+    // KERN_PROC_INC_THREAD emits one self-sized kinfo_proc per thread.
+    // Decode only its leading ki_structsize rather than importing kernel-only
+    // PCB types through user.h (packed bitfields are opaque to Zig).
+    var mib = [_]c_int{ c.CTL_KERN, c.KERN_PROC, c.KERN_PROC_PID | c.KERN_PROC_INC_THREAD, c.getpid() };
+    var bytes: [512 * 1024]u8 = undefined;
+    var size: usize = bytes.len;
+    if (c.sysctl(&mib, mib.len, &bytes, &size, null, 0) != 0 or size < 4) c.atf_tc_fail("process thread inventory");
+    const record_size = std.mem.readInt(u32, bytes[0..4], .little);
+    if (record_size < 4 or size % record_size != 0) c.atf_tc_fail("process thread record size");
+    return @intCast(size / record_size);
 }
 fn context() Context {
     const ctx: Context = .{ .gate = dispatch_semaphore_create(0), .entered = dispatch_semaphore_create(0), .done = dispatch_semaphore_create(0), .marker = dispatch_semaphore_create(0) };
@@ -211,7 +215,9 @@ fn processBound(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const grant = c.syscall(c.SYS_twq_kernreturn, @as(c_int, c.TWQ_OP_REQTHREADS), &req, @as(c_int, @sizeOf(@TypeOf(req))), @as(c_int, 0));
     const physical = threadCount();
     gate.released.store(true, .seq_cst);
-    for (threads[0..created]) |thread| if (c.pthread_join(thread, null) != 0) setup_ok = false;
+    for (threads[0..created]) |thread| {
+        if (c.pthread_join(thread, null) != 0) setup_ok = false;
+    }
     _ = c.printf("twq_process_bound expected_registered_max=%u observed_registered=%u expected_full_grant=0 observed_grant=%ld expected_finished=%u observed_finished=%u observed_physical_threads=%u\n", @as(u32, c.TWQ_MAX_PROC_THREADS), held, grant, created, gate.entered.load(.seq_cst), physical);
     if (!setup_ok or created != threads.len or held != c.TWQ_MAX_PROC_THREADS or grant != 0 or gate.entered.load(.seq_cst) != created or gate.failures.load(.seq_cst) != 0) c.atf_tc_fail("process pool bound, waiting entry or release/drain failed");
 }
