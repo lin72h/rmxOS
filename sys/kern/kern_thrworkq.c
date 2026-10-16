@@ -86,9 +86,9 @@ static long twq_bucket_active_current[TWQ_NUM_BUCKETS];
 static int twq_busy_window_usecs = 200;
 
 SYSCTL_UINT(_kern_twq, OID_AUTO, max_lane_threads, CTLFLAG_RD,
-    NULL, TWQ_MAX_LANE_THREADS, "maximum registered workers per lane");
+    (u_int *)NULL, TWQ_MAX_LANE_THREADS, "maximum registered workers per lane");
 SYSCTL_UINT(_kern_twq, OID_AUTO, max_proc_threads, CTLFLAG_RD,
-    NULL, TWQ_MAX_PROC_THREADS, "maximum registered workers per process");
+    (u_int *)NULL, TWQ_MAX_PROC_THREADS, "maximum registered workers per process");
 
 SYSCTL_LONG(_kern_twq, OID_AUTO, proc_alloc_count, CTLFLAG_RD,
     &twq_proc_alloc_count, 0, "twq proc state allocations");
