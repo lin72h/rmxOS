@@ -7,6 +7,8 @@ const c = @cImport({
     @cInclude("sys/sysctl.h");
     @cInclude("sys/user.h");
     @cInclude("sys/thrworkq.h");
+    @cInclude("sys/syscall.h");
+    @cInclude("pthread.h");
     @cInclude("unistd.h");
     @cInclude("stdio.h");
     @cInclude("time.h");
@@ -152,14 +154,75 @@ fn boundedWaiters(_: [*c]const c.atf_tc_t) callconv(.c) void {
     // Main and the libthr reaper are not registered pool workers.
     if (entered != cap or max_waiting != cap or peak > cap + before + 2 or peak > proc_cap) c.atf_tc_fail("total worker bound or saturated setup failed");
 }
-var cases: [3]c.atf_tc_t = undefined;
+const PoolGate = struct {
+    released: std.atomic.Value(bool) = .init(false),
+    entered: std.atomic.Value(u32) = .init(0),
+    failures: std.atomic.Value(u32) = .init(0),
+    attempted: std.atomic.Value(u32) = .init(0),
+};
+const PoolWorker = struct { gate: *PoolGate, priority: u32 };
+fn poolWorker(ptr: ?*anyopaque) callconv(.c) ?*anyopaque {
+    const arg: *PoolWorker = @ptrCast(@alignCast(ptr.?));
+    _ = arg.gate.attempted.fetchAdd(1, .seq_cst);
+    const kr = c.syscall(c.SYS_twq_kernreturn, @as(c_int, c.TWQ_OP_THREAD_ENTER), @as(?*anyopaque, null), @as(c_int, @bitCast(arg.priority)), @as(c_int, 0));
+    if (kr != 0) {
+        _ = arg.gate.failures.fetchAdd(1, .seq_cst);
+        return null;
+    }
+    _ = arg.gate.entered.fetchAdd(1, .seq_cst);
+    const end = now() + 30_000_000_000;
+    while (!arg.gate.released.load(.seq_cst) and now() < end) _ = c.usleep(1000);
+    return null;
+}
+fn awaitCount(counter: *std.atomic.Value(u32), value: u32) bool {
+    const end = now() + ten_seconds;
+    while (counter.load(.seq_cst) < value and now() < end) _ = c.usleep(1000);
+    return counter.load(.seq_cst) == value;
+}
+fn processBound(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    var init = std.mem.zeroes(c.struct_twq_init_args);
+    init.tqi_version = c.TWQ_SPI_VERSION_CURRENT;
+    if (c.syscall(c.SYS_twq_kernreturn, @as(c_int, c.TWQ_OP_INIT), &init, @as(c_int, @sizeOf(@TypeOf(init))), @as(c_int, 0)) < 0) c.atf_tc_fail("TWQ init");
+    var gate: PoolGate = .{};
+    var threads: [c.TWQ_MAX_PROC_THREADS + 1]c.pthread_t = undefined;
+    var args: [c.TWQ_MAX_PROC_THREADS + 1]PoolWorker = undefined;
+    const tokens = [_]u32{ c.TWQ_QOS_CLASS_MAINTENANCE, c.TWQ_QOS_CLASS_BACKGROUND, c.TWQ_QOS_CLASS_UTILITY, c.TWQ_QOS_CLASS_DEFAULT, c.TWQ_QOS_CLASS_USER_INITIATED };
+    var created: u32 = 0;
+    var setup_ok = true;
+    for (&threads, &args, 0..) |*thread, *arg, i| {
+        arg.* = .{ .gate = &gate, .priority = (tokens[i / c.TWQ_MAX_LANE_THREADS] << 8) | c.TWQ_PRIORITY_OVERCOMMIT_FLAG };
+        if (c.pthread_create(thread, null, &poolWorker, arg) != 0) {
+            setup_ok = false;
+            break;
+        }
+        created += 1;
+        if (i < c.TWQ_MAX_PROC_THREADS and !awaitCount(&gate.entered, created)) {
+            setup_ok = false;
+            break;
+        }
+    }
+    _ = awaitCount(&gate.attempted, created);
+    _ = c.usleep(100_000);
+    const held = gate.entered.load(.seq_cst);
+    var req = std.mem.zeroes(c.struct_twq_reqthreads_args);
+    req.tqr_version = c.TWQ_REQTHREADS_VERSION;
+    req.tqr_reqcount = 1;
+    req.tqr_priority = (c.TWQ_QOS_CLASS_USER_INTERACTIVE << 8) | @as(u64, c.TWQ_PRIORITY_OVERCOMMIT_FLAG);
+    const grant = c.syscall(c.SYS_twq_kernreturn, @as(c_int, c.TWQ_OP_REQTHREADS), &req, @as(c_int, @sizeOf(@TypeOf(req))), @as(c_int, 0));
+    const physical = threadCount();
+    gate.released.store(true, .seq_cst);
+    for (threads[0..created]) |thread| if (c.pthread_join(thread, null) != 0) setup_ok = false;
+    _ = c.printf("twq_process_bound expected_registered_max=%u observed_registered=%u expected_full_grant=0 observed_grant=%ld expected_finished=%u observed_finished=%u observed_physical_threads=%u\n", @as(u32, c.TWQ_MAX_PROC_THREADS), held, grant, created, gate.entered.load(.seq_cst), physical);
+    if (!setup_ok or created != threads.len or held != c.TWQ_MAX_PROC_THREADS or grant != 0 or gate.entered.load(.seq_cst) != created or gate.failures.load(.seq_cst) != 0) c.atf_tc_fail("process pool bound, waiting entry or release/drain failed");
+}
+var cases: [4]c.atf_tc_t = undefined;
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "60");
     _ = c.atf_tc_set_md_var(t, "descr", "%s", "Waiting TWQ callbacks allow bounded replacement admission");
 }
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "default_lane", "overcommit_lane", "bounded_waiters" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &defaultLane, &overcommitLane, &boundedWaiters };
+    const names = [_][*:0]const u8{ "default_lane", "overcommit_lane", "bounded_waiters", "process_bound" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &defaultLane, &overcommitLane, &boundedWaiters, &processBound };
     for (names, bodies, 0..) |name, body, i| {
         var e = c.atf_tc_init(&cases[i], name, &head, body, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(e)) return e;
