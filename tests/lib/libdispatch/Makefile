@@ -1,6 +1,7 @@
 TESTSDIR= ${TESTSBASE}/lib/libdispatch
 KYUAFILE= yes
 SCRIPTS+= dispatch_mach_test
+SCRIPTS+= workqueue_lane_test
 SCRIPTSDIR= ${TESTSDIR}
 ZIG?= zig
 ZIG_SYSROOT?= ${SYSROOT}
@@ -11,3 +12,6 @@ coordination.o: ${.CURDIR}/coordination.c
 dispatch_mach_test: ${.CURDIR}/dispatch_mach.zig coordination.o
 	${ZIG} build-exe ${.CURDIR}/dispatch_mach.zig coordination.o ${DISPATCH_SO} ${SYSROOT}/usr/lib/libmach.so.5 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc -lpthread --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -I${SRCTOP}/lib/libdispatch -femit-bin=${.TARGET} -rdynamic
 .include <bsd.test.mk>
+
+workqueue_lane_test: ${.CURDIR}/workqueue_lane.zig
+	${ZIG} build-exe ${.CURDIR}/workqueue_lane.zig ${DISPATCH_SO} ${SYSROOT}/usr/lib/libmach.so.5 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc -lpthread --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -femit-bin=${.TARGET}

@@ -85,6 +85,11 @@ static long twq_bucket_idle_current[TWQ_NUM_BUCKETS];
 static long twq_bucket_active_current[TWQ_NUM_BUCKETS];
 static int twq_busy_window_usecs = 200;
 
+SYSCTL_UINT(_kern_twq, OID_AUTO, max_lane_threads, CTLFLAG_RD,
+    NULL, TWQ_MAX_LANE_THREADS, "maximum registered workers per lane");
+SYSCTL_UINT(_kern_twq, OID_AUTO, max_proc_threads, CTLFLAG_RD,
+    NULL, TWQ_MAX_PROC_THREADS, "maximum registered workers per process");
+
 SYSCTL_LONG(_kern_twq, OID_AUTO, proc_alloc_count, CTLFLAG_RD,
     &twq_proc_alloc_count, 0, "twq proc state allocations");
 SYSCTL_LONG(_kern_twq, OID_AUTO, proc_free_count, CTLFLAG_RD,
@@ -227,6 +232,35 @@ twq_lane_total_adjust_locked(struct twq_proc *tqp, int lane, int delta)
 	    (uint16_t)((int)tqp->tqp_total_count[lane] + delta);
 	twq_stats_add_bucket(twq_bucket_total_current, twq_lane_bucket(lane),
 	    delta);
+	if (delta < 0)
+		wakeup(tqp);
+}
+
+static u_int
+twq_proc_total_locked(struct twq_proc *tqp)
+{
+	u_int total;
+	int lane;
+
+	total = 0;
+	for (lane = 0; lane < TWQ_NUM_LANES; lane++)
+		total += tqp->tqp_total_count[lane];
+	return (total);
+}
+
+/* Grants are advisory; serialize actual pool registration at the hard caps. */
+static void
+twq_wait_for_room_locked(struct twq_proc *tqp, struct twq_thread *tqt,
+    int lane)
+{
+	bool counted;
+
+	counted = (tqt->tqt_flags & TWQT_COUNTED) != 0;
+	if (counted && tqt->tqt_lane == lane)
+		return;
+	while (tqp->tqp_total_count[lane] >= TWQ_MAX_LANE_THREADS ||
+	    (!counted && twq_proc_total_locked(tqp) >= TWQ_MAX_PROC_THREADS))
+		msleep(tqp, &tqp->tqp_lock, 0, "twqcap", MAX(1, hz / 10));
 }
 
 static void
@@ -277,13 +311,11 @@ twq_switch_tracks_block(int flags)
 }
 
 static uint16_t
-twq_parallelism_limit(twq_priority_t priority)
+twq_parallelism_limit(void)
 {
 	u_int limit;
 
 	limit = MAX(1, mp_ncpus);
-	if ((priority & TWQ_PRIORITY_OVERCOMMIT_FLAG) != 0)
-		limit = MIN(limit * 2U, (u_int)UINT16_MAX);
 	return ((uint16_t)limit);
 }
 
@@ -353,18 +385,24 @@ twq_higher_bucket_pressure_locked(struct twq_proc *tqp, int bucket,
 static uint16_t
 twq_lane_target_locked(struct twq_proc *tqp, int lane, twq_priority_t priority)
 {
-	uint16_t higher_pressure, limit, requested;
+	uint16_t higher_pressure, limit, occupancy, requested;
 	int bucket;
 	uint64_t now;
 
 	now = twq_now_usec();
 	bucket = twq_lane_bucket(lane);
 	requested = tqp->tqp_req_count[lane];
-	limit = twq_parallelism_limit(priority);
+	/* Overcommit is limited by pool resources, not constrained concurrency. */
+	if ((priority & TWQ_PRIORITY_OVERCOMMIT_FLAG) != 0)
+		return (requested);
+	limit = twq_parallelism_limit();
 	higher_pressure = twq_higher_bucket_pressure_locked(tqp, bucket, now);
 	if (higher_pressure >= limit)
 		return (0);
-	return (MIN(requested, limit - higher_pressure));
+	occupancy = twq_lane_effective_occupancy_locked(tqp, lane, now);
+	if (occupancy >= limit - higher_pressure)
+		return (0);
+	return (MIN(requested, limit - higher_pressure - occupancy));
 }
 
 static bool
@@ -861,6 +899,7 @@ twq_op_thread_enter(struct thread *td, struct twq_kernreturn_args *uap)
 	tqt = twq_thread_get(td, tqp);
 
 	mtx_lock(&tqp->tqp_lock);
+	twq_wait_for_room_locked(tqp, tqt, lane);
 	twq_thread_enter_locked(tqp, tqt, lane);
 	mtx_unlock(&tqp->tqp_lock);
 
@@ -878,6 +917,7 @@ twq_op_reqthreads(struct thread *td, struct twq_kernreturn_args *uap)
 	twq_priority_t priority;
 	register_t admitted;
 	uint16_t requested, scheduled;
+	u_int lane_room, proc_room;
 	int bucket, lane;
 	int error;
 
@@ -903,10 +943,11 @@ twq_op_reqthreads(struct thread *td, struct twq_kernreturn_args *uap)
 	tqp->tqp_req_count[lane] = requested;
 	scheduled = twq_lane_target_locked(tqp, lane, priority);
 	tqp->tqp_scheduled_count[lane] = scheduled;
-	if (scheduled > tqp->tqp_total_count[lane])
-		admitted = scheduled - tqp->tqp_total_count[lane];
-	else
-		admitted = 0;
+	lane_room = TWQ_MAX_LANE_THREADS -
+	    MIN(tqp->tqp_total_count[lane], TWQ_MAX_LANE_THREADS);
+	proc_room = TWQ_MAX_PROC_THREADS -
+	    MIN(twq_proc_total_locked(tqp), TWQ_MAX_PROC_THREADS);
+	admitted = MIN(scheduled, MIN(lane_room, proc_room));
 	mtx_unlock(&tqp->tqp_lock);
 
 	twq_stats_inc(&twq_reqthreads_count);
@@ -935,6 +976,7 @@ twq_op_thread_return(struct thread *td, struct twq_kernreturn_args *uap)
 	old_lane = tqt->tqt_lane;
 
 	mtx_lock(&tqp->tqp_lock);
+	twq_wait_for_room_locked(tqp, tqt, lane);
 	if ((tqt->tqt_flags & TWQT_IDLE) != 0 &&
 	    tqt->tqt_lane != lane) {
 		TAILQ_REMOVE(&tqp->tqp_idle, tqt, tqt_entry);
@@ -1003,6 +1045,7 @@ twq_op_thread_transfer(struct thread *td, struct twq_kernreturn_args *uap)
 	tqt = twq_thread_get(td, tqp);
 
 	mtx_lock(&tqp->tqp_lock);
+	twq_wait_for_room_locked(tqp, tqt, to_lane);
 	twq_thread_enter_locked(tqp, tqt, to_lane);
 	tqp->tqp_req_count[from_lane] = requested;
 	tqp->tqp_scheduled_count[from_lane] =
@@ -1041,7 +1084,10 @@ twq_op_should_narrow(struct thread *td, struct twq_kernreturn_args *uap)
 	tqp->tqp_scheduled_count[lane] =
 	    twq_lane_target_locked(tqp, lane, priority);
 	td->td_retval[0] =
-	    tqp->tqp_total_count[lane] > tqp->tqp_scheduled_count[lane];
+	    (priority & TWQ_PRIORITY_OVERCOMMIT_FLAG) == 0 &&
+	    twq_lane_effective_occupancy_locked(tqp, lane, twq_now_usec()) +
+	    twq_higher_bucket_pressure_locked(tqp, twq_lane_bucket(lane),
+	    twq_now_usec()) > twq_parallelism_limit();
 	mtx_unlock(&tqp->tqp_lock);
 	twq_stats_inc(&twq_should_narrow_count);
 	if (td->td_retval[0] != 0)
