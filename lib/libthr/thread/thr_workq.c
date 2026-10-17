@@ -808,6 +808,10 @@ twq_pick_bucket_locked(struct twq_runtime *rt, int idle_lane)
 {
 	int bucket, lane, oc;
 
+	/* Consume the reservation before moving this registration elsewhere. */
+	if (twq_lane_is_valid(idle_lane) &&
+	    rt->tr_bucket[idle_lane].tbr_local_ready != 0)
+		return (idle_lane);
 	for (bucket = TWQ_BUCKET_USER_INTERACTIVE;
 	    bucket >= TWQ_BUCKET_MAINTENANCE; bucket--) {
 		for (oc = 1; oc >= 0; oc--) {
