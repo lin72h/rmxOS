@@ -337,6 +337,12 @@ var direct_destination: u32 = 0;
 var direct_watch: u32 = 0;
 fn directDemux(_: *Header, response: *Header) callconv(.c) c_int {
     const bytes: [*]u8 = @ptrCast(response);
+    if (direct_mode == 4) {
+        response.* = .{ .bits = 0, .size = 36, .remote = 0, .local = 0, .id = 67424 };
+        put(bytes[0..36], 24, c.NDR_record);
+        put(bytes[0..36], 32, @as(c_int, c.MIG_BAD_ARGUMENTS));
+        return 1;
+    }
     const memory = alloc(4096);
     makeSend(direct_watch);
     const len: usize = if (direct_mode == 3) 68 else 56;
@@ -352,7 +358,8 @@ fn xpcUnsent(_: [*c]const c.atf_tc_t) callconv(.c) void {
     makeSend(service);
     direct_watch = port();
     makeSend(direct_watch);
-    for (0..4) |mode| {
+    const request_memory = alloc(4096);
+    for (0..5) |mode| {
         direct_mode = @intCast(mode);
         direct_destination = port();
         makeSend(direct_destination);
@@ -367,8 +374,14 @@ fn xpcUnsent(_: [*c]const c.atf_tc_t) callconv(.c) void {
         _ = maps(c.getpid());
         const before = maps(c.getpid());
         const rights_before = refs(direct_watch);
-        var h: Header = .{ .bits = c.MACH_MSG_TYPE_COPY_SEND, .size = 24, .remote = service, .local = 0, .id = 67422 };
-        send(std.mem.asBytes(&h));
+        var request: [56]u8 align(8) = @splat(0);
+        put(&request, 0, Header{ .bits = @as(u32, c.MACH_MSG_TYPE_COPY_SEND) | (if (mode == 4) @as(u32, c.MACH_MSGH_BITS_COMPLEX) else 0), .size = if (mode == 4) 56 else 24, .remote = service, .local = 0, .id = 67422 });
+        if (mode == 4) {
+            put(&request, 24, @as(u32, 2));
+            put(&request, 28, Ool{ .address = request_memory, .size = 4096 });
+            put(&request, 44, Port{ .name = direct_watch, .disposition = c.MACH_MSG_TYPE_COPY_SEND });
+        }
+        send(&request);
         var object: O = null;
         var remote: u32 = 0;
         check(xpc_pipe_try_receive(service, &object, &remote, &directDemux, 8192, 0) == 1, "XPC demux handled");
@@ -384,6 +397,7 @@ fn xpcUnsent(_: [*c]const c.atf_tc_t) callconv(.c) void {
     }
     destroy(direct_watch);
     destroy(service);
+    freeMap(request_memory, 4096);
 }
 var drain_entered: std.atomic.Value(bool) = .init(false);
 var drain_release: std.atomic.Value(bool) = .init(false);
