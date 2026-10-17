@@ -472,7 +472,9 @@ fn exitCapacity(_: [*c]const c.atf_tc_t) callconv(.c) void {
 var cases: [9]c.atf_tc_t = undefined;
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "60");
-    _ = c.atf_tc_set_md_var(t, "descr", "%s", "Waiting TWQ callbacks allow bounded replacement admission");
+    _ = c.atf_tc_set_md_var(t, "descr", "%s", "TWQ admission, bounded migration and interruptible capacity waits");
+    if (std.mem.eql(u8, std.mem.span(c.atf_tc_get_ident(t)), "queued_batches"))
+        _ = c.atf_tc_set_md_var(t, "require.user", "%s", "root");
 }
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     const names = [_][*:0]const u8{ "default_lane", "overcommit_lane", "bounded_waiters", "process_bound", "warm_batch", "queued_batches", "lane_moves", "signal_capacity", "exit_capacity" };
