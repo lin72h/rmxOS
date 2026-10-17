@@ -357,6 +357,8 @@ WriteMyIncludes(FILE *file, statement_t *stats)
 	}
 	if (UseSplitHeaders)
 		WriteImplImports(file, stats, TRUE);
+	if (!IsKernelUser)
+		fprintf(file, "extern void mach_msg_destroy(mach_msg_header_t *);\n");
   
 	if (UseEventLogger) {
 		if (IsKernelUser) {
