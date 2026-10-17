@@ -1,0 +1,8 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+subsystem op674_reply 674000;
+#include <sys/mach/std_types.defs>
+#include <sys/mach/mach_types.defs>
+routine op674_get_reply(
+    server : mach_port_t;
+    out data : pointer_t;
+    out right : mach_port_move_send_t);
