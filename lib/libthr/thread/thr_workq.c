@@ -36,6 +36,7 @@ __weak_reference(_pthread_workqueue_should_narrow,
 struct twq_lane_runtime {
 	uint32_t		tbr_pending;
 	uint32_t		tbr_ready;
+	uint32_t		tbr_local_ready;
 	uint32_t		tbr_starting;
 	uint32_t		tbr_active;
 	uint32_t		tbr_idle;
@@ -303,7 +304,7 @@ static void
 twq_plan_ready_locked(struct twq_runtime *rt, int lane, uint16_t admitted,
     uint16_t *wake_needed_out, uint16_t *spawn_needed_out)
 {
-	uint32_t grant, pending, reserved;
+	uint32_t grant, pending, reserved, local_wake, idle;
 	uint32_t wake_needed, spawn_needed;
 
 	pending = rt->tr_bucket[lane].tbr_pending;
@@ -314,6 +315,12 @@ twq_plan_ready_locked(struct twq_runtime *rt, int lane, uint16_t admitted,
 	grant = admitted > reserved ? admitted - reserved : 0;
 	pending -= MIN(pending, rt->tr_bucket[lane].tbr_ready);
 	grant = MIN(grant, pending);
+	/* Reuse of existing registrations belongs to those same-lane workers.
+	 * Cross-lane thieves could otherwise wait behind a full idle lane. */
+	idle = rt->tr_bucket[lane].tbr_idle;
+	idle -= MIN(idle, rt->tr_bucket[lane].tbr_local_ready);
+	local_wake = MIN(idle, grant);
+	rt->tr_bucket[lane].tbr_local_ready += local_wake;
 	wake_needed = MIN(rt->tr_idle_workers, grant);
 	spawn_needed = grant - wake_needed;
 
@@ -643,7 +650,7 @@ twq_reaper_main(void *arg)
 		THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
 
 		if (wake_needed != 0)
-			_thr_umtx_wake(&rt->tr_wait_seq, (int)wake_needed, 0);
+			_thr_umtx_wake(&rt->tr_wait_seq, INT_MAX, 0);
 		if (spawn_needed != 0)
 			(void)twq_spawn_workers(rt, spawn_needed);
 	}
@@ -797,28 +804,22 @@ twq_kernel_should_narrow(pthread_priority_t priority)
 }
 
 static int
-twq_pick_lane_locked(struct twq_runtime *rt, bool require_ready)
+twq_pick_bucket_locked(struct twq_runtime *rt, int idle_lane)
 {
-	int bucket, lane;
+	int bucket, lane, oc;
 
 	for (bucket = TWQ_BUCKET_USER_INTERACTIVE;
 	    bucket >= TWQ_BUCKET_MAINTENANCE; bucket--) {
-		lane = twq_lane_make(bucket, true);
-		if (rt->tr_bucket[lane].tbr_pending != 0 &&
-		    (!require_ready || rt->tr_bucket[lane].tbr_ready != 0))
-			return (lane);
-		lane = twq_lane_make(bucket, false);
-		if (rt->tr_bucket[lane].tbr_pending != 0 &&
-		    (!require_ready || rt->tr_bucket[lane].tbr_ready != 0))
-			return (lane);
+		for (oc = 1; oc >= 0; oc--) {
+			lane = twq_lane_make(bucket, oc != 0);
+			if (rt->tr_bucket[lane].tbr_pending != 0 &&
+			    rt->tr_bucket[lane].tbr_ready >
+			    (lane == idle_lane ? 0 :
+			    rt->tr_bucket[lane].tbr_local_ready))
+				return (lane);
+		}
 	}
 	return (-1);
-}
-
-static int
-twq_pick_bucket_locked(struct twq_runtime *rt)
-{
-	return (twq_pick_lane_locked(rt, true));
 }
 
 static void
@@ -869,7 +870,7 @@ twq_worker_main(void *arg)
 		if (twq_lane_is_valid(idle_lane))
 			rt->tr_bucket[idle_lane].tbr_idle++;
 		for (;;) {
-			lane = twq_pick_bucket_locked(rt);
+			lane = twq_pick_bucket_locked(rt, idle_lane);
 			if (lane >= 0)
 				break;
 			if (rt->tr_retire_budget != 0 &&
@@ -899,6 +900,8 @@ twq_worker_main(void *arg)
 		if (twq_lane_is_valid(idle_lane) &&
 		    rt->tr_bucket[idle_lane].tbr_idle != 0)
 			rt->tr_bucket[idle_lane].tbr_idle--;
+		if (idle_lane == lane && rt->tr_bucket[lane].tbr_local_ready != 0)
+			rt->tr_bucket[lane].tbr_local_ready--;
 		idle_lane = -1;
 		rt->tr_bucket[lane].tbr_pending--;
 		if (rt->tr_bucket[lane].tbr_ready != 0)
@@ -949,7 +952,7 @@ twq_worker_main(void *arg)
 		 * pending request without a ready slot still belongs to the
 		 * reaper/spawn path, not direct handoff by this returning worker.
 		 */
-		handoff_lane = twq_pick_bucket_locked(rt);
+		handoff_lane = twq_pick_bucket_locked(rt, -1);
 		if (handoff_lane >= 0) {
 			rt->tr_bucket[handoff_lane].tbr_pending--;
 			if (rt->tr_bucket[handoff_lane].tbr_ready != 0)
@@ -1133,7 +1136,7 @@ twq_addthreads_common(uint32_t numthreads, pthread_priority_t priority)
 	    numthreads, admitted, wake_needed, spawn_needed);
 	THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
 	if (wake_needed != 0)
-		_thr_umtx_wake(&rt->tr_wait_seq, (int)wake_needed, 0);
+		_thr_umtx_wake(&rt->tr_wait_seq, INT_MAX, 0);
 
 	if (spawn_needed != 0) {
 		error = twq_spawn_workers(rt, spawn_needed);
