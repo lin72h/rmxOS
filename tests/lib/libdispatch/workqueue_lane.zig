@@ -11,6 +11,14 @@ const c = @cImport({
     @cInclude("unistd.h");
     @cInclude("stdio.h");
     @cInclude("time.h");
+    @cInclude("signal.h");
+    @cInclude("errno.h");
+    @cInclude("sched.h");
+    @cInclude("sys/cpuset.h");
+    @cInclude("pthread_np.h");
+    @cInclude("pthread_workqueue.h");
+    @cInclude("sys/wait.h");
+    @cInclude("sys/thr.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 extern fn dispatch_get_global_queue(isize, usize) ?*anyopaque;
@@ -221,14 +229,253 @@ fn processBound(_: [*c]const c.atf_tc_t) callconv(.c) void {
     _ = c.printf("twq_process_bound expected_registered_max=%u observed_registered=%u expected_full_grant=0 observed_grant=%ld expected_finished=%u observed_finished=%u observed_physical_threads=%u\n", @as(u32, c.TWQ_MAX_PROC_THREADS), held, grant, created, gate.entered.load(.seq_cst), physical);
     if (!setup_ok or created != threads.len or held != c.TWQ_MAX_PROC_THREADS or grant != 0 or gate.entered.load(.seq_cst) != created or gate.failures.load(.seq_cst) != 0) c.atf_tc_fail("process pool bound, waiting entry or release/drain failed");
 }
-var cases: [4]c.atf_tc_t = undefined;
+fn initKernel() void {
+    var init = std.mem.zeroes(c.struct_twq_init_args);
+    init.tqi_version = c.TWQ_SPI_VERSION_CURRENT;
+    if (c.syscall(c.SYS_twq_kernreturn, @as(c_int, c.TWQ_OP_INIT), &init, @as(c_int, @sizeOf(@TypeOf(init))), @as(c_int, 0)) < 0) c.atf_tc_fail("TWQ init");
+}
+fn kernelOp(op: c_int, priority: u32) c_long {
+    return c.syscall(c.SYS_twq_kernreturn, op, @as(?*anyopaque, null), @as(c_int, @bitCast(priority)), @as(c_int, 0));
+}
+const default_priority: u32 = c.TWQ_QOS_CLASS_DEFAULT << 8;
+var native_entered: std.atomic.Value(u32) = .init(0);
+var native_finished: std.atomic.Value(u32) = .init(0);
+var native_running: std.atomic.Value(u32) = .init(0);
+var native_peak: std.atomic.Value(u32) = .init(0);
+var native_release: std.atomic.Value(bool) = .init(false);
+fn nativeCallback(_: u64) callconv(.c) void {
+    const running = native_running.fetchAdd(1, .seq_cst) + 1;
+    _ = native_peak.fetchMax(running, .seq_cst);
+    _ = native_entered.fetchAdd(1, .seq_cst);
+    // Remain runnable: sleeping here would legitimately admit replacements.
+    while (!native_release.load(.seq_cst)) std.atomic.spinLoopHint();
+    _ = native_running.fetchSub(1, .seq_cst);
+    _ = native_finished.fetchAdd(1, .seq_cst);
+}
+fn setupNative() void {
+    if (c._pthread_workqueue_init(&nativeCallback, 0, 0) != 0) c.atf_tc_fail("native workqueue init");
+}
+fn requestNative(n: u32) void {
+    if (c._pthread_workqueue_addthreads(@intCast(n), default_priority) != 0) c.atf_tc_fail("native workqueue request");
+}
+fn warmBatch(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const n = readInt("hw.ncpu");
+    if (n == 0 or n > 16) c.atf_tc_fail("CPU count");
+    setupNative();
+    requestNative(n);
+    if (!awaitCount(&native_entered, n)) c.atf_tc_fail("warm pool did not enter");
+    native_release.store(true, .seq_cst);
+    if (!awaitCount(&native_finished, n)) c.atf_tc_fail("warm pool did not finish");
+    // Let all N workers return to the kernel/userland idle lists.
+    _ = c.usleep(100_000);
+    native_release.store(false, .seq_cst);
+    native_entered.store(0, .seq_cst);
+    native_finished.store(0, .seq_cst);
+    native_peak.store(0, .seq_cst);
+    requestNative(2 * n);
+    const entered = awaitCount(&native_entered, n);
+    _ = c.usleep(150_000);
+    const held = native_entered.load(.seq_cst);
+    const peak = native_peak.load(.seq_cst);
+    native_release.store(true, .seq_cst);
+    const drained = awaitCount(&native_finished, 2 * n);
+    _ = c.printf("twq_warm N=%u expected_held=%u observed_held=%u expected_peak_max=%u observed_peak=%u expected_finished=%u observed_finished=%u\n", n, n, held, n, peak, 2 * n, native_finished.load(.seq_cst));
+    if (!entered or held != n or peak > n or !drained) c.atf_tc_fail("idle reuse exceeded constrained allowance or lost work");
+}
+fn queuedBatches(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const n = readInt("hw.ncpu");
+    if (n == 0 or n > 16) c.atf_tc_fail("CPU count");
+    // Pin this process to one CPU, then run the requester FIFO while enqueueing.
+    // New ordinary workers cannot register until both requests have returned.
+    var set: c.cpuset_t = std.mem.zeroes(c.cpuset_t);
+    var original: c.cpuset_t = undefined;
+    if (c.cpuset_getaffinity(c.CPU_LEVEL_WHICH, c.CPU_WHICH_PID, -1, @sizeOf(c.cpuset_t), &original) != 0) c.atf_tc_fail("get affinity");
+    const bytes = std.mem.asBytes(&original);
+    var chosen: ?usize = null;
+    for (bytes, 0..) |b, i| {
+        if (b != 0) {
+            chosen = i * 8 + @ctz(b);
+            break;
+        }
+    }
+    const cpu = chosen orelse c.atf_tc_fail("empty CPU set");
+    std.mem.asBytes(&set)[cpu / 8] |= @as(u8, 1) << @intCast(cpu % 8);
+    if (c.cpuset_setaffinity(c.CPU_LEVEL_WHICH, c.CPU_WHICH_PID, -1, @sizeOf(c.cpuset_t), &set) != 0) c.atf_tc_fail("set affinity");
+    setupNative();
+    requestNative(n);
+    if (!awaitCount(&native_entered, n)) c.atf_tc_fail("queued warm setup");
+    native_release.store(true, .seq_cst);
+    if (!awaitCount(&native_finished, n)) c.atf_tc_fail("queued warm drain");
+    _ = c.usleep(50_000);
+    native_release.store(false, .seq_cst);
+    native_entered.store(0, .seq_cst);
+    native_finished.store(0, .seq_cst);
+    native_peak.store(0, .seq_cst);
+    var param = std.mem.zeroes(c.struct_sched_param);
+    param.sched_priority = c.sched_get_priority_min(c.SCHED_FIFO);
+    if (c.pthread_setschedparam(c.pthread_self(), c.SCHED_FIFO, &param) != 0) c.atf_tc_fail("FIFO requester");
+    requestNative(n);
+    requestNative(n);
+    const before = native_entered.load(.seq_cst);
+    param.sched_priority = 0;
+    if (c.pthread_setschedparam(c.pthread_self(), c.SCHED_OTHER, &param) != 0) c.atf_tc_fail("restore scheduling");
+    const entered = awaitCount(&native_entered, n);
+    _ = c.usleep(150_000);
+    const held = native_entered.load(.seq_cst);
+    const peak = native_peak.load(.seq_cst);
+    native_release.store(true, .seq_cst);
+    const drained = awaitCount(&native_finished, 2 * n);
+    _ = c.cpuset_setaffinity(c.CPU_LEVEL_WHICH, c.CPU_WHICH_PID, -1, @sizeOf(c.cpuset_t), &original);
+    _ = c.printf("twq_queued N=%u expected_registered_before=0 observed_callbacks_before=%u expected_held=%u observed_held=%u expected_peak_max=%u observed_peak=%u observed_finished=%u\n", n, before, n, held, n, peak, native_finished.load(.seq_cst));
+    if (before != 0 or !entered or held != n or peak > n or !drained) c.atf_tc_fail("outstanding requests reused allowance");
+}
+const MoveGate = struct {
+    registered: std.atomic.Value(u32) = .init(0),
+    start: std.atomic.Value(bool) = .init(false),
+    moved: std.atomic.Value(u32) = .init(0),
+    release: std.atomic.Value(bool) = .init(false),
+    failures: std.atomic.Value(u32) = .init(0),
+};
+const MoveArg = struct { gate: *MoveGate, from: u32, to: u32, op: c_int };
+fn moveWorker(p: ?*anyopaque) callconv(.c) ?*anyopaque {
+    const a: *MoveArg = @ptrCast(@alignCast(p.?));
+    if (kernelOp(c.TWQ_OP_THREAD_ENTER, a.from) != 0) {
+        _ = a.gate.failures.fetchAdd(1, .seq_cst);
+        return null;
+    }
+    _ = a.gate.registered.fetchAdd(1, .seq_cst);
+    while (!a.gate.start.load(.seq_cst)) _ = c.usleep(1000);
+    var rc: c_long = undefined;
+    if (a.op == c.TWQ_OP_THREAD_TRANSFER) {
+        var transfer = std.mem.zeroes(c.struct_twq_thread_transfer_args);
+        transfer.tqt_version = c.TWQ_THREAD_TRANSFER_VERSION;
+        transfer.tqt_from_priority = a.from;
+        transfer.tqt_to_priority = a.to;
+        rc = c.syscall(c.SYS_twq_kernreturn, a.op, &transfer, @as(c_int, @sizeOf(@TypeOf(transfer))), @as(c_int, 0));
+    } else rc = kernelOp(a.op, a.to);
+    if (rc == 0) {
+        _ = a.gate.moved.fetchAdd(1, .seq_cst);
+    } else {
+        _ = a.gate.failures.fetchAdd(1, .seq_cst);
+    }
+    while (!a.gate.release.load(.seq_cst)) _ = c.usleep(1000);
+    return null;
+}
+fn laneMoves(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    initKernel();
+    for ([_]c_int{ c.TWQ_OP_THREAD_ENTER, c.TWQ_OP_THREAD_RETURN, c.TWQ_OP_THREAD_TRANSFER }) |op| {
+        var gate: MoveGate = .{};
+        var threads: [2 * c.TWQ_MAX_LANE_THREADS]c.pthread_t = undefined;
+        var args: [threads.len]MoveArg = undefined;
+        const lanes = [_]u32{ default_priority | c.TWQ_PRIORITY_OVERCOMMIT_FLAG, (c.TWQ_QOS_CLASS_UTILITY << 8) | c.TWQ_PRIORITY_OVERCOMMIT_FLAG };
+        for (&threads, &args, 0..) |*thread, *arg, i| {
+            const lane = i / c.TWQ_MAX_LANE_THREADS;
+            arg.* = .{ .gate = &gate, .from = lanes[lane], .to = lanes[1 - lane], .op = op };
+            if (c.pthread_create(thread, null, &moveWorker, arg) != 0) c.atf_tc_fail("move worker create");
+        }
+        if (!awaitCount(&gate.registered, threads.len)) c.atf_tc_fail("saturated move setup");
+        gate.start.store(true, .seq_cst);
+        // No thread exits/releases its destination registration until all move.
+        const completed = awaitCount(&gate.moved, threads.len);
+        gate.release.store(true, .seq_cst);
+        if (!completed) c.atf_tc_fail("saturated lane moves did not complete");
+        for (threads) |thread| if (c.pthread_join(thread, null) != 0) c.atf_tc_fail("move join");
+        _ = c.printf("twq_moves op=%d expected_registered=%zu observed_registered=%u expected_moved=%zu observed_moved=%u failures=%u\n", op, threads.len, gate.registered.load(.seq_cst), threads.len, gate.moved.load(.seq_cst), gate.failures.load(.seq_cst));
+        if (gate.failures.load(.seq_cst) != 0) c.atf_tc_fail("move syscall failed");
+    }
+}
+var cap_threads: [c.TWQ_MAX_LANE_THREADS]c.pthread_t = undefined;
+var main_thread: c.pthread_t = undefined;
+var signal_seen: std.atomic.Value(u32) = .init(0);
+var cap_gate: PoolGate = .{};
+fn signalHandler(_: c_int) callconv(.c) void {
+    const self = c.pthread_self();
+    if (self == main_thread) return;
+    for (cap_threads) |t| if (self == t) return;
+    _ = signal_seen.fetchAdd(1, .seq_cst);
+}
+fn idleHolder(_: ?*anyopaque) callconv(.c) ?*anyopaque {
+    if (kernelOp(c.TWQ_OP_THREAD_ENTER, default_priority) != 0 or kernelOp(c.TWQ_OP_THREAD_RETURN, default_priority) != 0) {
+        _ = cap_gate.failures.fetchAdd(1, .seq_cst);
+        return null;
+    }
+    _ = cap_gate.entered.fetchAdd(1, .seq_cst);
+    while (!cap_gate.released.load(.seq_cst)) _ = c.usleep(1000);
+    return null;
+}
+fn signalCapacity(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    initKernel();
+    main_thread = c.pthread_self();
+    var action = std.mem.zeroes(c.struct_sigaction);
+    action.__sigaction_u.__sa_handler = &signalHandler;
+    _ = c.sigemptyset(&action.sa_mask);
+    if (c.sigaction(c.SIGUSR1, &action, null) != 0) c.atf_tc_fail("sigaction");
+    for (&cap_threads) |*t| if (c.pthread_create(t, null, &idleHolder, null) != 0) c.atf_tc_fail("idle holder create");
+    if (!awaitCount(&cap_gate.entered, cap_threads.len)) c.atf_tc_fail("idle capacity setup");
+    var mask: c.sigset_t = undefined;
+    _ = c.sigemptyset(&mask);
+    _ = c.sigaddset(&mask, c.SIGUSR1);
+    // Only the reaper inherits the blocked mask. The future claimed worker
+    // inherits the unblocked mask, so its handler can be identified uniquely.
+    if (c.pthread_sigmask(c.SIG_BLOCK, &mask, null) != 0) c.atf_tc_fail("block reaper signal");
+    setupNative();
+    if (c.pthread_sigmask(c.SIG_UNBLOCK, &mask, null) != 0) c.atf_tc_fail("unblock worker signal");
+    requestNative(1);
+    _ = c.usleep(100_000);
+    if (native_entered.load(.seq_cst) != 0) c.atf_tc_fail("callback bypassed held capacity");
+    if (c.thr_kill(-1, c.SIGUSR1) != 0) c.atf_tc_fail("directed signal broadcast");
+    const handled = awaitCount(&signal_seen, 1);
+    const before = native_entered.load(.seq_cst);
+    cap_gate.released.store(true, .seq_cst);
+    for (cap_threads) |t| if (c.pthread_join(t, null) != 0) c.atf_tc_fail("holder join");
+    native_release.store(true, .seq_cst);
+    const drained = awaitCount(&native_finished, 1);
+    _ = c.usleep(100_000);
+    _ = c.printf("twq_signal expected_handler=1 observed_handler=%u expected_before_release=0 observed_before_release=%u expected_finished=1 observed_finished=%u\n", signal_seen.load(.seq_cst), before, native_finished.load(.seq_cst));
+    if (!handled or before != 0 or !drained or native_entered.load(.seq_cst) != 1 or cap_gate.failures.load(.seq_cst) != 0) c.atf_tc_fail("capacity signal or claimed callback recovery");
+}
+fn exitCapacity(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const pid = c.fork();
+    if (pid < 0) c.atf_tc_fail("fork");
+    if (pid == 0) {
+        initKernel();
+        var gate: PoolGate = .{};
+        var threads: [c.TWQ_MAX_LANE_THREADS + 8]c.pthread_t = undefined;
+        var args: [threads.len]PoolWorker = undefined;
+        for (&threads, &args, 0..) |*t, *a, i| {
+            a.* = .{ .gate = &gate, .priority = default_priority };
+            if (c.pthread_create(t, null, &poolWorker, a) != 0) c._exit(2);
+            if (i < c.TWQ_MAX_LANE_THREADS and !awaitCount(&gate.entered, @intCast(i + 1))) c._exit(3);
+        }
+        if (!awaitCount(&gate.attempted, threads.len)) c._exit(4);
+        _ = c.usleep(100_000);
+        if (gate.entered.load(.seq_cst) != c.TWQ_MAX_LANE_THREADS) c._exit(5);
+        c._exit(0);
+    }
+    var status: c_int = 0;
+    const start = now();
+    var rc: c_int = 0;
+    while (now() - start < ten_seconds) {
+        rc = c.waitpid(pid, &status, c.WNOHANG);
+        if (rc != 0) break;
+        _ = c.usleep(1000);
+    }
+    const elapsed = now() - start;
+    if (rc == 0) {
+        _ = c.kill(pid, c.SIGKILL);
+        c.atf_tc_fail("capacity child exit timed out");
+    }
+    _ = c.printf("twq_exit expected_reaped=%d observed_reaped=%d expected_status=0 observed_status=%d expected_ms_max=10000 observed_ms=%lld\n", pid, rc, status, @as(c_longlong, @divTrunc(elapsed, 1_000_000)));
+    if (rc != pid or status != 0) c.atf_tc_fail("capacity child exit failed");
+}
+var cases: [9]c.atf_tc_t = undefined;
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "60");
     _ = c.atf_tc_set_md_var(t, "descr", "%s", "Waiting TWQ callbacks allow bounded replacement admission");
 }
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "default_lane", "overcommit_lane", "bounded_waiters", "process_bound" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &defaultLane, &overcommitLane, &boundedWaiters, &processBound };
+    const names = [_][*:0]const u8{ "default_lane", "overcommit_lane", "bounded_waiters", "process_bound", "warm_batch", "queued_batches", "lane_moves", "signal_capacity", "exit_capacity" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &defaultLane, &overcommitLane, &boundedWaiters, &processBound, &warmBatch, &queuedBatches, &laneMoves, &signalCapacity, &exitCapacity };
     for (names, bodies, 0..) |name, body, i| {
         var e = c.atf_tc_init(&cases[i], name, &head, body, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(e)) return e;

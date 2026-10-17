@@ -249,18 +249,39 @@ twq_proc_total_locked(struct twq_proc *tqp)
 }
 
 /* Grants are advisory; serialize actual pool registration at the hard caps. */
-static void
+static void twq_lane_idle_adjust_locked(struct twq_proc *, int, int);
+static void twq_lane_active_adjust(struct twq_proc *, int, int);
+
+static int
 twq_wait_for_room_locked(struct twq_proc *tqp, struct twq_thread *tqt,
     int lane)
 {
 	bool counted;
+	int error, old_lane;
 
 	counted = (tqt->tqt_flags & TWQT_COUNTED) != 0;
 	if (counted && tqt->tqt_lane == lane)
-		return;
+		return (0);
+	/* A migration must not retain the slot its peers need to leave. */
+	if (counted) {
+		old_lane = tqt->tqt_lane;
+		if ((tqt->tqt_flags & TWQT_IDLE) != 0) {
+			TAILQ_REMOVE(&tqp->tqp_idle, tqt, tqt_entry);
+			twq_lane_idle_adjust_locked(tqp, old_lane, -1);
+		}
+		if ((tqt->tqt_flags & TWQT_ACTIVE) != 0)
+			twq_lane_active_adjust(tqp, old_lane, -1);
+		tqt->tqt_flags = 0;
+		twq_lane_total_adjust_locked(tqp, old_lane, -1);
+	}
 	while (tqp->tqp_total_count[lane] >= TWQ_MAX_LANE_THREADS ||
-	    (!counted && twq_proc_total_locked(tqp) >= TWQ_MAX_PROC_THREADS))
-		msleep(tqp, &tqp->tqp_lock, 0, "twqcap", MAX(1, hz / 10));
+	    twq_proc_total_locked(tqp) >= TWQ_MAX_PROC_THREADS) {
+		error = msleep(tqp, &tqp->tqp_lock, PCATCH, "twqcap",
+		    MAX(1, hz / 10));
+		if (error != 0 && error != EWOULDBLOCK)
+			return (error);
+	}
+	return (0);
 }
 
 static void
@@ -887,7 +908,7 @@ twq_op_thread_enter(struct thread *td, struct twq_kernreturn_args *uap)
 	struct twq_proc *tqp;
 	struct twq_thread *tqt;
 	twq_priority_t priority;
-	int bucket, lane;
+	int bucket, error, lane;
 
 	tqp = td->td_proc->p_twq;
 	if (tqp == NULL)
@@ -899,7 +920,11 @@ twq_op_thread_enter(struct thread *td, struct twq_kernreturn_args *uap)
 	tqt = twq_thread_get(td, tqp);
 
 	mtx_lock(&tqp->tqp_lock);
-	twq_wait_for_room_locked(tqp, tqt, lane);
+	error = twq_wait_for_room_locked(tqp, tqt, lane);
+	if (error != 0) {
+		mtx_unlock(&tqp->tqp_lock);
+		return (error);
+	}
 	twq_thread_enter_locked(tqp, tqt, lane);
 	mtx_unlock(&tqp->tqp_lock);
 
@@ -947,6 +972,9 @@ twq_op_reqthreads(struct thread *td, struct twq_kernreturn_args *uap)
 	    MIN(tqp->tqp_total_count[lane], TWQ_MAX_LANE_THREADS);
 	proc_room = TWQ_MAX_PROC_THREADS -
 	    MIN(twq_proc_total_locked(tqp), TWQ_MAX_PROC_THREADS);
+	/* Same-lane idle reuse needs no additional registration. */
+	lane_room += tqp->tqp_idle_count[lane];
+	proc_room += tqp->tqp_idle_count[lane];
 	admitted = MIN(scheduled, MIN(lane_room, proc_room));
 	mtx_unlock(&tqp->tqp_lock);
 
@@ -963,7 +991,7 @@ twq_op_thread_return(struct thread *td, struct twq_kernreturn_args *uap)
 	struct twq_proc *tqp;
 	struct twq_thread *tqt;
 	twq_priority_t priority;
-	int bucket, lane, old_lane;
+	int bucket, error, lane, old_lane;
 
 	tqp = td->td_proc->p_twq;
 	if (tqp == NULL)
@@ -976,7 +1004,11 @@ twq_op_thread_return(struct thread *td, struct twq_kernreturn_args *uap)
 	old_lane = tqt->tqt_lane;
 
 	mtx_lock(&tqp->tqp_lock);
-	twq_wait_for_room_locked(tqp, tqt, lane);
+	error = twq_wait_for_room_locked(tqp, tqt, lane);
+	if (error != 0) {
+		mtx_unlock(&tqp->tqp_lock);
+		return (error);
+	}
 	if ((tqt->tqt_flags & TWQT_IDLE) != 0 &&
 	    tqt->tqt_lane != lane) {
 		TAILQ_REMOVE(&tqp->tqp_idle, tqt, tqt_entry);
@@ -1045,7 +1077,11 @@ twq_op_thread_transfer(struct thread *td, struct twq_kernreturn_args *uap)
 	tqt = twq_thread_get(td, tqp);
 
 	mtx_lock(&tqp->tqp_lock);
-	twq_wait_for_room_locked(tqp, tqt, to_lane);
+	error = twq_wait_for_room_locked(tqp, tqt, to_lane);
+	if (error != 0) {
+		mtx_unlock(&tqp->tqp_lock);
+		return (error);
+	}
 	twq_thread_enter_locked(tqp, tqt, to_lane);
 	tqp->tqp_req_count[from_lane] = requested;
 	tqp->tqp_scheduled_count[from_lane] =

@@ -36,6 +36,7 @@ __weak_reference(_pthread_workqueue_should_narrow,
 struct twq_lane_runtime {
 	uint32_t		tbr_pending;
 	uint32_t		tbr_ready;
+	uint32_t		tbr_starting;
 	uint32_t		tbr_active;
 	uint32_t		tbr_idle;
 	pthread_priority_t	tbr_priority;
@@ -302,30 +303,19 @@ static void
 twq_plan_ready_locked(struct twq_runtime *rt, int lane, uint16_t admitted,
     uint16_t *wake_needed_out, uint16_t *spawn_needed_out)
 {
-	uint32_t grant, pending, same_lane_idle, transfer_idle, transfer_wake;
+	uint32_t grant, pending, reserved;
 	uint32_t wake_needed, spawn_needed;
 
-	same_lane_idle = 0;
-	if (twq_lane_is_valid(lane))
-		same_lane_idle = rt->tr_bucket[lane].tbr_idle;
 	pending = rt->tr_bucket[lane].tbr_pending;
-	grant = MIN((uint32_t)admitted, pending);
-
-	wake_needed = 0;
-	if (pending > grant) {
-		wake_needed = MIN(same_lane_idle,
-		    pending - grant);
-	}
-
-	transfer_idle = rt->tr_idle_workers;
-	if (transfer_idle > wake_needed)
-		transfer_idle -= wake_needed;
-	else
-		transfer_idle = 0;
-
-	transfer_wake = MIN(transfer_idle, grant);
-	wake_needed = MIN((uint32_t)UINT16_MAX, wake_needed + transfer_wake);
-	spawn_needed = grant - transfer_wake;
+	/* The grant includes idle reuse. Reserve work not yet visible to the
+	 * kernel so another request cannot allocate the same allowance again. */
+	reserved = rt->tr_bucket[lane].tbr_ready +
+	    rt->tr_bucket[lane].tbr_starting;
+	grant = admitted > reserved ? admitted - reserved : 0;
+	pending -= MIN(pending, rt->tr_bucket[lane].tbr_ready);
+	grant = MIN(grant, pending);
+	wake_needed = MIN(rt->tr_idle_workers, grant);
+	spawn_needed = grant - wake_needed;
 
 	*wake_needed_out = (uint16_t)wake_needed;
 	*spawn_needed_out = (uint16_t)spawn_needed;
@@ -623,12 +613,6 @@ twq_reaper_main(void *arg)
 		if (!redrive)
 			continue;
 
-		error = twq_kernel_sync_request(desired, redrive_priority);
-		if (error < 0)
-			continue;
-		admitted = (uint16_t)MIN(error, UINT16_MAX);
-		spawn_needed = admitted;
-
 		THR_UMUTEX_LOCK(curthread, &rt->tr_lock);
 		if (!rt->tr_initialized ||
 		    redrive_lane < 0 || redrive_lane >= TWQ_RUNTIME_NUM_LANES ||
@@ -637,6 +621,13 @@ twq_reaper_main(void *arg)
 			THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
 			continue;
 		}
+		desired = twq_lane_desired_locked(rt, redrive_lane);
+		error = twq_kernel_sync_request(desired, redrive_priority);
+		if (error < 0) {
+			THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
+			continue;
+		}
+		admitted = (uint16_t)MIN(error, UINT16_MAX);
 		twq_plan_ready_locked(rt, redrive_lane, admitted, &wake_needed,
 		    &spawn_needed);
 		woken_or_spawned = (uint16_t)MIN((uint32_t)UINT32_MAX,
@@ -913,12 +904,12 @@ twq_worker_main(void *arg)
 		if (rt->tr_bucket[lane].tbr_ready != 0)
 			rt->tr_bucket[lane].tbr_ready--;
 		rt->tr_bucket[lane].tbr_active++;
+		rt->tr_bucket[lane].tbr_starting++;
 		twq_note_activity_locked(rt);
 		priority = rt->tr_bucket[lane].tbr_priority;
 		desired = twq_lane_desired_locked(rt, lane);
 		twq_trace_event_locked(rt, "worker-claim", lane, priority,
 		    desired, 0, 0, 0);
-	run_activation:
 		THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
 		/*
 		 * Claiming a ready unit moves one lane slot from pending to active,
@@ -929,6 +920,17 @@ twq_worker_main(void *arg)
 		 */
 		error = twq_kernel_thread_enter(priority);
 	run_callback:
+		THR_UMUTEX_LOCK(curthread, &rt->tr_lock);
+		rt->tr_bucket[lane].tbr_starting--;
+		if (error != 0) {
+			/* The callback was claimed, but never invoked. Redrive owns it. */
+			rt->tr_bucket[lane].tbr_active--;
+			rt->tr_bucket[lane].tbr_pending++;
+			THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
+			idle_lane = -1;
+			continue;
+		}
+		THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
 		if (error == 0)
 			twq_invoke_callback(rt, priority);
 
@@ -953,6 +955,7 @@ twq_worker_main(void *arg)
 			if (rt->tr_bucket[handoff_lane].tbr_ready != 0)
 				rt->tr_bucket[handoff_lane].tbr_ready--;
 			rt->tr_bucket[handoff_lane].tbr_active++;
+			rt->tr_bucket[handoff_lane].tbr_starting++;
 			handoff_priority = rt->tr_bucket[handoff_lane].tbr_priority;
 			handoff_desired = twq_lane_desired_locked(rt, handoff_lane);
 			handoff = true;
@@ -996,12 +999,7 @@ twq_worker_main(void *arg)
 			    priority, desired, 0, 0, 0);
 			goto run_callback;
 		}
-		(void)twq_kernel_sync_request(return_desired, return_priority);
-		(void)twq_kernel_thread_return(return_priority);
-		twq_trace_event(rt, "worker-handoff-enter", lane, priority,
-		    desired, 0, 0, 0);
-		THR_UMUTEX_LOCK(curthread, &rt->tr_lock);
-		goto run_activation;
+		goto run_callback;
 	}
 
 out:
@@ -1117,14 +1115,12 @@ twq_addthreads_common(uint32_t numthreads, pthread_priority_t priority)
 	desired = twq_lane_desired_locked(rt, lane);
 	twq_trace_event_locked(rt, "addthreads-begin", lane, priority,
 	    numthreads, 0, 0, 0);
-	THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
-
 	error = twq_kernel_sync_request(desired, priority);
-	if (error < 0)
+	if (error < 0) {
+		THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
 		return (-error);
+	}
 	admitted = (uint16_t)MIN(error, UINT16_MAX);
-
-	THR_UMUTEX_LOCK(curthread, &rt->tr_lock);
 	twq_plan_ready_locked(rt, lane, admitted, &wake_needed, &spawn_needed);
 	woken_or_spawned = (uint16_t)MIN((uint32_t)UINT32_MAX,
 	    (uint32_t)wake_needed + (uint32_t)spawn_needed);
