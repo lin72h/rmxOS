@@ -243,10 +243,19 @@ var native_finished: std.atomic.Value(u32) = .init(0);
 var native_running: std.atomic.Value(u32) = .init(0);
 var native_peak: std.atomic.Value(u32) = .init(0);
 var native_release: std.atomic.Value(bool) = .init(false);
+var native_fifo: bool = false;
+var native_sched_errors: std.atomic.Value(u32) = .init(0);
 fn nativeCallback(_: u64) callconv(.c) void {
     const running = native_running.fetchAdd(1, .seq_cst) + 1;
     _ = native_peak.fetchMax(running, .seq_cst);
     _ = native_entered.fetchAdd(1, .seq_cst);
+    if (native_fifo) {
+        // Cold workers inherit the FIFO requester's policy. Return them to
+        // ordinary scheduling so the observing main thread can run afterward.
+        var param = std.mem.zeroes(c.struct_sched_param);
+        if (c.pthread_setschedparam(c.pthread_self(), c.SCHED_OTHER, &param) != 0)
+            _ = native_sched_errors.fetchAdd(1, .seq_cst);
+    }
     // Remain runnable: sleeping here would legitimately admit replacements.
     while (!native_release.load(.seq_cst)) std.atomic.spinLoopHint();
     _ = native_running.fetchSub(1, .seq_cst);
@@ -302,15 +311,7 @@ fn queuedBatches(_: [*c]const c.atf_tc_t) callconv(.c) void {
     std.mem.asBytes(&set)[cpu / 8] |= @as(u8, 1) << @intCast(cpu % 8);
     if (c.cpuset_setaffinity(c.CPU_LEVEL_WHICH, c.CPU_WHICH_PID, -1, @sizeOf(c.cpuset_t), &set) != 0) c.atf_tc_fail("set affinity");
     setupNative();
-    requestNative(n);
-    if (!awaitCount(&native_entered, n)) c.atf_tc_fail("queued warm setup");
-    native_release.store(true, .seq_cst);
-    if (!awaitCount(&native_finished, n)) c.atf_tc_fail("queued warm drain");
-    _ = c.usleep(50_000);
-    native_release.store(false, .seq_cst);
-    native_entered.store(0, .seq_cst);
-    native_finished.store(0, .seq_cst);
-    native_peak.store(0, .seq_cst);
+    native_fifo = true;
     var param = std.mem.zeroes(c.struct_sched_param);
     param.sched_priority = c.sched_get_priority_min(c.SCHED_FIFO);
     if (c.pthread_setschedparam(c.pthread_self(), c.SCHED_FIFO, &param) != 0) c.atf_tc_fail("FIFO requester");
@@ -327,7 +328,7 @@ fn queuedBatches(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const drained = awaitCount(&native_finished, 2 * n);
     _ = c.cpuset_setaffinity(c.CPU_LEVEL_WHICH, c.CPU_WHICH_PID, -1, @sizeOf(c.cpuset_t), &original);
     _ = c.printf("twq_queued N=%u expected_registered_before=0 observed_callbacks_before=%u expected_held=%u observed_held=%u expected_peak_max=%u observed_peak=%u observed_finished=%u\n", n, before, n, held, n, peak, native_finished.load(.seq_cst));
-    if (before != 0 or !entered or held != n or peak > n or !drained) c.atf_tc_fail("outstanding requests reused allowance");
+    if (before != 0 or !entered or held != n or peak > n or !drained or native_sched_errors.load(.seq_cst) != 0) c.atf_tc_fail("outstanding requests reused allowance");
 }
 const MoveGate = struct {
     registered: std.atomic.Value(u32) = .init(0),
