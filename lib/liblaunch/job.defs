@@ -32,6 +32,7 @@ subsystem job 400;
 import "vproc.h";
 import "vproc_priv.h";
 import "vproc_internal.h";
+simport "job_request_ownership.h";
 
 userprefix vproc_mig_;
 serverprefix job_mig_;

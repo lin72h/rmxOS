@@ -2772,6 +2772,12 @@ WriteRoutine(FILE *file, register routine_t *rt)
 
 
 	WriteReverseList(file, rt->rtArgs, WriteDestroyArg, akbDestroy, "", "");
+	/* Some preview handlers consume every input even on a routine error.
+	 * Let that explicit server contract disown the body after MIG destructors,
+	 * while check failures above still leave ownership with the transport. */
+	fprintf(file, "#ifdef MIG_SERVER_REQUEST_CONSUMED_%s\n", rt->rtName);
+	fprintf(file, "\tMIG_SERVER_REQUEST_CONSUMED_%s(&In0P->Head);\n", rt->rtName);
+	fprintf(file, "#endif\n");
 
 	/*
 	 * For one-way routines, it doesn`t make sense to check the return

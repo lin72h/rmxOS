@@ -18,10 +18,12 @@ const c = @cImport({
     @cInclude("unistd.h");
     @cInclude("stdio.h");
     @cInclude("errno.h");
+    @cInclude("stdlib.h");
 });
 const O = ?*anyopaque;
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 extern fn launch_data_pack(c.launch_data_t, [*]u8, usize, ?[*]c_int, usize, ?*usize) usize;
+extern fn launch_data_new_errno(c_int) c.launch_data_t;
 extern fn launchd_fdopen(c_int, c_int) O;
 extern fn launchd_msg_send(O, c.launch_data_t) c_int;
 extern fn launchd_msg_recv(O, *const fn (c.launch_data_t, O) callconv(.c) void, O) c_int;
@@ -131,7 +133,7 @@ fn socketCallback(q: c.launch_data_t, value: O) callconv(.c) void {
         if (p[0] != 0x6a or p[2 * 1024 * 1024 - 1] != 0x6a) c._exit(22);
         state.large = true;
     }
-    const r = c.launch_data_new_errno(0);
+    const r = launch_data_new_errno(0);
     if (r == null or launchd_msg_send(state.channel, r) != 0) c._exit(23);
     c.launch_data_free(r);
     state.calls += 1;
