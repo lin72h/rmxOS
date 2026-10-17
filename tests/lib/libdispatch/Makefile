@@ -7,6 +7,7 @@ ZIG?= zig
 ZIG_SYSROOT?= ${SYSROOT}
 ATF_C_ARCHIVE?= /Users/me/wip-mach/rmx-implementer/build/op395/obj/Users/me/wip-mach/rmx-implementer/build/op395/source/amd64.amd64/lib/atf/libatf-c/libprivateatf-c.a
 DISPATCH_SO?= ${SYSROOT}/usr/lib/libdispatch.so.5
+THR_SO?= ${SYSROOT}/lib/libthr.so.3
 coordination.o: ${.CURDIR}/coordination.c
 	${CC} ${CFLAGS} -fPIC -c ${.ALLSRC} -o ${.TARGET}
 dispatch_mach_test: ${.CURDIR}/dispatch_mach.zig coordination.o
@@ -14,4 +15,4 @@ dispatch_mach_test: ${.CURDIR}/dispatch_mach.zig coordination.o
 .include <bsd.test.mk>
 
 workqueue_lane_test: ${.CURDIR}/workqueue_lane.zig
-	${ZIG} build-exe ${.CURDIR}/workqueue_lane.zig ${DISPATCH_SO} ${SYSROOT}/usr/lib/libmach.so.5 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc -lpthread --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -femit-bin=${.TARGET}
+	${ZIG} build-exe ${.CURDIR}/workqueue_lane.zig ${THR_SO} ${DISPATCH_SO} ${SYSROOT}/usr/lib/libmach.so.5 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/include -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -femit-bin=${.TARGET}
