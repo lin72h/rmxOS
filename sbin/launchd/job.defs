@@ -32,6 +32,7 @@ subsystem job 400;
 import "vproc.h";
 import "vproc_priv.h";
 import "vproc_internal.h";
+simport "job_request_ownership.h";
 
 userprefix vproc_mig_;
 serverprefix job_mig_;
@@ -278,7 +279,7 @@ out				rootbs		: mach_port_move_send_t
 routine
 ipc_request(
 				j		: job_t;
-				request		: pointer_t, dealloc;
+				request		: pointer_t;
 				request_fds	: mach_port_move_send_array_t;
 out				reply		: pointer_t, dealloc;
 out				reply_fds	: mach_port_move_send_array_t;

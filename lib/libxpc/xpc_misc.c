@@ -582,8 +582,10 @@ xpc_pipe_try_receive(mach_port_t portset, xpc_object_t *requestobj, mach_port_t 
 	data_size = request->msgh_size;
 	LOG("unpacking data_size=%d", data_size);
 	xo = xpc_unpack(&message.data, data_size);
-	if (xo == NULL)
+	if (xo == NULL) {
+		mach_msg_destroy(request);
 		return (EINVAL);
+	}
 	xo->xo_flags |= _XPC_FROM_WIRE;
 	/* is padding for alignment enforced in the kernel?*/
 	tr = (mach_msg_trailer_t *)(((char *)&message) + request->msgh_size);

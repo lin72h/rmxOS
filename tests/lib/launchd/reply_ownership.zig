@@ -19,6 +19,9 @@ const c = @cImport({
     @cInclude("stdio.h");
     @cInclude("errno.h");
     @cInclude("stdlib.h");
+    @cInclude("sys/resource.h");
+    @cInclude("signal.h");
+    @cInclude("time.h");
 });
 const O = ?*anyopaque;
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
@@ -30,6 +33,8 @@ extern fn launchd_msg_recv(O, *const fn (c.launch_data_t, O) callconv(.c) void, 
 extern fn mig_get_reply_port() u32;
 extern fn op674_get_reply(u32, *usize, *u32, *u32) c_int;
 extern fn xpc_pipe_try_receive(u32, *O, *u32, *const fn (*Header, *Header) callconv(.c) c_int, u32, c_int) c_int;
+extern fn notifyd_mach_receive_error(c_int, *Header) void;
+extern fn notifyd_mach_send_result(c_int, *Header) void;
 extern fn dispatch_queue_create([*:0]const u8, O) O;
 extern fn dispatch_async_f(O, O, *const fn (O) callconv(.c) void) void;
 extern fn dispatch_source_create(O, usize, usize, O) O;
@@ -453,14 +458,226 @@ fn dispatchLarge(_: [*c]const c.atf_tc_t) callconv(.c) void {
     // The canceled source owns its registration lifetime; exit cleans up the
     // receive name after asynchronous cancellation has completed.
 }
-var cases: [6]c.atf_tc_t = undefined;
+fn rejectedLaunchRequest(memory: usize, reply: u32, watch: u32) void {
+    var names = [_]u32{watch};
+    var bytes: [256]u8 align(8) = @splat(0);
+    put(&bytes, 0, Header{ .bits = @as(u32, c.MACH_MSGH_BITS_COMPLEX) | c.MACH_MSG_TYPE_COPY_SEND | (c.MACH_MSG_TYPE_MAKE_SEND_ONCE << 8), .size = 88, .remote = c.bootstrap_port, .local = reply, .id = 437 });
+    put(&bytes, 24, @as(u32, 3));
+    put(&bytes, 28, Ool{ .address = memory, .size = 8192 });
+    put(&bytes, 44, Ports{ .address = @intFromPtr(&names), .disposition = c.MACH_MSG_TYPE_COPY_SEND, .count = 1 });
+    put(&bytes, 60, Port{ .name = watch, .disposition = c.MACH_MSG_TYPE_COPY_SEND });
+    put(&bytes, 72, c.NDR_record);
+    put(&bytes, 80, @as(u32, 8192));
+    put(&bytes, 84, @as(u32, 1));
+    send(&bytes);
+    kr(receive(&bytes, reply), "handler rejection reply");
+    const h: *Header = @ptrCast(&bytes);
+    const code: *align(1) const c_int = @ptrCast(bytes[32..].ptr);
+    check(h.id == 537 and h.bits & c.MACH_MSGH_BITS_COMPLEX == 0 and code.* == c.KERN_NOT_SUPPORTED, "handler rejected received descriptors");
+}
+fn launchdHandlerRejected(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    ordinary();
+    const reply = port();
+    const watch = port();
+    makeSend(watch);
+    const memory = alloc(8192);
+    @memset(@as([*]u8, @ptrFromInt(memory))[0..8192], 0xa5);
+    rejectedLaunchRequest(memory, reply, watch);
+    rejectedLaunchRequest(memory, reply, watch);
+    ordinary();
+    _ = maps(1);
+    const before = maps(1);
+    const rights_before = ports(1);
+    for (0..100) |_| rejectedLaunchRequest(memory, reply, watch);
+    ordinary();
+    const after = maps(1);
+    const rights_after = ports(1);
+    _ = c.printf("ownership_launchd_handler requests=100 expected_error=%d ports_before=%zu ports_after=%zu expected_send_refs=1 observed_send_refs=%u recovery=0\n", c.KERN_NOT_SUPPORTED, rights_before, rights_after, refs(watch));
+    sameMaps(before, after, "ownership_launchd_handler");
+    check(rights_before == rights_after and refs(watch) == 1, "handler error release inventory");
+    destroy(reply);
+    destroy(watch);
+    freeMap(memory, 8192);
+}
+fn notMig(_: *Header, _: *Header) callconv(.c) c_int {
+    return 0;
+}
+fn malformedXpcRequest(service: u32, memory: usize, reply: u32, watch: u32) void {
+    var bytes: [56]u8 align(8) = @splat(0);
+    put(&bytes, 0, Header{ .bits = @as(u32, c.MACH_MSGH_BITS_COMPLEX) | c.MACH_MSG_TYPE_COPY_SEND | (c.MACH_MSG_TYPE_MAKE_SEND_ONCE << 8), .size = bytes.len, .remote = service, .local = reply, .id = 69901 });
+    put(&bytes, 24, @as(u32, 2));
+    put(&bytes, 28, Ool{ .address = memory, .size = 4096 });
+    put(&bytes, 44, Port{ .name = watch, .disposition = c.MACH_MSG_TYPE_COPY_SEND });
+    send(&bytes);
+    var object: O = null;
+    var remote: u32 = 0;
+    check(xpc_pipe_try_receive(service, &object, &remote, &notMig, 8192, 0) == c.EINVAL and object == null, "malformed non-XPC rejection");
+}
+fn xpcMalformed(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const service = port();
+    const reply = port();
+    const watch = port();
+    makeSend(service);
+    makeSend(watch);
+    const memory = alloc(4096);
+    @memset(@as([*]u8, @ptrFromInt(memory))[0..4096], 0xa5);
+    malformedXpcRequest(service, memory, reply, watch);
+    _ = maps(c.getpid());
+    _ = ports(c.getpid());
+    const before = maps(c.getpid());
+    const rights_before = ports(c.getpid());
+    for (0..100) |_| malformedXpcRequest(service, memory, reply, watch);
+    const after = maps(c.getpid());
+    const rights_after = ports(c.getpid());
+    _ = c.printf("ownership_xpc_malformed requests=100 expected_error=%d ports_before=%zu ports_after=%zu expected_send_refs=1 observed_send_refs=%u\n", c.EINVAL, rights_before, rights_after, refs(watch));
+    sameMaps(before, after, "ownership_xpc_malformed");
+    check(rights_before == rights_after and refs(watch) == 1, "malformed XPC release inventory");
+    freeMap(memory, 4096);
+    destroy(service);
+    destroy(reply);
+    destroy(watch);
+}
+fn bodyErrorOnce(service: u32, memory: usize, watch: u32, file: c_int) c_int {
+    var bytes: [256]u8 align(8) = @splat(0);
+    put(&bytes, 0, Header{ .bits = c.MACH_MSGH_BITS_COMPLEX | c.MACH_MSG_TYPE_COPY_SEND, .size = 68, .remote = service, .local = 0, .id = 69902 });
+    put(&bytes, 24, @as(u32, 3));
+    put(&bytes, 28, Ool{ .address = memory, .size = 4096 });
+    put(&bytes, 44, Port{ .name = watch, .disposition = c.MACH_MSG_TYPE_COPY_SEND });
+    put(&bytes, 56, Port{ .name = @intCast(file), .disposition = c.MACH_MSG_TYPE_COPY_SEND });
+    send(&bytes);
+    var limit: c.struct_rlimit = undefined;
+    check(c.getrlimit(c.RLIMIT_NOFILE, &limit) == 0, "get descriptor limit");
+    var small = limit;
+    small.rlim_cur = @min(limit.rlim_cur, 128);
+    check(c.setrlimit(c.RLIMIT_NOFILE, &small) == 0, "limit test receiver descriptors");
+    var filled: [128]c_int = undefined;
+    var count: usize = 0;
+    while (count < filled.len) {
+        const fd = c.dup(file);
+        if (fd < 0) break;
+        filled[count] = fd;
+        count += 1;
+    }
+    const exhausted = count < filled.len and c.__error().* == c.EMFILE;
+    const status = receive(&bytes, service);
+    for (filled[0..count]) |fd| _ = c.close(fd);
+    check(c.setrlimit(c.RLIMIT_NOFILE, &limit) == 0, "restore test descriptor limit");
+    check(exhausted and status & ~@as(c_int, c.MACH_MSG_MASK) == c.MACH_RCV_BODY_ERROR, "real partial body receive");
+    const ool: *align(1) const Ool = @ptrCast(bytes[28..].ptr);
+    check(ool.address != 0 and ool.size == 4096, "partial receive handed over OOL mapping");
+    notifyd_mach_receive_error(status, @ptrCast(&bytes));
+    check(refs(watch) == 1, "partial receive cleanup send refs");
+    return status;
+}
+fn notifyBodyError(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const service = port();
+    const watch = port();
+    makeSend(service);
+    makeSend(watch);
+    const memory = alloc(4096);
+    const file = c.open("/dev/null", c.O_RDONLY);
+    check(file >= 0, "body error file descriptor");
+    _ = bodyErrorOnce(service, memory, watch, file);
+    _ = maps(c.getpid());
+    const before = maps(c.getpid());
+    const rights_before = ports(c.getpid());
+    var status: c_int = 0;
+    for (0..100) |_| status = bodyErrorOnce(service, memory, watch, file);
+    const after = maps(c.getpid());
+    const rights_after = ports(c.getpid());
+    _ = c.printf("ownership_notify_body_error requests=100 expected_base=0x%x observed_result=0x%x ports_before=%zu ports_after=%zu expected_send_refs=1 observed_send_refs=%u\n", @as(c_uint, c.MACH_RCV_BODY_ERROR), @as(c_uint, @bitCast(status)), rights_before, rights_after, refs(watch));
+    sameMaps(before, after, "ownership_notify_body_error");
+    check(rights_before == rights_after, "body error cleanup port inventory");
+    _ = c.close(file);
+    freeMap(memory, 4096);
+    destroy(watch);
+    destroy(service);
+}
+const InterruptedSender = struct {
+    destination: u32,
+    watch: u32,
+    requested: std.atomic.Value(u32) = .init(0),
+    ready: std.atomic.Value(u32) = .init(0),
+    done: std.atomic.Value(u32) = .init(0),
+    release: std.atomic.Value(bool) = .init(false),
+    statuses: [101]c_int = @splat(0),
+};
+var interrupts: std.atomic.Value(u32) = .init(0);
+fn interruptHandler(_: c_int) callconv(.c) void {
+    _ = interrupts.fetchAdd(1, .seq_cst);
+}
+fn interruptedSender(value: O) callconv(.c) O {
+    const s: *InterruptedSender = @ptrCast(@alignCast(value.?));
+    for (0..101) |i| {
+        while (s.requested.load(.seq_cst) <= i) _ = c.usleep(1000);
+        var bytes: [56]u8 align(8) = @splat(0);
+        const memory = alloc(4096);
+        makeSend(s.watch);
+        put(&bytes, 0, Header{ .bits = c.MACH_MSGH_BITS_COMPLEX | c.MACH_MSG_TYPE_COPY_SEND, .size = bytes.len, .remote = s.destination, .local = 0, .id = 69903 });
+        put(&bytes, 24, @as(u32, 2));
+        put(&bytes, 28, Ool{ .address = memory, .deallocate = 1, .size = 4096 });
+        put(&bytes, 44, Port{ .name = s.watch, .disposition = c.MACH_MSG_TYPE_MOVE_SEND });
+        s.ready.store(@intCast(i + 1), .seq_cst);
+        const status = c.mach_msg(@ptrCast(&bytes), c.MACH_SEND_MSG | c.MACH_SEND_INTERRUPT, bytes.len, 0, 0, 0, 0);
+        s.statuses[i] = status;
+        notifyd_mach_send_result(status, @ptrCast(&bytes));
+        s.done.store(@intCast(i + 1), .seq_cst);
+    }
+    while (!s.release.load(.seq_cst)) _ = c.usleep(1000);
+    return null;
+}
+fn monotonic() i64 {
+    var t: c.struct_timespec = undefined;
+    check(c.clock_gettime(c.CLOCK_MONOTONIC, &t) == 0, "monotonic clock");
+    return t.tv_sec * 1_000_000_000 + t.tv_nsec;
+}
+fn interruptOne(s: *InterruptedSender, thread: c.pthread_t, number: u32) void {
+    s.requested.store(number, .seq_cst);
+    const end = monotonic() + 10_000_000_000;
+    while (s.ready.load(.seq_cst) < number and monotonic() < end) _ = c.usleep(1000);
+    while (s.done.load(.seq_cst) < number and monotonic() < end) {
+        check(c.pthread_kill(thread, c.SIGUSR1) == 0, "directed sender signal");
+        _ = c.usleep(1000);
+    }
+    check(s.done.load(.seq_cst) == number and s.statuses[number - 1] & ~@as(c_int, c.MACH_MSG_MASK) == c.MACH_SEND_INTERRUPTED, "real interrupted reply send");
+}
+fn notifyInterrupted(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    var action = std.mem.zeroes(c.struct_sigaction);
+    action.__sigaction_u.__sa_handler = &interruptHandler;
+    _ = c.sigemptyset(&action.sa_mask);
+    check(c.sigaction(c.SIGUSR1, &action, null) == 0, "sender signal handler");
+    var s: InterruptedSender = .{ .destination = port(), .watch = port() };
+    makeSend(s.destination);
+    makeSend(s.watch);
+    for (0..5) |_| {
+        var h: Header = .{ .bits = c.MACH_MSG_TYPE_COPY_SEND, .size = 24, .remote = s.destination, .local = 0, .id = 69904 };
+        send(std.mem.asBytes(&h));
+    }
+    var thread: c.pthread_t = undefined;
+    check(c.pthread_create(&thread, null, &interruptedSender, &s) == 0, "interrupted sender thread");
+    interruptOne(&s, thread, 1);
+    _ = maps(c.getpid());
+    const before = maps(c.getpid());
+    const rights_before = ports(c.getpid());
+    for (2..102) |i| interruptOne(&s, thread, @intCast(i));
+    const after = maps(c.getpid());
+    const rights_after = ports(c.getpid());
+    _ = c.printf("ownership_notify_interrupted requests=100 expected_base=0x%x observed_result=0x%x ports_before=%zu ports_after=%zu expected_send_refs=1 observed_send_refs=%u handler_calls=%u\n", @as(c_uint, c.MACH_SEND_INTERRUPTED), @as(c_uint, @bitCast(s.statuses[100])), rights_before, rights_after, refs(s.watch), interrupts.load(.seq_cst));
+    sameMaps(before, after, "ownership_notify_interrupted");
+    check(rights_before == rights_after and refs(s.watch) == 1 and refs(s.destination) == 1 and interrupts.load(.seq_cst) >= 101, "interrupted reply release inventory");
+    s.release.store(true, .seq_cst);
+    check(c.pthread_join(thread, null) == 0, "interrupted sender join");
+    destroy(s.watch);
+    destroy(s.destination);
+}
+var cases: [10]c.atf_tc_t = undefined;
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "90");
     _ = c.atf_tc_set_md_var(t, "require.user", "%s", "root");
 }
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "socket_large", "launchd_no_reply", "mig_mismatch", "notify_rejected", "xpc_unsent", "dispatch_large" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &socketLarge, &launchdNoReply, &mismatchedReply, &notifyRejected, &xpcUnsent, &dispatchLarge };
+    const names = [_][*:0]const u8{ "socket_large", "launchd_no_reply", "mig_mismatch", "notify_rejected", "xpc_unsent", "dispatch_large", "launchd_handler_rejected", "xpc_malformed", "notify_body_error", "notify_interrupted" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &socketLarge, &launchdNoReply, &mismatchedReply, &notifyRejected, &xpcUnsent, &dispatchLarge, &launchdHandlerRejected, &xpcMalformed, &notifyBodyError, &notifyInterrupted };
     for (names, bodies, 0..) |name, body, i| {
         var e = c.atf_tc_init(&cases[i], name, &head, body, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(e)) return e;

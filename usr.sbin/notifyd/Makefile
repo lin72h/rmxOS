@@ -44,7 +44,7 @@ notify_proc: notify_ipcServer.c
 
 LIBADD=	notify launch xpc dispatch osxsupport mach thr sys bsm auditd \
 	BlocksRuntime nv sbuf util
-SRCS=notify_proc.c notifyd.c service.c timer.c n2_markers.c notify_ipcServer.c
+SRCS=notify_proc.c notifyd.c service.c timer.c n2_markers.c notify_ipcServer.c mach_ownership.c
 
 
 CLEANFILES+= *Server.c *User.c job.h helper.h job_reply.h job_forward.h notify.h \

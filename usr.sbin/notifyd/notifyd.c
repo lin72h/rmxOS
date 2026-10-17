@@ -40,6 +40,7 @@
 #include <TargetConditionals.h>
 #include "pathwatch.h"
 #include "notifyd.h"
+#include "mach_ownership.h"
 #include "service.h"
 #include "pathwatch.h"
 #include "timer.h"
@@ -1047,7 +1048,11 @@ service_mach_message(bool blocking)
 		sbits = MACH_SEND_MSG;
 
 		status = mach_msg(&(request->head), rbits, 0, global.request_size, global.server_port, 0, MACH_PORT_NULL);
-		if (status != KERN_SUCCESS) return;
+		if (status != KERN_SUCCESS)
+		{
+			notifyd_mach_receive_error(status, &(request->head));
+			return;
+		}
 		{
 			mach_msg_trailer_t *trailer;
 
@@ -1083,11 +1088,7 @@ service_mach_message(bool blocking)
 		if (reply->head.msgh_remote_port)
 		{
 			status = mach_msg(&(reply->head), sbits, reply->head.msgh_size, 0, MACH_PORT_NULL, 0, MACH_PORT_NULL);
-			if (status == MACH_SEND_INVALID_DEST || status == MACH_SEND_TIMED_OUT)
-			{
-				/* deallocate reply port rights not consumed by failed mach_msg() send */
-				mach_msg_destroy(&(reply->head));
-			}
+			notifyd_mach_send_result(status, &(reply->head));
 		}
 
 // XXX		voucher_mach_msg_revert(voucher);
