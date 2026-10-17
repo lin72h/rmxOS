@@ -1069,7 +1069,11 @@ service_mach_message(bool blocking)
 #else
 		status = notify_ipc_server(&(request->head), &(reply->head));
 #endif
-		if (!status && (request->head.msgh_bits & MACH_MSGH_BITS_COMPLEX))
+		/* A recognized routine can still fail its generated request check. */
+		if ((!status || (!(reply->head.msgh_bits & MACH_MSGH_BITS_COMPLEX) &&
+		    ((mig_reply_error_t *)reply)->RetCode != KERN_SUCCESS &&
+		    ((mig_reply_error_t *)reply)->RetCode != MIG_NO_REPLY)) &&
+		    (request->head.msgh_bits & MACH_MSGH_BITS_COMPLEX))
 		{
 			/* destroy the request - but not the reply port */
 			request->head.msgh_remote_port = MACH_PORT_NULL;

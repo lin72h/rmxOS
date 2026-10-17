@@ -511,8 +511,8 @@ xpc_pipe_try_receive(mach_port_t portset, xpc_object_t *requestobj, mach_port_t 
 	boolean_t (*demux)(mach_msg_header_t *, mach_msg_header_t *), mach_msg_size_t msgsize __unused,
 	int flags __unused)
 {
-	struct xpc_recv_message message;
-	struct xpc_recv_message rsp_message;
+	struct xpc_recv_message message = {0};
+	struct xpc_recv_message rsp_message = {0};
 	mach_msg_header_t *request;
 	kern_return_t kr;
 	mach_msg_header_t *response;
@@ -533,14 +533,49 @@ xpc_pipe_try_receive(mach_port_t portset, xpc_object_t *requestobj, mach_port_t 
 	    0, request->msgh_size, request->msgh_local_port,
 	    MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
 
-	if (kr != 0)
+	if (kr != 0) {
 		LOG("mach_msg_receive returned %d\n", kr);
+		if ((kr & ~MACH_MSG_MASK) == MACH_RCV_BODY_ERROR)
+			mach_msg_destroy(request);
+		return (kr);
+	}
 	*rcvport = request->msgh_remote_port;
 	if (demux(request, response)) {
-		(void)mach_msg_send(response);
-		/*  can't do anything with the return code
-		* just tell the caller this has been handled
-		*/
+		if (!(response->msgh_bits & MACH_MSGH_BITS_COMPLEX) &&
+		    ((mig_reply_error_t *)response)->RetCode != KERN_SUCCESS) {
+			if (((mig_reply_error_t *)response)->RetCode == MIG_NO_REPLY)
+				return (TRUE);
+			/* Preserve the reply right for the generated error response. */
+			request->msgh_remote_port = MACH_PORT_NULL;
+			mach_msg_destroy(request);
+		}
+		if (response->msgh_remote_port == MACH_PORT_NULL) {
+			if (response->msgh_bits & MACH_MSGH_BITS_COMPLEX)
+				mach_msg_destroy(response);
+			return (TRUE);
+		}
+		kr = mach_msg(response, MACH_SEND_MSG |
+		    (MACH_MSGH_BITS_REMOTE(response->msgh_bits) ==
+		    MACH_MSG_TYPE_MOVE_SEND_ONCE ? 0 : MACH_SEND_TIMEOUT),
+		    response->msgh_size, 0, MACH_PORT_NULL, 0, MACH_PORT_NULL);
+		switch (kr & ~MACH_MSG_MASK) {
+		case MACH_SEND_INVALID_DEST:
+		case MACH_SEND_TIMED_OUT:
+		case MACH_SEND_INTERRUPTED:
+			/* Unsent or pseudo-received: these resources are still ours. */
+			mach_msg_destroy(response);
+			break;
+		case MACH_SEND_INVALID_HEADER:
+		case MACH_SEND_INVALID_REPLY:
+		case MACH_SEND_INVALID_NOTIFY:
+		case MACH_SEND_INVALID_DATA:
+			/* Header/copyin failures before any body resources are taken. */
+			mach_msg_destroy(response);
+			break;
+		default:
+			/* Success or body-copyin failure: do not release consumed data. */
+			break;
+		}
 		return (TRUE);
 	}
 	LOG("demux returned false\n");

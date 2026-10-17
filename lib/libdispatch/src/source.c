@@ -4303,6 +4303,12 @@ dispatch_mig_server(dispatch_source_t ds, size_t maxmsgsz,
 		tmp_options = options;
 
 		if (slowpath(kr)) {
+			if ((kr & ~MACH_MSG_MASK) == MACH_RCV_BODY_ERROR) {
+				mach_msg_destroy(&bufReply->Head);
+				_dispatch_bug_mach_client(
+						"dispatch_mig_server: receive body failed", kr);
+				goto out;
+			}
 			switch (kr) {
 			case MACH_SEND_INVALID_DEST:
 			case MACH_SEND_TIMED_OUT:
@@ -4331,15 +4337,19 @@ dispatch_mig_server(dispatch_source_t ds, size_t maxmsgsz,
 					rcv_size = large_size;
 					bufReply = large_buf;
 				}
-				if (!mach_msg(&bufReply->Head, tmp_options, 0,
+				mach_msg_return_t large_kr = mach_msg(&bufReply->Head, tmp_options, 0,
 						(mach_msg_size_t)rcv_size,
-						(mach_port_t)ds->ds_ident_hack, 0, 0)) {
+						(mach_port_t)ds->ds_ident_hack, 0, 0);
+				if (large_kr == MACH_MSG_SUCCESS) {
 					_dispatch_log("BUG in libdispatch client: "
 							"dispatch_mig_server received message larger than "
 							"requested size %zd: id = 0x%x, size = %d",
 							maxmsgsz, bufReply->Head.msgh_id,
 							bufReply->Head.msgh_size);
 				}
+				if (large_kr == MACH_MSG_SUCCESS ||
+				    (large_kr & ~MACH_MSG_MASK) == MACH_RCV_BODY_ERROR)
+					mach_msg_destroy(&bufReply->Head);
 				if (large_buf) {
 					free(large_buf);
 				}

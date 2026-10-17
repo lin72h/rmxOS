@@ -3101,8 +3101,16 @@ WriteCheckReplyCall(FILE *file, routine_t *rt)
 	for (i = 1; i <= rt->rtMaxReplyPos; i++)
 		fprintf(file, ", (__Reply__%s_t **)&Out%dP", rt->rtName, i);
 	fprintf(file, ");\n");
-	fprintf(file, "\tif (check_result != MACH_MSG_SUCCESS)\n");
+	fprintf(file, "\tif (check_result != MACH_MSG_SUCCESS) {\n");
+	if (IsKernelUser) {
+		fprintf(file, "#if\t__MigKernelSpecificCode\n");
+		fprintf(file, "\t\tmach_msg_destroy_from_kernel(&Out0P->Head);\n");
+		fprintf(file, "#endif\t/* __MigKernelSpecificCode */\n");
+	} else {
+		fprintf(file, "\t\tmach_msg_destroy(&Out0P->Head);\n");
+	}
 	WriteReturnMsgError(file, rt, TRUE, argNULL, "check_result");
+	fprintf(file, "\t}\n");
 	fprintf(file, "#endif\t/* defined(__MIG_check__Reply__%s_t__defined) */\n", rt->rtName);
 	fprintf(file, "\n");
 }

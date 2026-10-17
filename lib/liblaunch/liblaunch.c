@@ -875,6 +875,10 @@ launch_msg_internal(launch_data_t d)
 	int saved_errno = ENOMEM;
 	kern_return_t kr;
 
+	/* The socket transport has its own 10 MiB pack buffer and FD refusal. */
+	if (bootstrap_port == MACH_PORT_NULL && getenv(LAUNCHD_SOCKET_ENV))
+		return launch_msg_internal_socket(d);
+
 	mig_allocate(&request, requestCnt);
 	if (!request)
 		goto out;
@@ -882,11 +886,6 @@ launch_msg_internal(launch_data_t d)
 	    sizeof(out_fds) / sizeof(out_fds[0]), &nout_fds)) {
 		saved_errno = errno;
 		goto out;
-	}
-	/* Packing rejects every FD node before either transport can send it. */
-	if (bootstrap_port == MACH_PORT_NULL && getenv(LAUNCHD_SOCKET_ENV)) {
-		mig_deallocate(request, requestCnt);
-		return launch_msg_internal_socket(d);
 	}
 	kr = vproc_mig_ipc_request(bootstrap_port, request, requestCnt,
 	    NULL, 0, &reply, &replyCnt, &reply_fds, &reply_fdsCnt, 0);
