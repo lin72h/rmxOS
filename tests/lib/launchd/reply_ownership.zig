@@ -569,7 +569,7 @@ fn bodyErrorOnce(service: u32, memory: usize, watch: u32, file: c_int) c_int {
     check(refs(watch) == 1, "partial receive cleanup send refs");
     return status;
 }
-fn notifyBodyError(_: [*c]const c.atf_tc_t) callconv(.c) void {
+fn notifyBodyErrorRun(messages: u32) i64 {
     const service = port();
     const watch = port();
     makeSend(service);
@@ -582,16 +582,18 @@ fn notifyBodyError(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const before = maps(c.getpid());
     const rights_before = ports(c.getpid());
     var status: c_int = 0;
-    for (0..100) |_| status = bodyErrorOnce(service, memory, watch, file);
+    for (0..messages) |_| status = bodyErrorOnce(service, memory, watch, file);
     const after = maps(c.getpid());
     const rights_after = ports(c.getpid());
-    _ = c.printf("ownership_notify_body_error requests=100 expected_base=0x%x observed_result=0x%x ports_before=%zu ports_after=%zu expected_send_refs=1 observed_send_refs=%u\n", @as(c_uint, c.MACH_RCV_BODY_ERROR), @as(c_uint, @bitCast(status)), rights_before, rights_after, refs(watch));
-    sameMaps(before, after, "ownership_notify_body_error");
+    _ = c.printf("ownership_notify_body_error requests=%u expected_base=0x%x observed_result=0x%x ports_before=%zu ports_after=%zu expected_send_refs=1 observed_send_refs=%u\n", messages, @as(c_uint, c.MACH_RCV_BODY_ERROR), @as(c_uint, @bitCast(status)), rights_before, rights_after, refs(watch));
+    check(before.bytes == after.bytes, "body-error mapped bytes changed");
     check(rights_before == rights_after, "body error cleanup port inventory");
     _ = c.close(file);
     freeMap(memory, 4096);
     destroy(watch);
     destroy(service);
+    _ = c.printf("notify_map_layout messages=%u maps_before=%zu maps_after=%zu bytes_before=%llu bytes_after=%llu\n", messages, before.count, after.count, @as(c_ulonglong, before.bytes), @as(c_ulonglong, after.bytes));
+    return @as(i64, @intCast(after.count)) - @as(i64, @intCast(before.count));
 }
 const InterruptedSender = struct {
     destination: u32,
@@ -600,7 +602,8 @@ const InterruptedSender = struct {
     ready: std.atomic.Value(u32) = .init(0),
     done: std.atomic.Value(u32) = .init(0),
     release: std.atomic.Value(bool) = .init(false),
-    statuses: [101]c_int = @splat(0),
+    messages: u32,
+    statuses: [201]c_int = @splat(0),
 };
 var interrupts: std.atomic.Value(u32) = .init(0);
 fn interruptHandler(_: c_int) callconv(.c) void {
@@ -608,7 +611,7 @@ fn interruptHandler(_: c_int) callconv(.c) void {
 }
 fn interruptedSender(value: O) callconv(.c) O {
     const s: *InterruptedSender = @ptrCast(@alignCast(value.?));
-    for (0..101) |i| {
+    for (0..s.messages + 1) |i| {
         while (s.requested.load(.seq_cst) <= i) _ = c.usleep(1000);
         var bytes: [56]u8 align(8) = @splat(0);
         const memory = alloc(4096);
@@ -641,12 +644,12 @@ fn interruptOne(s: *InterruptedSender, thread: c.pthread_t, number: u32) void {
     }
     check(s.done.load(.seq_cst) == number and s.statuses[number - 1] & ~@as(c_int, c.MACH_MSG_MASK) == c.MACH_SEND_INTERRUPTED, "real interrupted reply send");
 }
-fn notifyInterrupted(_: [*c]const c.atf_tc_t) callconv(.c) void {
+fn notifyInterruptedRun(messages: u32) i64 {
     var action = std.mem.zeroes(c.struct_sigaction);
     action.__sigaction_u.__sa_handler = &interruptHandler;
     _ = c.sigemptyset(&action.sa_mask);
     check(c.sigaction(c.SIGUSR1, &action, null) == 0, "sender signal handler");
-    var s: InterruptedSender = .{ .destination = port(), .watch = port() };
+    var s: InterruptedSender = .{ .destination = port(), .watch = port(), .messages = messages };
     makeSend(s.destination);
     makeSend(s.watch);
     for (0..5) |_| {
@@ -659,16 +662,49 @@ fn notifyInterrupted(_: [*c]const c.atf_tc_t) callconv(.c) void {
     _ = maps(c.getpid());
     const before = maps(c.getpid());
     const rights_before = ports(c.getpid());
-    for (2..102) |i| interruptOne(&s, thread, @intCast(i));
+    for (2..messages + 2) |i| interruptOne(&s, thread, @intCast(i));
     const after = maps(c.getpid());
     const rights_after = ports(c.getpid());
-    _ = c.printf("ownership_notify_interrupted requests=100 expected_base=0x%x observed_result=0x%x ports_before=%zu ports_after=%zu expected_send_refs=1 observed_send_refs=%u handler_calls=%u\n", @as(c_uint, c.MACH_SEND_INTERRUPTED), @as(c_uint, @bitCast(s.statuses[100])), rights_before, rights_after, refs(s.watch), interrupts.load(.seq_cst));
-    sameMaps(before, after, "ownership_notify_interrupted");
+    _ = c.printf("ownership_notify_interrupted requests=%u expected_base=0x%x observed_result=0x%x ports_before=%zu ports_after=%zu expected_send_refs=1 observed_send_refs=%u handler_calls=%u\n", messages, @as(c_uint, c.MACH_SEND_INTERRUPTED), @as(c_uint, @bitCast(s.statuses[messages])), rights_before, rights_after, refs(s.watch), interrupts.load(.seq_cst));
+    check(before.bytes == after.bytes, "interrupted-send mapped bytes changed");
     check(rights_before == rights_after and refs(s.watch) == 1 and refs(s.destination) == 1 and interrupts.load(.seq_cst) >= 101, "interrupted reply release inventory");
     s.release.store(true, .seq_cst);
     check(c.pthread_join(thread, null) == 0, "interrupted sender join");
     destroy(s.watch);
     destroy(s.destination);
+    _ = c.printf("notify_map_layout messages=%u maps_before=%zu maps_after=%zu bytes_before=%llu bytes_after=%llu\n", messages, before.count, after.count, @as(c_ulonglong, before.bytes), @as(c_ulonglong, after.bytes));
+    return @as(i64, @intCast(after.count)) - @as(i64, @intCast(before.count));
+}
+// Each measurement starts in a fresh child. Stack growth during the first
+// run cannot precondition the second run's map-row delta (op-704 intervals).
+fn notifyMapRuns(comptime run: fn (u32) i64, label: [*:0]const u8) void {
+    var deltas: [2]i64 = undefined;
+    for ([_]u32{ 100, 200 }, 0..) |messages, i| {
+        var pipe: [2]c_int = undefined;
+        check(c.pipe(&pipe) == 0, "map comparison pipe");
+        const child = c.fork();
+        check(child >= 0, "map comparison fork");
+        if (child == 0) {
+            _ = c.close(pipe[0]);
+            const delta = run(messages);
+            if (c.write(pipe[1], &delta, @sizeOf(i64)) != @sizeOf(i64)) c._exit(70);
+            _ = c.fflush(null);
+            c._exit(0);
+        }
+        _ = c.close(pipe[1]);
+        const received = c.read(pipe[0], &deltas[i], @sizeOf(i64));
+        _ = c.close(pipe[0]);
+        var status: c_int = 0;
+        check(c.waitpid(child, &status, 0) == child and status == 0 and received == @sizeOf(i64), "map measurement child complete");
+    }
+    _ = c.printf("%s messages_a=100 messages_b=200 expected_row_delta=%lld observed_row_delta=%lld\n", label, @as(c_longlong, deltas[0]), @as(c_longlong, deltas[1]));
+    check(deltas[0] == deltas[1], "map-row change scales with message count");
+}
+fn notifyBodyError(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    notifyMapRuns(notifyBodyErrorRun, "ownership_notify_body_error_layout");
+}
+fn notifyInterrupted(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    notifyMapRuns(notifyInterruptedRun, "ownership_notify_interrupted_layout");
 }
 var cases: [10]c.atf_tc_t = undefined;
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
