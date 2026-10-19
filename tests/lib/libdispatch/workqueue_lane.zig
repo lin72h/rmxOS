@@ -200,7 +200,7 @@ fn poolWorker(ptr: ?*anyopaque) callconv(.c) ?*anyopaque {
     while (!arg.gate.released.load(.seq_cst) and now() < end) _ = c.usleep(1000);
     return null;
 }
-fn awaitCount(counter: *std.atomic.Value(u32), value: u32) bool {
+fn awaitCount(counter: *std.atomic.Value(u32), value: usize) bool {
     const end = now() + ten_seconds;
     while (counter.load(.seq_cst) < value and now() < end) _ = c.usleep(1000);
     return counter.load(.seq_cst) == value;
