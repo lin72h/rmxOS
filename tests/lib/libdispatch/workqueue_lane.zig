@@ -19,6 +19,7 @@ const c = @cImport({
     @cInclude("pthread_workqueue.h");
     @cInclude("sys/wait.h");
     @cInclude("sys/thr.h");
+    @cInclude("semaphore.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 extern fn dispatch_get_global_queue(isize, usize) ?*anyopaque;
@@ -181,6 +182,7 @@ fn boundedWaiters(_: [*c]const c.atf_tc_t) callconv(.c) void {
     if (entered != cap or max_waiting != cap or peak > cap + before + 2 or peak > proc_cap + before + 2) c.atf_tc_fail("total worker bound or saturated setup failed");
 }
 const PoolGate = struct {
+    release: c.sem_t = undefined,
     released: std.atomic.Value(bool) = .init(false),
     entered: std.atomic.Value(u32) = .init(0),
     failures: std.atomic.Value(u32) = .init(0),
@@ -196,8 +198,14 @@ fn poolWorker(ptr: ?*anyopaque) callconv(.c) ?*anyopaque {
         return null;
     }
     _ = arg.gate.entered.fetchAdd(1, .seq_cst);
-    const end = now() + 30_000_000_000;
-    while (!arg.gate.released.load(.seq_cst) and now() < end) _ = c.usleep(1000);
+    // Remain registered until the test releases us; timed polling can let
+    // early workers exit before a CPU-scaled pool has been filled.
+    while (c.sem_wait(&arg.gate.release) != 0) {
+        if (c.__error().* != c.EINTR) {
+            _ = arg.gate.failures.fetchAdd(1, .seq_cst);
+            break;
+        }
+    }
     return null;
 }
 fn awaitCount(counter: *std.atomic.Value(u32), value: usize) bool {
@@ -210,6 +218,8 @@ fn processBound(_: [*c]const c.atf_tc_t) callconv(.c) void {
     init.tqi_version = c.TWQ_SPI_VERSION_CURRENT;
     if (c.syscall(c.SYS_twq_kernreturn, @as(c_int, c.TWQ_OP_INIT), &init, @as(c_int, @sizeOf(@TypeOf(init))), @as(c_int, 0)) < 0) c.atf_tc_fail("TWQ init");
     var gate: PoolGate = .{};
+    if (c.sem_init(&gate.release, 0, 0) != 0) c.atf_tc_fail("pool release semaphore");
+    defer _ = c.sem_destroy(&gate.release);
     const cap = procCap();
     const threads = storage(c.pthread_t, cap + 1);
     defer std.heap.page_allocator.free(threads);
@@ -239,7 +249,7 @@ fn processBound(_: [*c]const c.atf_tc_t) callconv(.c) void {
     req.tqr_priority = (c.TWQ_QOS_CLASS_USER_INTERACTIVE << 8) | @as(u64, c.TWQ_PRIORITY_OVERCOMMIT_FLAG);
     const grant = c.syscall(c.SYS_twq_kernreturn, @as(c_int, c.TWQ_OP_REQTHREADS), &req, @as(c_int, @sizeOf(@TypeOf(req))), @as(c_int, 0));
     const physical = threadCount();
-    gate.released.store(true, .seq_cst);
+    for (0..created) |_| if (c.sem_post(&gate.release) != 0) c.atf_tc_fail("release pool worker");
     for (threads[0..created]) |thread| {
         if (c.pthread_join(thread, null) != 0) setup_ok = false;
     }
@@ -465,6 +475,7 @@ fn exitCapacity(_: [*c]const c.atf_tc_t) callconv(.c) void {
     if (pid == 0) {
         initKernel();
         var gate: PoolGate = .{};
+        if (c.sem_init(&gate.release, 0, 0) != 0) c._exit(6);
         const cap = laneCap();
         const threads = storage(c.pthread_t, cap + 8);
         const args = storage(PoolWorker, threads.len);
