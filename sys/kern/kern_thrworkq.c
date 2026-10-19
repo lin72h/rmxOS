@@ -85,8 +85,29 @@ static long twq_bucket_idle_current[TWQ_NUM_BUCKETS];
 static long twq_bucket_active_current[TWQ_NUM_BUCKETS];
 static int twq_busy_window_usecs = 200;
 
-SYSCTL_UINT(_kern_twq, OID_AUTO, max_lane_threads, CTLFLAG_RD,
-    (u_int *)NULL, TWQ_MAX_LANE_THREADS, "maximum registered workers per lane");
+static u_int
+twq_constrained_limit(void)
+{
+
+	/* XNU: max(64, N_CPU * 5), bounded by the overall pool capacity. */
+	return (MIN(TWQ_MAX_PROC_THREADS, MAX(TWQ_MIN_CONSTRAINED_THREADS,
+	    (u_int)MIN(MAX(1, mp_ncpus), TWQ_MAX_PROC_THREADS) *
+	    TWQ_CONSTRAINED_FACTOR)));
+}
+
+static int
+sysctl_twq_max_lane_threads(SYSCTL_HANDLER_ARGS)
+{
+	u_int limit;
+
+	limit = twq_constrained_limit();
+	return (sysctl_handle_int(oidp, &limit, 0, req));
+}
+
+SYSCTL_PROC(_kern_twq, OID_AUTO, max_lane_threads,
+    CTLTYPE_UINT | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_twq_max_lane_threads, "IU",
+    "maximum registered constrained workers per lane; overcommit uses process limit");
 SYSCTL_UINT(_kern_twq, OID_AUTO, max_proc_threads, CTLFLAG_RD,
     (u_int *)NULL, TWQ_MAX_PROC_THREADS, "maximum registered workers per process");
 
@@ -252,6 +273,14 @@ twq_proc_total_locked(struct twq_proc *tqp)
 static void twq_lane_idle_adjust_locked(struct twq_proc *, int, int);
 static void twq_lane_active_adjust(struct twq_proc *, int, int);
 
+static u_int
+twq_lane_limit(int lane)
+{
+
+	return ((lane & 1) != 0 ? TWQ_MAX_PROC_THREADS :
+	    twq_constrained_limit());
+}
+
 static int
 twq_wait_for_room_locked(struct twq_proc *tqp, struct twq_thread *tqt,
     int lane)
@@ -274,7 +303,7 @@ twq_wait_for_room_locked(struct twq_proc *tqp, struct twq_thread *tqt,
 		tqt->tqt_flags = 0;
 		twq_lane_total_adjust_locked(tqp, old_lane, -1);
 	}
-	while (tqp->tqp_total_count[lane] >= TWQ_MAX_LANE_THREADS ||
+	while (tqp->tqp_total_count[lane] >= twq_lane_limit(lane) ||
 	    twq_proc_total_locked(tqp) >= TWQ_MAX_PROC_THREADS) {
 		error = msleep(tqp, &tqp->tqp_lock, PCATCH, "twqcap",
 		    MAX(1, hz / 10));
@@ -968,8 +997,8 @@ twq_op_reqthreads(struct thread *td, struct twq_kernreturn_args *uap)
 	tqp->tqp_req_count[lane] = requested;
 	scheduled = twq_lane_target_locked(tqp, lane, priority);
 	tqp->tqp_scheduled_count[lane] = scheduled;
-	lane_room = TWQ_MAX_LANE_THREADS -
-	    MIN(tqp->tqp_total_count[lane], TWQ_MAX_LANE_THREADS);
+	lane_room = twq_lane_limit(lane) -
+	    MIN(tqp->tqp_total_count[lane], twq_lane_limit(lane));
 	proc_room = TWQ_MAX_PROC_THREADS -
 	    MIN(twq_proc_total_locked(tqp), TWQ_MAX_PROC_THREADS);
 	/* Same-lane idle reuse needs no additional registration. */

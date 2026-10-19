@@ -25,7 +25,8 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
     var dummy: u32 = 101;
     var hz: c_int = 0;
     var hz_size: usize = @sizeOf(c_int);
-    if (c.sysctlbyname("kern.hz", &hz, &hz_size, null, 0) != 0 or hz <= 0 or hz == 1000) c.atf_tc_fail("test requires a known non-1000 Hz kernel");
+    if (c.sysctlbyname("kern.hz", &hz, &hz_size, null, 0) != 0 or hz_size != @sizeOf(c_int) or hz <= 0) c.atf_tc_fail("kern.hz could not be read");
+    if (hz == 1000) c.atf_tc_skip("kern.hz=1000: one millisecond is exactly one tick, so rounding cannot be observed");
     const expected: c_int = @intCast((@as(u64, @intCast(hz)) * dummy + 999) / 1000);
     var path: [4096]u8 = undefined;
     const length = c.snprintf(&path, path.len, "%s/rmx_translate_fixture.ko", c.atf_tc_get_config_var(t, "srcdir"));

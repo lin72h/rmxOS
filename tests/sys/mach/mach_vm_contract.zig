@@ -67,6 +67,10 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
         return;
     }
     if (std.mem.eql(u8, name, "racct_limit")) {
+        var enabled: c_int = 0;
+        var size: usize = @sizeOf(c_int);
+        if (c.sysctlbyname("kern.racct.enable", &enabled, &size, null, 0) != 0 or size != @sizeOf(c_int)) c.atf_tc_fail("kern.racct.enable could not be read");
+        if (enabled == 0) c.atf_tc_skip("requires boot tunable kern.racct.enable=1 (currently 0)");
         _ = c.snprintf(&rule, rule.len, "process:%d:vmemoryuse:deny=1", c.getpid());
         if (c.rctl_add_rule(&rule, std.mem.len(@as([*:0]const u8, @ptrCast(&rule))) + 1, null, 0) != 0) c.atf_tc_fail("RCTL VMEM rule install failed");
         var address: u64 = 0;

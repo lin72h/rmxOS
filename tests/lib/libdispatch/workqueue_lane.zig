@@ -65,12 +65,22 @@ fn readInt(name: [*:0]const u8) u32 {
     if (c.sysctlbyname(name, &n, &size, null, 0) != 0 or size != @sizeOf(u32)) c.atf_tc_fail("sysctl %s", name);
     return n;
 }
+fn storage(comptime T: type, n: usize) []T {
+    return std.heap.page_allocator.alloc(T, n) catch c.atf_tc_fail("test storage allocation");
+}
+fn laneCap() u32 {
+    return readInt("kern.twq.max_lane_threads");
+}
+fn procCap() u32 {
+    return readInt("kern.twq.max_proc_threads");
+}
 fn threadCount() u32 {
+
     // KERN_PROC_INC_THREAD emits one self-sized kinfo_proc per thread.
     // Decode only its leading ki_structsize rather than importing kernel-only
     // PCB types through user.h (packed bitfields are opaque to Zig).
     var mib = [_]c_int{ c.CTL_KERN, c.KERN_PROC, c.KERN_PROC_PID | c.KERN_PROC_INC_THREAD, c.getpid() };
-    var bytes: [512 * 1024]u8 = undefined;
+    var bytes: [1024 * 1024]u8 = undefined;
     var size: usize = bytes.len;
     if (c.sysctl(&mib, mib.len, &bytes, &size, null, 0) != 0 or size < 4) c.atf_tc_fail("process thread inventory");
     const record_size = std.mem.readInt(u32, bytes[0..4], .little);
@@ -100,8 +110,12 @@ fn drain(ctx: *Context, count: usize) bool {
 fn admission(oc: bool) void {
     const n = readInt("hw.ncpu");
     if (n == 0 or n > 128) c.atf_tc_fail("unsupported CPU count %u", n);
+    const lane_cap = laneCap();
+    const proc_cap = procCap();
+    if (proc_cap != 512 or lane_cap != @min(proc_cap, @max(@as(u32, 64), n * 5))) c.atf_tc_fail("CPU-scaled workqueue ceiling differs");
+    _ = c.printf("twq_limits N=%u constrained_lane=%u overcommit_lane=%u process=%u\n", n, lane_cap, proc_cap, proc_cap);
     const target: usize = n * @as(usize, if (oc) 2 else 1);
-    if (target >= c.TWQ_MAX_LANE_THREADS) c.atf_tc_fail("CPU-sized setup reaches resource ceiling");
+    if (target >= @min(if (oc) procCap() else laneCap(), procCap())) c.atf_tc_fail("CPU-sized setup reaches resource ceiling");
     var ctx = context();
     var qs: [257]?*anyopaque = @splat(null);
     queues(qs[0 .. target + 1], oc);
@@ -135,13 +149,13 @@ fn overcommitLane(_: [*c]const c.atf_tc_t) callconv(.c) void {
     admission(true);
 }
 fn boundedWaiters(_: [*c]const c.atf_tc_t) callconv(.c) void {
-    const cap = readInt("kern.twq.max_lane_threads");
-    const proc_cap = readInt("kern.twq.max_proc_threads");
-    if (cap != c.TWQ_MAX_LANE_THREADS or proc_cap != c.TWQ_MAX_PROC_THREADS) c.atf_tc_fail("pool limit/header mismatch");
+    const proc_cap = procCap();
+    const cap = proc_cap; // Overcommit is exempt from the constrained lane ceiling.
     const before = threadCount();
     var ctx = context();
-    var qs: [c.TWQ_MAX_LANE_THREADS + 16]?*anyopaque = @splat(null);
-    queues(&qs, true);
+    const qs = storage(?*anyopaque, cap + 16);
+    defer std.heap.page_allocator.free(qs);
+    queues(qs, true);
     // Feed one blocker at a time so each requested replacement has entered
     // before asking for another. Then saturate the pending queue at the cap.
     var entered: usize = 0;
@@ -164,7 +178,7 @@ fn boundedWaiters(_: [*c]const c.atf_tc_t) callconv(.c) void {
     for (qs) |q| dispatch_release(q);
     dispose(&ctx);
     // Main and the libthr reaper are not registered pool workers.
-    if (entered != cap or max_waiting != cap or peak > cap + before + 2 or peak > proc_cap) c.atf_tc_fail("total worker bound or saturated setup failed");
+    if (entered != cap or max_waiting != cap or peak > cap + before + 2 or peak > proc_cap + before + 2) c.atf_tc_fail("total worker bound or saturated setup failed");
 }
 const PoolGate = struct {
     released: std.atomic.Value(bool) = .init(false),
@@ -196,19 +210,22 @@ fn processBound(_: [*c]const c.atf_tc_t) callconv(.c) void {
     init.tqi_version = c.TWQ_SPI_VERSION_CURRENT;
     if (c.syscall(c.SYS_twq_kernreturn, @as(c_int, c.TWQ_OP_INIT), &init, @as(c_int, @sizeOf(@TypeOf(init))), @as(c_int, 0)) < 0) c.atf_tc_fail("TWQ init");
     var gate: PoolGate = .{};
-    var threads: [c.TWQ_MAX_PROC_THREADS + 1]c.pthread_t = undefined;
-    var args: [c.TWQ_MAX_PROC_THREADS + 1]PoolWorker = undefined;
+    const cap = procCap();
+    const threads = storage(c.pthread_t, cap + 1);
+    defer std.heap.page_allocator.free(threads);
+    const args = storage(PoolWorker, threads.len);
+    defer std.heap.page_allocator.free(args);
     const tokens = [_]u32{ c.TWQ_QOS_CLASS_MAINTENANCE, c.TWQ_QOS_CLASS_BACKGROUND, c.TWQ_QOS_CLASS_UTILITY, c.TWQ_QOS_CLASS_DEFAULT, c.TWQ_QOS_CLASS_USER_INITIATED };
     var created: u32 = 0;
     var setup_ok = true;
-    for (&threads, &args, 0..) |*thread, *arg, i| {
-        arg.* = .{ .gate = &gate, .priority = (tokens[i / c.TWQ_MAX_LANE_THREADS] << 8) | c.TWQ_PRIORITY_OVERCOMMIT_FLAG };
+    for (threads, args, 0..) |*thread, *arg, i| {
+        arg.* = .{ .gate = &gate, .priority = (tokens[i % tokens.len] << 8) | c.TWQ_PRIORITY_OVERCOMMIT_FLAG };
         if (c.pthread_create(thread, null, &poolWorker, arg) != 0) {
             setup_ok = false;
             break;
         }
         created += 1;
-        if (i < c.TWQ_MAX_PROC_THREADS and !awaitCount(&gate.entered, created)) {
+        if (i < cap and !awaitCount(&gate.entered, created)) {
             setup_ok = false;
             break;
         }
@@ -226,8 +243,8 @@ fn processBound(_: [*c]const c.atf_tc_t) callconv(.c) void {
     for (threads[0..created]) |thread| {
         if (c.pthread_join(thread, null) != 0) setup_ok = false;
     }
-    _ = c.printf("twq_process_bound expected_registered_max=%u observed_registered=%u expected_full_grant=0 observed_grant=%ld expected_finished=%u observed_finished=%u observed_physical_threads=%u\n", @as(u32, c.TWQ_MAX_PROC_THREADS), held, grant, created, gate.entered.load(.seq_cst), physical);
-    if (!setup_ok or created != threads.len or held != c.TWQ_MAX_PROC_THREADS or grant != 0 or gate.entered.load(.seq_cst) != created or gate.failures.load(.seq_cst) != 0) c.atf_tc_fail("process pool bound, waiting entry or release/drain failed");
+    _ = c.printf("twq_process_bound expected_registered_max=%u observed_registered=%u expected_full_grant=0 observed_grant=%ld expected_finished=%u observed_finished=%u observed_physical_threads=%u\n", cap, held, grant, created, gate.entered.load(.seq_cst), physical);
+    if (!setup_ok or created != threads.len or held != cap or grant != 0 or gate.entered.load(.seq_cst) != created or gate.failures.load(.seq_cst) != 0) c.atf_tc_fail("process pool bound, waiting entry or release/drain failed");
 }
 fn initKernel() void {
     var init = std.mem.zeroes(c.struct_twq_init_args);
@@ -366,11 +383,16 @@ fn laneMoves(_: [*c]const c.atf_tc_t) callconv(.c) void {
     initKernel();
     for ([_]c_int{ c.TWQ_OP_THREAD_ENTER, c.TWQ_OP_THREAD_RETURN, c.TWQ_OP_THREAD_TRANSFER }) |op| {
         var gate: MoveGate = .{};
-        var threads: [2 * c.TWQ_MAX_LANE_THREADS]c.pthread_t = undefined;
-        var args: [threads.len]MoveArg = undefined;
-        const lanes = [_]u32{ default_priority | c.TWQ_PRIORITY_OVERCOMMIT_FLAG, (c.TWQ_QOS_CLASS_UTILITY << 8) | c.TWQ_PRIORITY_OVERCOMMIT_FLAG };
-        for (&threads, &args, 0..) |*thread, *arg, i| {
-            const lane = i / c.TWQ_MAX_LANE_THREADS;
+        const cap = @min(laneCap(), procCap() / 2);
+        const oc: u32 = if (cap < laneCap()) c.TWQ_PRIORITY_OVERCOMMIT_FLAG else 0;
+        const threads = storage(c.pthread_t, 2 * cap);
+        defer std.heap.page_allocator.free(threads);
+        const args = storage(MoveArg, threads.len);
+        defer std.heap.page_allocator.free(args);
+        const lanes = [_]u32{ default_priority | oc, (c.TWQ_QOS_CLASS_UTILITY << 8) | oc };
+
+        for (threads, args, 0..) |*thread, *arg, i| {
+            const lane = i / cap;
             arg.* = .{ .gate = &gate, .from = lanes[lane], .to = lanes[1 - lane], .op = op };
             if (c.pthread_create(thread, null, &moveWorker, arg) != 0) c.atf_tc_fail("move worker create");
         }
@@ -385,7 +407,7 @@ fn laneMoves(_: [*c]const c.atf_tc_t) callconv(.c) void {
         if (gate.failures.load(.seq_cst) != 0) c.atf_tc_fail("move syscall failed");
     }
 }
-var cap_threads: [c.TWQ_MAX_LANE_THREADS]c.pthread_t = undefined;
+var cap_threads: []c.pthread_t = &.{};
 var main_thread: c.pthread_t = undefined;
 var signal_seen: std.atomic.Value(u32) = .init(0);
 var cap_gate: PoolGate = .{};
@@ -411,7 +433,9 @@ fn signalCapacity(_: [*c]const c.atf_tc_t) callconv(.c) void {
     action.__sigaction_u.__sa_handler = &signalHandler;
     _ = c.sigemptyset(&action.sa_mask);
     if (c.sigaction(c.SIGUSR1, &action, null) != 0) c.atf_tc_fail("sigaction");
-    for (&cap_threads) |*t| if (c.pthread_create(t, null, &idleHolder, null) != 0) c.atf_tc_fail("idle holder create");
+    cap_threads = storage(c.pthread_t, laneCap());
+    defer std.heap.page_allocator.free(cap_threads);
+    for (cap_threads) |*t| if (c.pthread_create(t, null, &idleHolder, null) != 0) c.atf_tc_fail("idle holder create");
     if (!awaitCount(&cap_gate.entered, cap_threads.len)) c.atf_tc_fail("idle capacity setup");
     var mask: c.sigset_t = undefined;
     _ = c.sigemptyset(&mask);
@@ -441,16 +465,17 @@ fn exitCapacity(_: [*c]const c.atf_tc_t) callconv(.c) void {
     if (pid == 0) {
         initKernel();
         var gate: PoolGate = .{};
-        var threads: [c.TWQ_MAX_LANE_THREADS + 8]c.pthread_t = undefined;
-        var args: [threads.len]PoolWorker = undefined;
-        for (&threads, &args, 0..) |*t, *a, i| {
+        const cap = laneCap();
+        const threads = storage(c.pthread_t, cap + 8);
+        const args = storage(PoolWorker, threads.len);
+        for (threads, args, 0..) |*t, *a, i| {
             a.* = .{ .gate = &gate, .priority = default_priority };
             if (c.pthread_create(t, null, &poolWorker, a) != 0) c._exit(2);
-            if (i < c.TWQ_MAX_LANE_THREADS and !awaitCount(&gate.entered, @intCast(i + 1))) c._exit(3);
+            if (i < cap and !awaitCount(&gate.entered, @intCast(i + 1))) c._exit(3);
         }
         if (!awaitCount(&gate.attempted, threads.len)) c._exit(4);
         _ = c.usleep(100_000);
-        if (gate.entered.load(.seq_cst) != c.TWQ_MAX_LANE_THREADS) c._exit(5);
+        if (gate.entered.load(.seq_cst) != cap) c._exit(5);
         c._exit(0);
     }
     var status: c_int = 0;

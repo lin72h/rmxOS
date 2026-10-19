@@ -30,9 +30,10 @@
 #define	TWQ_FEATURE_WORKLOOP		0x80
 
 #define	TWQ_NUM_BUCKETS			6
-/* Pool resource limits, independent of runnable concurrency. */
-#define	TWQ_MAX_LANE_THREADS		32U
-#define	TWQ_MAX_PROC_THREADS		128U
+/* Pool resource policy; effective limits are exported by kern.twq sysctls. */
+#define	TWQ_MIN_CONSTRAINED_THREADS	64U
+#define	TWQ_CONSTRAINED_FACTOR		5U
+#define	TWQ_MAX_PROC_THREADS		512U
 #define	TWQ_BUCKET_MAINTENANCE		0
 #define	TWQ_BUCKET_BACKGROUND		1
 #define	TWQ_BUCKET_UTILITY		2
