@@ -81,6 +81,7 @@
  *	Functions to manipulate IPC objects.
  */
 
+#include <compat/mach/ipc/ipc_debug.h>
 #include <sys/cdefs.h>
 
 #include <sys/types.h>
@@ -471,7 +472,8 @@ ipc_object_copyin(
 		xlock = 1;
 	kr = ipc_right_lookup(space, name, &entry, xlock);
 	if (kr != KERN_SUCCESS) {
-		printf("ipc_right_lookup failed: msgt=%d kr=%d\n", msgt_name, kr);
+		if (mach_ipc_entry_lookup_failed_log)
+			printf("ipc_right_lookup failed: msgt=%d kr=%d\n", msgt_name, kr);
 		return kr;
 	}
 	/* space is write-locked and active */

@@ -26,6 +26,7 @@
  */
 
 
+#include <compat/mach/ipc/ipc_debug.h>
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
@@ -501,7 +502,8 @@ mach_vm_machine_attribute(vm_map_t target_task, mach_vm_address_t addr, mach_vm_
 			break;
 		default:
 #ifdef DEBUG_MACH
-			printf("unimplemented value %d\n", value);
+			if (mach_ipc_right_copyin_failed_log)
+				printf("unimplemented value %d\n", value);
 #endif
 			error = EINVAL;
 			break;
@@ -512,7 +514,8 @@ mach_vm_machine_attribute(vm_map_t target_task, mach_vm_address_t addr, mach_vm_
 	case MATTR_REPLICATE:
 	default:
 #ifdef DEBUG_MACH
-		printf("unimplemented attribute %d\n", attribute);
+		if (mach_ipc_right_copyin_failed_log)
+			printf("unimplemented attribute %d\n", attribute);
 #endif
 		error = EINVAL;
 		break;

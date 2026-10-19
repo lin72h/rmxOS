@@ -113,6 +113,7 @@
  */
 
 
+#include <compat/mach/ipc/ipc_debug.h>
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
@@ -519,7 +520,8 @@ ipc_entry_file_to_port(ipc_space_t space, mach_port_name_t name, ipc_object_t *o
 	if (fget_cap(curthread, name, cap_rights_init(&rights), NULL, &fp,
 	    &file->caps) != 0) {
 		free(file, M_MACH_IPC_ENTRY);
-		log(LOG_DEBUG, "%s:%d entry for port name: %d not found\n", curproc->p_comm, curproc->p_pid, name);
+		if (mach_ipc_entry_lookup_failed_log)
+			log(LOG_DEBUG, "%s:%d entry for port name: %d not found\n", curproc->p_comm, curproc->p_pid, name);
 		return (KERN_INVALID_ARGUMENT);
 	}
 	if (fp->f_type == DTYPE_MACH_IPC ||
@@ -752,7 +754,8 @@ ipc_entry_alloc_name(
 
 	/* name could technically be a ridiculously large value */
 	if (kern_fdalloc(td, name, &newname)) {
-		log(LOG_WARNING, "%s:%d failed to allocate %d\n", __FILE__, __LINE__, name);
+		if (mach_ipc_right_copyin_failed_log)
+			log(LOG_WARNING, "%s:%d failed to allocate %d\n", __FILE__, __LINE__, name);
 		return (KERN_RESOURCE_SHORTAGE);
 	}
 	if (newname != name) {

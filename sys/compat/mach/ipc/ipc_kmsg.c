@@ -252,12 +252,14 @@
  *	Operations on kernel messages.
  */
 
+#include <compat/mach/ipc/ipc_debug.h>
 #include <sys/cdefs.h>
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/limits.h>
 #include <sys/syslog.h>
 #include <sys/sysctl.h>
+#include <sys/fail.h>
 #include <sys/proc.h>
 
 #include <vm/vm.h>
@@ -285,12 +287,12 @@
 
 #pragma pack(4)
 
-static int mach_ipc_entry_lookup_failed_log;
+int mach_ipc_entry_lookup_failed_log;
 SYSCTL_NODE(_debug, OID_AUTO, mach, CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
     "Mach subsystem debugging");
 SYSCTL_INT(_debug_mach, OID_AUTO, ipc_entry_lookup_failed_log,
     CTLFLAG_RWTUN, &mach_ipc_entry_lookup_failed_log, 0,
-    "log ipc_entry_lookup null-destination failures");
+    "Log IPC name lookup failures");
 
 typedef	struct
 {
@@ -399,7 +401,8 @@ ipc_kmsg_alloc(
 
 		/* make sure expansion won't cause wrap */
 		if (msg_and_trailer_size > MACH_MSG_SIZE_MAX - max_desc) {
-			printf("expansion would cause wrap! - return IKM_NULL\n");
+			if (mach_ipc_right_copyin_failed_log)
+				printf("expansion would cause wrap! - return IKM_NULL\n");
 			return IKM_NULL;
 		}
 		max_expanded_size = msg_and_trailer_size + max_desc;
@@ -1084,7 +1087,8 @@ ipc_kmsg_copyin_header(
 
 	is_write_lock(space);
 	if (!space->is_active) {
-		printf("space not active");
+		if (mach_ipc_right_copyin_failed_log)
+			printf("space not active");
 		goto invalid_dest;
 	}
 	if (notify_name != MACH_PORT_NAME_NULL) {
@@ -1117,7 +1121,7 @@ ipc_kmsg_copyin_header(
 
 		entry = ipc_entry_lookup(space, name);
 		if (entry == IE_NULL) {
-			if (mach_debug_enable)
+			if (mach_ipc_entry_lookup_failed_log)
 				printf("name=%d not found\n", name);
 			goto invalid_dest;
 		}
@@ -1139,7 +1143,7 @@ ipc_kmsg_copyin_header(
 			 *	checked for reply port errors above,
 			 *	so report a destination error.
 			 */
-			if (mach_debug_enable)
+			if (mach_ipc_right_copyin_failed_log)
 				printf("dest_type or reply_type is SEND_ONCE\n");
 			
 			goto invalid_dest;
@@ -1151,7 +1155,7 @@ ipc_kmsg_copyin_header(
 					      dest_type, FALSE,
 					      &dest_port, &dest_soright);
 			if (kr != KERN_SUCCESS) {
-				if (mach_debug_enable)
+				if (mach_ipc_right_copyin_failed_log)
 					printf("ipc_right_copyin failed kr=%d %s:%d\n", kr, __FILE__, __LINE__);
 				goto invalid_dest;
 			}
@@ -1189,7 +1193,7 @@ ipc_kmsg_copyin_header(
 					      dest_type, FALSE,
 					      &dest_port, &dest_soright);
 			if (kr != KERN_SUCCESS) {
-				if (mach_debug_enable)
+				if (mach_ipc_right_copyin_failed_log)
 					printf("ipc_right_copyin failed kr=%d %s:%d\n", kr, __FILE__, __LINE__);
 				goto invalid_dest;
 			}
@@ -1216,7 +1220,8 @@ ipc_kmsg_copyin_header(
 			kr = ipc_right_copyin_two(space, name, entry,
 						  &dest_port, &dest_soright);
 			if (kr != KERN_SUCCESS) {
-				printf("ipc_right_copyin_two failed kr=%d %s:%d\n", kr, __FILE__, __LINE__);
+				if (mach_ipc_right_copyin_failed_log)
+					printf("ipc_right_copyin_two failed kr=%d %s:%d\n", kr, __FILE__, __LINE__);
 				goto invalid_dest;
 			}
 			/* the entry might need to be deallocated */
@@ -1244,7 +1249,8 @@ ipc_kmsg_copyin_header(
 					      MACH_MSG_TYPE_MOVE_SEND, FALSE,
 					      &dest_port, &soright);
 			if (kr != KERN_SUCCESS) {
-				printf("ipc_right_copyin failed kr=%d %s:%d\n", kr, __FILE__, __LINE__);
+				if (mach_ipc_right_copyin_failed_log)
+					printf("ipc_right_copyin failed kr=%d %s:%d\n", kr, __FILE__, __LINE__);
 				goto invalid_dest;
 			}
 			/* the entry might need to be deallocated */
@@ -1280,7 +1286,7 @@ ipc_kmsg_copyin_header(
 
 		entry = ipc_entry_lookup(space, dest_name);
 		if (entry == IE_NULL) {
-			if (mach_debug_enable)
+			if (mach_ipc_entry_lookup_failed_log)
 				printf("ipc_entry_lookup failed on dest_name=%d\n", dest_name);
 			goto invalid_dest;
 		}
@@ -1288,7 +1294,7 @@ ipc_kmsg_copyin_header(
 				      dest_type, FALSE,
 				      &dest_port, &dest_soright);
 		if (kr != KERN_SUCCESS) {
-			if (mach_debug_enable)
+			if (mach_ipc_right_copyin_failed_log)
 				printf("ipc_right_copyin failed kr=%d %s:%d\n", kr, __FILE__, __LINE__);
 			goto invalid_dest;
 		}
@@ -1360,7 +1366,8 @@ ipc_kmsg_copyin_header(
 				      dest_type, FALSE,
 				      &dest_port, &dest_soright);
 		if (kr != KERN_SUCCESS) {
-			printf("ipc_right_copyin failed kr=%d %s:%d\n", kr, __FILE__, __LINE__);
+			if (mach_ipc_right_copyin_failed_log)
+				printf("ipc_right_copyin failed kr=%d %s:%d\n", kr, __FILE__, __LINE__);
 			goto invalid_dest;
 		}
 		assert(IO_VALID(dest_port));
@@ -1425,7 +1432,8 @@ ipc_kmsg_copyin_header(
 				assert(reply_soright == IP_NULL);
 
 				ipc_port_release(saved_reply);
-				printf("%s:%d\n", __FUNCTION__, __LINE__);
+				if (mach_ipc_right_copyin_failed_log)
+					printf("%s:%d\n", __FUNCTION__, __LINE__);
 				if (kr == KERN_UREFS_OVERFLOW ||
 				    reply_kr == KERN_UREFS_OVERFLOW)
 					return MACH_SEND_INVALID_RIGHT;
@@ -1486,15 +1494,15 @@ ipc_kmsg_copyin_header(
 
     invalid_dest:
 	is_write_unlock(space);
-	if (mach_debug_enable) {
+	if (mach_debug_enable)
 		kdb_backtrace();
+	if (mach_ipc_right_copyin_failed_log)
 		printf("%s:%d - MACH_SEND_INVALID_DEST dest_name: 0x%x reply_name: 0x%x \n", curproc->p_comm, curproc->p_pid, dest_name, reply_name);
-	}
 	return MACH_SEND_INVALID_DEST;
 
     invalid_reply:
 	is_write_unlock(space);
-	if (mach_debug_enable)
+	if (mach_ipc_right_copyin_failed_log)
 		printf("%s:%d - MACH_SEND_INVALID_REPLY dest_name: 0x%x reply_name: 0x%x \n", curproc->p_comm, curproc->p_pid, dest_name, reply_name);
 	return MACH_SEND_INVALID_REPLY;
 }
@@ -1530,7 +1538,7 @@ ipc_kmsg_copyin_port_descriptor(
         kern_return_t kr = ipc_object_copyin(space, name, user_disp, &object);
         if (kr != KERN_SUCCESS) {
             *mr = MACH_SEND_INVALID_RIGHT;
-			if (mach_debug_enable)
+			if (mach_ipc_right_copyin_failed_log)
 				printf("MACH_SEND_INVALID_RIGHT: %s:%s:%d\n", __FUNCTION__, __FILE__, __LINE__);
             return NULL;
         }
@@ -1713,7 +1721,8 @@ ipc_kmsg_copyin_ool_ports_descriptor(
 		if (kr != KERN_SUCCESS) {
 			int k;
 
-			printf("right: %d failed %x user_disp: %d\n", name, kr, user_disp);
+			if (mach_ipc_right_copyin_failed_log)
+				printf("right: %d failed %x user_disp: %d\n", name, kr, user_disp);
 			for(k = 0; k < j; k++) {
 				object = objects[k];
 				if (IPC_OBJECT_VALID(object))
@@ -1900,7 +1909,8 @@ ipc_kmsg_copyin_body(
                 complex = TRUE;
                 break;
 		default:
-			printf("bad descriptor type: %d idx: %d\n", user_addr->type.type, i);
+			if (mach_ipc_right_copyin_failed_log)
+				printf("bad descriptor type: %d idx: %d\n", user_addr->type.type, i);
                 /* Invalid descriptor */
                 mr = MACH_SEND_INVALID_TYPE;
                 break;
@@ -2549,7 +2559,7 @@ ipc_kmsg_copyout_ool_ports_descriptor(mach_msg_ool_ports_descriptor_t *dsc,
         ipc_kmsg_t kmsg,
 		mach_msg_return_t *mr)
 {
-	vm_offset_t            		addr;
+	vm_offset_t            		addr = 0;
 	mach_port_t            		*objects;
 	mach_port_name_t            *names;
 	mach_msg_type_number_t 		j, count;
@@ -2568,19 +2578,23 @@ ipc_kmsg_copyout_ool_ports_descriptor(mach_msg_ool_ports_descriptor_t *dsc,
 		 * Dynamically allocate the region
 		 */
 		dsc->copy = MACH_MSG_ALLOCATE;
-		if ((kr = mach_vm_allocate(map, &addr, pnlength, VM_FLAGS_ANYWHERE)) !=
-			KERN_SUCCESS) {
+		kr = KERN_SUCCESS;
+		KFAIL_POINT_CODE(DEBUG_FP, mach_ool_ports_allocate,
+		    kr = KERN_INVALID_ADDRESS;);
+		if (kr == KERN_SUCCESS)
+			kr = mach_vm_allocate(map, &addr, pnlength, VM_FLAGS_ANYWHERE);
+		if (kr != KERN_SUCCESS) {
 			/* check that the memory has been freed */
 			ipc_kmsg_clean_body(kmsg, 1, (mach_msg_descriptor_t *)dsc);
 			dsc->address = 0;
+			addr = 0;
 
 			if (kr == KERN_RESOURCE_SHORTAGE){
 				*mr |= MACH_MSG_VM_KERNEL;
 			} else {
 				*mr |= MACH_MSG_VM_SPACE;
 			}
-		}
-		if (addr != 0) {
+		} else {
 			objects = (mach_port_t *) dsc->address;
             names = (mach_port_name_t *) dsc->address;
 

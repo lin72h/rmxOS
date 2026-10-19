@@ -84,6 +84,7 @@
 
 #include <sys/cdefs.h>
 #include <sys/types.h>
+#include <compat/mach/ipc/ipc_debug.h>
 #include <sys/param.h>
 #include <sys/sysctl.h>
 
@@ -1403,7 +1404,7 @@ ipc_right_copyin_check(
  */
 
 SYSCTL_DECL(_debug_mach);
-static int mach_ipc_right_copyin_failed_log;
+int mach_ipc_right_copyin_failed_log;
 SYSCTL_INT(_debug_mach, OID_AUTO, ipc_right_copyin_failed_log,
     CTLFLAG_RWTUN, &mach_ipc_right_copyin_failed_log, 0,
     "Log ipc_right_copyin invalid-right results");

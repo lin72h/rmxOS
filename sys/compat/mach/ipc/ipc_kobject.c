@@ -121,6 +121,7 @@
  *	Functions for letting a port represent a kernel object.
  */
 
+#include <compat/mach/ipc/ipc_debug.h>
 #include <sys/mach/port.h>
 #include <sys/mach/kern_return.h>
 #include <sys/mach/message.h>
@@ -405,7 +406,8 @@ ipc_kobject_server(ipc_kmsg_t	request)
 	    else {
 			if (!ipc_kobject_notify(request->ikm_header, reply->ikm_header)){
 #if	MACH_IPC_TEST
-				printf("ipc_kobject_server: bogus kernel message, id=%d\n",
+				if (mach_ipc_right_copyin_failed_log)
+					printf("ipc_kobject_server: bogus kernel message, id=%d\n",
 					   request->ikm_header->msgh_id);
 #endif	/* MACH_IPC_TEST */
 				((mig_reply_error_t *) reply->ikm_header)->RetCode

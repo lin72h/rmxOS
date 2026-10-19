@@ -187,6 +187,7 @@
  */
 
 
+#include <compat/mach/ipc/ipc_debug.h>
 #include <sys/mach/port.h>
 #include <sys/mach/kern_return.h>
 
@@ -1028,7 +1029,8 @@ ipc_port_check_circularity(
 			ip_unlock(dest);
 			dest = next;
 		}
-		printf("port %p is circular\n", port);
+		if (mach_ipc_right_copyin_failed_log)
+			printf("port %p is circular\n", port);
 		return TRUE;
 	}
 

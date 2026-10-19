@@ -183,6 +183,7 @@
  */
 
 
+#include <compat/mach/ipc/ipc_debug.h>
 #include <sys/mach/port.h>
 #include <sys/mach/message.h>
 #include <sys/mach/ipc_kobject.h>
@@ -824,7 +825,7 @@ ipc_mqueue_finish_receive(
 	    round_msg(rcv_size) < rcv_size || round_msg(rcv_size) > max_size ||
 	    REQUESTED_TRAILER_SIZE(option) > max_size - round_msg(rcv_size)) {
 		/* the receive buffer isn't large enough */
-		if (mach_debug_enable) {
+		if (mach_ipc_right_copyin_failed_log) {
 			printf("%s max_size=%d REQUESTED_TRAILER_SIZE(option=%d)=%d\n",
 				   curthread->td_proc->p_comm, max_size, option, REQUESTED_TRAILER_SIZE(option));
 			/* ipc_kmsg_print(kmsg); */
