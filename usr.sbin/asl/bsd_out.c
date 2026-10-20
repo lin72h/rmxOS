@@ -67,6 +67,8 @@ static dispatch_source_t bsd_idle_timer;
 
 struct config_rule
 {
+	char *programs;
+	int program_invert;
 	uint32_t count;
 	char *dst;
 	int fd;
@@ -123,7 +125,7 @@ _syslog_dst_open(struct config_rule *r)
 
 	if (r->dst[0] == '/')
 	{
-		r->fd = open(r->dst, O_WRONLY | O_APPEND | O_CREAT | O_NOCTTY, 0644);
+		r->fd = open(r->dst, O_WRONLY | O_APPEND | O_CREAT | O_NOCTTY | (!strcmp(r->dst, _PATH_CONSOLE) ? O_NONBLOCK : 0), 0644);
 		if (r->fd < 0)
 		{
 			asldebug("%s: open failed for file: %s (%s)\n", MY_ID, r->dst, strerror(errno));
@@ -258,11 +260,11 @@ _free_rule(struct config_rule *r)
 {
  if (!r) return;
  for (uint32_t i = 0; i < r->count; i++) free(r->facility[i]);
- free(r->facility); free(r->fac_prefix_len); free(r->pri); free(r->dst); free(r);
+ free(r->facility); free(r->fac_prefix_len); free(r->pri); free(r->dst); free(r->programs); free(r);
 }
 
 static int
-_parse_line(char *s)
+_parse_line(char *s, const char *programs, int invert)
 {
  char *selector, *dst, *extra, *save, *part, *walk;
  struct config_rule *out = NULL;
@@ -276,6 +278,11 @@ _parse_line(char *s)
  out = calloc(1, sizeof(*out));
  if (!out) return -1;
  out->fd = -1;
+ if (programs[0]) {
+  out->programs = strdup(programs);
+  if (!out->programs) goto bad;
+  out->program_invert = invert;
+ }
  /* FreeBSD's leading '-' suppresses sync for a file destination. */
  if (dst[0] == '-' && dst[1] == '/') dst++;
  out->dst = strdup(dst);
@@ -349,7 +356,7 @@ _bsd_send_repeat_msg(struct config_rule *r)
 
 		/* Try re-opening the file (once) and write again */
 		close(r->fd);
-		r->fd = open(r->dst, O_WRONLY | O_APPEND | O_CREAT | O_NOCTTY, 0644);
+		r->fd = open(r->dst, O_WRONLY | O_APPEND | O_CREAT | O_NOCTTY | (!strcmp(r->dst, _PATH_CONSOLE) ? O_NONBLOCK : 0), 0644);
 		if (r->fd < 0)
 		{
 			asldebug("%s: re-open failed for file: %s (%s)\n", MY_ID, r->dst, strerror(errno));
@@ -477,7 +484,7 @@ _bsd_send(asl_msg_t *msg, struct config_rule *r, char **out, char **fwd, time_t 
 
 			/* Try re-opening the file (once) and write again */
 			close(r->fd);
-			r->fd = open(r->dst, O_WRONLY | O_APPEND | O_CREAT | O_NOCTTY, 0644);
+			r->fd = open(r->dst, O_WRONLY | O_APPEND | O_CREAT | O_NOCTTY | (!strcmp(r->dst, _PATH_CONSOLE) ? O_NONBLOCK : 0), 0644);
 			if (r->fd < 0)
 			{
 				asldebug("%s: re-open failed for file: %s (%s)\n", MY_ID, r->dst, strerror(errno));
@@ -541,6 +548,19 @@ _bsd_rule_match(asl_msg_t *msg, struct config_rule *r)
 	if (msg == NULL) return 0;
 	if (r == NULL) return 0;
 	if (r->count == 0) return 0;
+	if (r->programs != NULL) {
+		const char *sender = asl_msg_get_val_for_key(msg, ASL_KEY_SENDER);
+		const char *p = r->programs;
+		int matched = 0;
+		while (*p) {
+			const char *end = strchr(p, ',');
+			size_t n = end ? (size_t)(end - p) : strlen(p);
+			if (sender && strlen(sender) == n && !memcmp(sender, p, n)) matched = 1;
+			if (!end) break;
+			p = end + 1;
+		}
+		if (matched == r->program_invert) return 0;
+	}
 
 	test = 0;
 
@@ -660,6 +680,9 @@ _read_config(const char *confname, unsigned depth)
  FILE *cf = fopen(confname, "r");
  if (!cf) return 1;
  char *line;
+ char programs[256] = "";
+ int invert = 0;
+ int blocked_program = 0;
  unsigned number = 0;
  while ((line = get_line_from_file(cf)) != NULL) {
   number++;
@@ -684,9 +707,23 @@ _read_config(const char *confname, unsigned depth)
     }
     globfree(&files);
    }
-  } else if (!strcmp(p, "!*")) {
-   /* Reset marker carries no routing state; program blocks are unsupported. */
-  } else rejected = _parse_line(p) != 0;
+  } else if (*p == '!') {
+   char *name = p + 1;
+   invert = (*name == '-');
+   if (invert) name++;
+   if (!strcmp(name, "*") || !*name) programs[0] = 0;
+   else {
+    size_t n = strcspn(name, " \t");
+    if (n >= sizeof(programs) || name[n] != 0 || n == 0) rejected = 1;
+    else {
+     for (size_t i = 0; i < n; i++)
+      if (!isalnum((unsigned char)name[i]) && !strchr("_.,-", name[i])) rejected = 1;
+     if (!rejected) strlcpy(programs, name, sizeof(programs));
+    }
+   }
+   /* An invalid program directive must not broaden its following routes. */
+   blocked_program = rejected;
+  } else if (!blocked_program) rejected = _parse_line(p, programs, invert) != 0;
   if (rejected) {
    ASLD_COUNT(config_rejected);
    /* Exactly one diagnostic per rejected source line, never a destination. */
@@ -750,6 +787,7 @@ _bsd_out_close_internal(void)
 		}
 
 		free(r->dst);
+		free(r->programs);
 		free(r->addr);
 		free(r->last_msg);
 		free(r->fac_prefix_len);

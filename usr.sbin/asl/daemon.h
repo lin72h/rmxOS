@@ -68,7 +68,7 @@ extern const char *_path_syslogd_log;
 #else
 #define _PATH_PIDFILE		"/var/run/syslog.pid"
 #define _PATH_SYSLOG_CONF   "/etc/syslog.conf"
-#define _PATH_SYSLOG_IN		"/var/run/syslog"
+#define _PATH_SYSLOG_IN		"/var/run/log"
 #define _PATH_KLOG			"/dev/klog"
 #define _PATH_SYSLOGD_LOG	"/var/log/syslogd.log"
 #endif

@@ -34,6 +34,10 @@
 		<string>/usr/share/sandbox/syslogd.sb</string>
 -->
 		<string>/usr/sbin/asld</string>
+		<string>-bsd_in</string><string>1</string>
+		<string>-klog_in</string><string>1</string>
+		<string>-udp_in</string><string>0</string>
+		<string>-remote</string><string>0</string>
 	</array>
 	<key>EnvironmentVariables</key>
 	<dict>
@@ -47,30 +51,6 @@
 			<key>ResetAtClose</key>
 			<true/>
 		</dict>
-	</dict>
-	<key>Sockets</key>
-	<dict>
-		<key>BSDSystemLogger</key>
-		<dict>
-			<key>SockPathName</key>
-			<string>/var/run/syslog</string>
-			<key>SockType</key>
-			<string>dgram</string>
-			<key>SockPathMode</key>
-			<integer>438</integer>
-		</dict>
-<!--
-	Un-comment the following lines to enable the network syslog protocol listener.
--->
-<!--
-		<key>NetworkListener</key>
-		<dict>
-			<key>SockServiceName</key>
-			<string>syslog</string>
-			<key>SockType</key>
-			<string>dgram</string>
-		</dict>
--->
 	</dict>
 </dict>
 </plist>

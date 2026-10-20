@@ -50,6 +50,7 @@
 #include <utmpx.h>
 #include <vproc_priv.h>
 #include <asl_private.h>
+#include <libutil.h>
 #if !TARGET_OS_IPHONE
 // XXX #include <quarantine.h>
 #endif
@@ -96,7 +97,7 @@ static int activate_bsd_in = 1;
 int udp_in_init(void);
 int udp_in_reset(void);
 int udp_in_close(void);
-static int activate_udp_in = 1;
+static int activate_udp_in = 0;
 
 /* Output Modules */
 int bsd_out_init(void);
@@ -180,7 +181,10 @@ init_modules()
 	m_klog_in->reset = klog_in_reset;
 	m_klog_in->close = klog_in_close;
 
-	if (m_klog_in->enabled) m_klog_in->init();
+	if (m_klog_in->enabled && m_klog_in->init() != 0) {
+		fprintf(stderr, "asld: cannot acquire kernel log input\n");
+		exit(1);
+	}
 #endif
 
 	/* BSD (UNIX domain socket) input module */
@@ -197,7 +201,10 @@ init_modules()
 	m_bsd_in->reset = bsd_in_reset;
 	m_bsd_in->close = bsd_in_close;
 
-	if (m_bsd_in->enabled) m_bsd_in->init();
+	if (m_bsd_in->enabled && m_bsd_in->init() != 0) {
+		fprintf(stderr, "asld: cannot acquire BSD log socket\n");
+		exit(1);
+	}
 
 #if !TARGET_IPHONE_SIMULATOR
 	/* network (syslog protocol) input module */
@@ -260,7 +267,8 @@ static void
 writepid(int *first)
 {
 	struct stat sb;
-	FILE *fp;
+	static struct pidfh *pfh;
+	pid_t owner;
 
 	if (first != NULL)
 	{
@@ -272,11 +280,11 @@ writepid(int *first)
 		}
 	}
 
-	fp = fopen(_PATH_PIDFILE, "w");
-	if (fp != NULL)
-	{
-		fprintf(fp, "%d\n", global.pid);
-		fclose(fp);
+	/* Share syslogd's lifetime lock before touching its socket or /dev/klog. */
+	pfh = pidfile_open(_PATH_PIDFILE, 0644, &owner);
+	if (pfh == NULL || pidfile_write(pfh) != 0) {
+		fprintf(stderr, "asld: cannot lock/write %s: %s\n", _PATH_PIDFILE, strerror(errno));
+		exit(1);
 	}
 }
 

@@ -1,6 +1,10 @@
 .include <src.opts.mk>
 PROG= aslmanager
 NO_WERROR=yes
+FILESGROUPS+= LAUNCHD
+LAUNCHD= com.rmxos.aslmanager.once.plist
+LAUNCHDDIR= /etc/launchd.d
+LAUNCHDMODE= 0644
 
 MAN= aslmanager.8
 

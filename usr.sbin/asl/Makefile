@@ -1,6 +1,11 @@
 .include <src.opts.mk>
 PROG= asld
 NO_WERROR=yes
+FILESGROUPS+= LAUNCHD
+LAUNCHD= com.apple.syslogd.plist
+LAUNCHDDIR= /etc/launchd.d
+LAUNCHDMODE= 0644
+CONFS= ${SRCTOP}/etc/asl.conf ${SRCTOP}/etc/syslog.conf
 
 .PATH: .
 .PATH: ${.CURDIR}

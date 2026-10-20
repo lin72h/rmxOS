@@ -27,6 +27,26 @@ evalargs="rc_flags=\"\`set_socketlist\` \$rc_flags\""
 syslogd_precmd()
 {
 	local _l _ldir
+	local _asld
+
+	# Never unlink a live asld socket before syslogd obtains the shared lock.
+	_asld=$(check_pidfile "$pidfile" /usr/sbin/asld)
+	if [ -n "$_asld" ]; then
+		warn "asld is running (pid $_asld); unload com.apple.syslogd first"
+		return 1
+	fi
+
+	# The marked routes are handled by asl.conf when asld is the logger.
+	# Restore them, including the program filter, for the syslogd fallback.
+	case " $rc_flags " in
+	*" -f "*) ;;
+	*)
+		if grep -q '^# syslogd-fallback: ' /etc/syslog.conf; then
+			sed 's/^# syslogd-fallback: //' /etc/syslog.conf > /var/run/syslogd-fallback.conf || return 1
+			rc_flags="$rc_flags -f /var/run/syslogd-fallback.conf"
+		fi
+		;;
+	esac
 
 	#	Transitional symlink for old binaries
 	#

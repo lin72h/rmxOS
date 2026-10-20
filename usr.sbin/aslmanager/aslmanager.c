@@ -1575,6 +1575,11 @@ cli_main(int argc, char *argv[])
 
 	debug_log(ASL_LEVEL_ERR, "aslmanager starting%s\n", (dryrun == 1) ? " dryrun" : "");
 
+	/* RunAtLoad can race the logger's first store creation on a fresh root. */
+	if (!dryrun && mkdir(asl_store_dst->path, 0755) != 0 && errno != EEXIST) {
+		fprintf(stderr, "aslmanager: create store %s: %s\n", asl_store_dst->path, strerror(errno));
+		return 1;
+	}
 	char *summary_path = realpath(asl_store_dst->path, NULL);
 	memset(&summary, 0, sizeof(summary));
 	removal_reason = REMOVE_EXPIRED;
@@ -1603,6 +1608,8 @@ cli_main(int argc, char *argv[])
   uint32_t rc = ASL_STATUS_NO_MEMORY;
   if (message) {
    asl_msg_set_key_val(message, "Sender", "aslmanager");
+   asl_msg_set_key_val(message, "Facility", "syslog");
+   asl_msg_set_key_val(message, "Level", "5");
    asl_msg_set_key_val(message, "Message", "aslmanager run summary");
    asl_msg_set_key_val(message, "com.rmxos.aslmanager.record", "summary");
    snprintf(value, sizeof(value), "%jd", (intmax_t)time(NULL));
@@ -1611,9 +1618,16 @@ cli_main(int argc, char *argv[])
    SUMMARY_FIELD(expired_files) SUMMARY_FIELD(expired_bytes)
    SUMMARY_FIELD(space_files) SUMMARY_FIELD(space_bytes) SUMMARY_FIELD(failures)
 #undef SUMMARY_FIELD
-   rc = summary_path ? asl_store_open_write(summary_path, &store) : ASL_STATUS_INVALID_STORE;
-   if (rc == ASL_STATUS_OK) rc = asl_store_save(store, message);
-   asl_store_close(store);
+   if (!strcmp(asl_store_dst->path, PATH_ASL_STORE)) {
+    /* The running logger is the sole system-store writer. In particular,
+     * do not race its cached file offsets and StoreData ID with a second
+     * writer when StartInterval runs retention. */
+    rc = asl_send(NULL, (asl_object_t)message) == 0 ? ASL_STATUS_OK : ASL_STATUS_WRITE_FAILED;
+   } else {
+    rc = summary_path ? asl_store_open_write(summary_path, &store) : ASL_STATUS_INVALID_STORE;
+    if (rc == ASL_STATUS_OK) rc = asl_store_save(store, message);
+    asl_store_close(store);
+   }
    asl_msg_release(message);
   }
   if (rc != ASL_STATUS_OK) {

@@ -61,6 +61,47 @@ bsd_in_acceptmsg(int fd)
 	process_message(m, SOURCE_BSD_SOCKET);
 }
 
+/* The pidfile lifetime lock is already held on the system path. */
+static int
+bind_log_socket(const char *path, int system_socket)
+{
+ struct sockaddr_un address;
+ struct stat st;
+ int fd, probe;
+ memset(&address, 0, sizeof(address));
+ address.sun_family = AF_UNIX;
+ if (strlcpy(address.sun_path, path, sizeof(address.sun_path)) >= sizeof(address.sun_path)) { errno = ENAMETOOLONG; return -1; }
+ address.sun_len = SUN_LEN(&address);
+ if (system_socket && lstat(path, &st) == 0) {
+  if (!S_ISSOCK(st.st_mode)) { errno = EEXIST; return -1; }
+  probe = socket(AF_UNIX, SOCK_DGRAM, 0);
+  if (probe < 0) return -1;
+  int live = connect(probe, (struct sockaddr *)&address, address.sun_len);
+  int error = errno;
+  close(probe);
+  if (live == 0) { errno = EADDRINUSE; return -1; }
+  if (error != ECONNREFUSED && error != ENOENT) { errno = error; return -1; }
+  if (unlink(path) != 0 && errno != ENOENT) return -1;
+ }
+ fd = socket(AF_UNIX, SOCK_DGRAM, 0);
+ if (fd < 0) return -1;
+ if (bind(fd, (struct sockaddr *)&address, address.sun_len) != 0 || chmod(path, system_socket ? 0666 : 0600) != 0) goto fail;
+ if (system_socket) {
+  char target[sizeof(address.sun_path)];
+  ssize_t n = readlink("/dev/log", target, sizeof(target));
+  if (n < 0 || (size_t)n != strlen(path) || memcmp(target, path, n) != 0) {
+   if (lstat("/dev/log", &st) == 0) {
+    if (!S_ISLNK(st.st_mode)) { errno = EEXIST; goto fail; }
+    if (unlink("/dev/log") != 0) goto fail;
+   } else if (errno != ENOENT) goto fail;
+   if (symlink(path, "/dev/log") != 0) goto fail;
+  }
+ }
+ return fd;
+fail:
+ { int error = errno; close(fd); errno = error; return -1; }
+}
+
 int
 bsd_in_init()
 {
@@ -81,59 +122,20 @@ bsd_in_init()
 	if (sock >= 0) return -1;
 
  if (global.socket_path) {
-  struct sockaddr_un address;
-  memset(&address, 0, sizeof(address));
-  address.sun_family = AF_UNIX;
-  if (strlcpy(address.sun_path, global.socket_path, sizeof(address.sun_path)) >= sizeof(address.sun_path)) return -1;
-  address.sun_len = SUN_LEN(&address);
-  sock = socket(AF_UNIX, SOCK_DGRAM, 0);
-  if (sock < 0) return -1;
-  if (bind(sock, (struct sockaddr *)&address, address.sun_len)) { close(sock); sock = -1; return -1; }
-  goto socket_ready;
+  sock = bind_log_socket(global.socket_path, 0);
+ } else {
+  /* Until fileports exist, launchd may return the Mach service only. */
+  sockets_dict = global.launch_dict ? launch_data_dict_lookup(global.launch_dict, LAUNCH_JOBKEY_SOCKETS) : NULL;
+  fd_array = sockets_dict ? launch_data_dict_lookup(sockets_dict, BSD_SOCKET_NAME) : NULL;
+  fd_dict = (fd_array && launch_data_array_get_count(fd_array) > 0) ? launch_data_array_get_index(fd_array, 0) : NULL;
+  sock = fd_dict ? launch_data_get_fd(fd_dict) : -1;
+  if (sock < 0) sock = bind_log_socket(_PATH_SYSLOG_IN, 1);
  }
-	if (global.launch_dict == NULL)
+ if (sock < 0) {
+  fprintf(stderr, "asld: log socket: %s\n", strerror(errno));
+  return -1;
+ }
 
-	{
-		asldebug("%s: launchd dict is NULL\n", MY_ID);
-		return -1;
-	}
-
-	sockets_dict = launch_data_dict_lookup(global.launch_dict, LAUNCH_JOBKEY_SOCKETS);
-	if (sockets_dict == NULL)
-	{
-		asldebug("%s: launchd lookup of LAUNCH_JOBKEY_SOCKETS failed\n", MY_ID);
-		return -1;
-	}
-
-	fd_array = launch_data_dict_lookup(sockets_dict, BSD_SOCKET_NAME);
-	if (fd_array == NULL)
-	{
-		asldebug("%s: launchd lookup of BSD_SOCKET_NAME failed\n", MY_ID);
-		return -1;
-	}
-
-	len = launch_data_array_get_count(fd_array);
-	if (len <= 0)
-	{
-		asldebug("%s: launchd fd array is empty\n", MY_ID);
-		return -1;
-	}
-
-	if (len > 1)
-	{
-		asldebug("%s: warning! launchd fd array has %d sockets\n", MY_ID, len);
-	}
-
-	fd_dict = launch_data_array_get_index(fd_array, 0);
-	if (fd_dict == NULL)
-	{
-		asldebug("%s: launchd file discriptor array element 0 is NULL\n", MY_ID);
-		return -1;
-	}
-
-	sock = launch_data_get_fd(fd_dict);
-
-socket_ready:
 	rbufsize = 128 * 1024;
 	len = sizeof(rbufsize);
 

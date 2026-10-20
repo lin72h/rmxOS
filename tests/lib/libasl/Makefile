@@ -21,4 +21,14 @@ asl_input_store_test: ${.CURDIR}/asl_input_store.zig input_io.o syslog_input.o c
 	${ZIG} build-exe ${.CURDIR}/asl_input_store.zig input_io.o syslog_input.o coordination.o ${SYSROOT}/usr/lib/libasl.so.1 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/lib/libthr.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}
 asld_telemetry_test: ${.CURDIR}/asld_telemetry.zig
 	${ZIG} build-exe ${.CURDIR}/asld_telemetry.zig ${SYSROOT}/usr/lib/libasl.so.1 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/usr/lib/liblaunch.so.5 ${SYSROOT}/lib/libthr.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}
+
+SCRIPTS+= system_logging_test
+system_logging_test: ${.CURDIR}/system_logging.zig
+	${ZIG} build-exe ${.CURDIR}/system_logging.zig ${SYSROOT}/usr/lib/libasl.so.1 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/usr/lib/liblaunch.so.5 ${SYSROOT}/lib/libthr.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}
+SCRIPTS+= op767_logger.ko
+op767_logger.o: ${.CURDIR}/logger_message.zig
+	${ZIG} build-obj ${.CURDIR}/logger_message.zig -target x86_64-freestanding -O ReleaseFast -mcmodel=kernel -mno-red-zone -fno-stack-check -fno-stack-protector -fno-PIC -femit-bin=${.TARGET}
+op767_logger.ko: op767_logger.o
+	${LD} -r -d -warn-common -o ${.TARGET} op767_logger.o
+
 .include <bsd.test.mk>
