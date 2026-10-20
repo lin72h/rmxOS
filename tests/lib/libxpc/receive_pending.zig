@@ -9,6 +9,7 @@ const c = @cImport({
     @cInclude("semaphore.h");
     @cInclude("time.h");
     @cInclude("unistd.h");
+    @cInclude("stdlib.h");
 });
 const O = ?*anyopaque;
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
@@ -281,7 +282,10 @@ extern fn dispatch_set_finalizer_f(O, *const fn (O) callconv(.c) void) void;
 extern fn xpc_connection_set_context(O, O) void;
 extern fn xpc_connection_set_finalizer_f(O, *const fn (O) callconv(.c) void) void;
 extern fn op746_fail_audit_alloc() void;
-extern fn xpc_array_create(O, usize) O;
+// NextBSD nvlist ABI, linked from the candidate libxpc (not host libnv).
+extern fn nvlist_create_array(c_int) O;
+extern fn nvlist_pack_buffer(O, O, *usize) O;
+extern fn nvlist_destroy(O) void;
 const Gate = struct { entered: c.sem_t, release: c.sem_t };
 fn post(ctx: O) callconv(.c) void {
     const sem: *c.sem_t = @ptrCast(@alignCast(ctx.?));
@@ -438,13 +442,16 @@ fn decodeRefusals(_: [*c]const c.atf_tc_t) callconv(.c) void {
             }
             if (bad == 6) @memset(wire.data[0..wire.size], 0);
             if (bad == 7) {
-                const array = xpc_array_create(null, 0);
-                need(array != null and op500_pipe_send(array, dst, 0, 746) == 0, "serialize array root");
-                xpc_release(array);
-                var arrayWire = std.mem.zeroes(Wire);
-                need(c.mach_msg(&arrayWire.header, c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, @sizeOf(Wire), dst, 1000, 0) == 0, "capture array root");
-                wire.size = arrayWire.size;
-                @memcpy(wire.data[0..wire.size], arrayWire.data[0..wire.size]);
+                const array = nvlist_create_array(0);
+                need(array != null, "array nvlist allocation");
+                var length: usize = 0;
+                const encoded = nvlist_pack_buffer(array, null, &length);
+                need(encoded != null and length <= wire.data.len, "serialize array nvlist directly");
+                wire.size = length;
+                const bytes: [*]const u8 = @ptrCast(encoded.?);
+                @memcpy(wire.data[0..length], bytes[0..length]);
+                c.free(encoded);
+                nvlist_destroy(array);
             }
             mode = @intCast(10 + bad);
             send(&wire);
