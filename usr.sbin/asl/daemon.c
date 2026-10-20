@@ -267,7 +267,7 @@ aslmsg_verify(asl_msg_t *msg, uint32_t source, int32_t *kern_post_level, uid_t *
 	asl_msg_set_key_val(msg, ASL_KEY_LEVEL, buf);
 
 	/* check kernel quota if enabled and no processes are watching */
-	if ((pid == 0) && (global.mps_limit > 0) && (global.watchers_active == 0))
+	if ((source == SOURCE_KERN) && (global.mps_limit > 0) && (global.watchers_active == 0))
 	{
 		status = kern_quota_check(now, msg, level);
 		if (status != VERIFY_STATUS_OK) return status;
