@@ -143,6 +143,7 @@ const Facts = struct {
     legacy: usize = 0,
 };
 var receive_start: c.time_t = 0;
+var installed_routes: usize = 0;
 fn scan() Facts {
     var facts = Facts{};
     const p = path("store");
@@ -194,22 +195,28 @@ fn scan() Facts {
     }
     return facts;
 }
-fn statusAfter() Facts {
-    _ = c.usleep(1200000);
+fn statusAfter(comptime ready: fn (Facts) bool) Facts {
     need(c.kill(child, c.SIGUSR1) == 0, "request telemetry snapshot");
-    for (0..100) |_| {
+    var last = Facts{};
+    for (0..200) |i| {
         const f = scan();
-        if (f.status > 0) return f;
+        last = f;
+        if (f.status > 0 and ready(f)) return f;
+        if (i % 5 == 4) _ = c.kill(child, c.SIGUSR1);
         _ = c.usleep(20000);
     }
-    need(false, "SIGUSR1 status written within 2 seconds");
-    return .{};
+    need(last.status > 0 and ready(last), "bounded status and record condition");
+    return last;
 }
 fn workQueue(_: [*c]const c.atf_tc_t) callconv(.c) void {
     prepare();
     start("1", "500");
     for (0..100) |_| send("<14>payload work queue");
-    const f = statusAfter();
+    const f = statusAfter(struct {
+        fn done(f: Facts) bool {
+            return f.dropped == 100 and f.notices == 100;
+        }
+    }.done);
     need(f.data == 0 and f.dropped == 100 and f.notices == 100, "work queue exact drops and episode notice bypass limit");
     _ = c.printf("asld_wq sent=100 stored=%zu dropped=%ju notice_dropped=%ju\n", f.data, f.dropped, f.notices);
     stop();
@@ -225,7 +232,11 @@ fn kernelQuota(_: [*c]const c.atf_tc_t) callconv(.c) void {
     for (0..100) |i| @memcpy(wire[i * record.len ..][0..record.len], record);
     need(c.write(fd, &wire, 100 * record.len) == 100 * record.len, "one FIFO burst in one read");
     _ = c.close(fd);
-    const f = statusAfter();
+    const f = statusAfter(struct {
+        fn done(f: Facts) bool {
+            return f.data + f.dropped == 100 and f.notices == f.dropped;
+        }
+    }.done);
     need(f.data == 3 and f.dropped == 97 and f.notices == 97, "kernel exact quota and per-second drop notice");
     _ = c.printf("asld_kernel sent=100 stored=%zu dropped=%ju notice_dropped=%ju\n", f.data, f.dropped, f.notices);
     stop();
@@ -248,7 +259,11 @@ fn nativeMalformed(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(c.mach_msg(&head, c.MACH_SEND_MSG, head.msgh_size, 0, 0, 0, 0) == 0, "send invalid native routine");
     var response: [128]u8 align(8) = @splat(0);
     need(c.mach_msg(@ptrCast(&response), c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, response.len, reply, 2000, 0) == 0, "native refusal replies");
-    const f = statusAfter();
+    const f = statusAfter(struct {
+        fn done(f: Facts) bool {
+            return f.malformed == 1;
+        }
+    }.done);
     need(f.malformed == 1, "native refusal counted once");
     need(c.mach_port_deallocate(c.mach_task_self(), port) == 0, "release service right");
     need(c.mach_port_destroy(c.mach_task_self(), reply) == 0, "destroy native reply port");
@@ -260,7 +275,11 @@ fn earlyTime(_: [*c]const c.atf_tc_t) callconv(.c) void {
     receive_start = c.time(null);
     send("<14>1 1969-12-31T23:59:59Z host app 42 ID - payload before epoch");
     send("<14>1 1970-01-01T00:00:00Z host app 42 ID - payload epoch");
-    const f = statusAfter();
+    const f = statusAfter(struct {
+        fn done(f: Facts) bool {
+            return f.timestamp_records == 2;
+        }
+    }.done);
     need(f.timestamp_records == 2 and f.parse == 0, "both early timestamps retained with receive Time");
     stop();
 }
@@ -269,7 +288,11 @@ fn legacyHeader(_: [*c]const c.atf_tc_t) callconv(.c) void {
     start("10000000", "500");
     send("<13>1 hello");
     send("<13>1 invalid-timestamp host app 42 ID - refused");
-    const f = statusAfter();
+    const f = statusAfter(struct {
+        fn done(f: Facts) bool {
+            return f.legacy == 1 and f.parse == 1;
+        }
+    }.done);
     need(f.legacy == 1 and f.parse == 1, "short legacy header stored and complete invalid RFC counted once");
     stop();
 }
@@ -277,7 +300,11 @@ fn bom(_: [*c]const c.atf_tc_t) callconv(.c) void {
     prepare();
     start("10000000", "500");
     send("<14>1 2000-01-01T00:00:00Z host app 42 ID - \xef\xbb\xbfbom text");
-    const f = statusAfter();
+    const f = statusAfter(struct {
+        fn done(f: Facts) bool {
+            return f.bom == 1;
+        }
+    }.done);
     need(f.bom == 1 and f.parse == 0, "RFC encoding BOM absent from stored text");
     stop();
 }
@@ -355,7 +382,11 @@ fn grammarInclude(_: [*c]const c.atf_tc_t) callconv(.c) void {
     send("<15>1 2000-01-01T00:00:00Z host app 42 ID - grammar_debug");
     send("<14>1 2000-01-01T00:00:00Z host app 42 ID - grammar_info");
     send("<134>1 2000-01-01T00:00:00Z host app 42 ID - grammar_local");
-    const f = statusAfter();
+    const f = statusAfter(struct {
+        fn done(f: Facts) bool {
+            return f.rejected == 1 and f.config_notices == 1 and fileMatches("one", "grammar_debug") == 1 and fileMatches("two", "grammar_local") == 1;
+        }
+    }.done);
     need(f.rejected == 1 and f.config_notices == 1, "unknown directive counted and logged once");
     need(fileMatches("one", "grammar_debug") == 1 and fileMatches("one", "grammar_info") == 0, "equals-debug is exact, not threshold");
     need(fileMatches("two", "grammar_local") == 1, "second include routes independently");
@@ -403,6 +434,10 @@ fn grammarInstalled(_: [*c]const c.atf_tc_t) callconv(.c) void {
         _ = c.execl("/usr/sbin/syslogd", "syslogd", "-F", "-ss", "-cc", "-k", "-p", &socket, "-S", &privileged, "-P", &pidfile, "-f", &reference_config, @as(?*anyopaque, null));
         c._exit(127);
     }
+    const refpid = c.fopen("op766-reference", "w");
+    need(refpid != null, "record own reference logger for cleanup");
+    _ = c.fprintf(refpid, "%d\n", pid);
+    _ = c.fclose(refpid);
     const socket = path("reference.socket");
     var ready = false;
     for (0..200) |_| {
@@ -421,10 +456,20 @@ fn grammarInstalled(_: [*c]const c.atf_tc_t) callconv(.c) void {
             sendTo("reference.socket", message[0..@intCast(n)]);
         }
     }
-    _ = statusAfter();
+    installed_routes = routes;
+    const fence = "<8>1 2000-01-01T00:00:00Z host app 42 ID - route_fence";
+    send(fence);
+    sendTo("reference.socket", fence);
+    _ = statusAfter(struct {
+        fn done(f: Facts) bool {
+            return f.status > 0 and routeFence("actual") and routeFence("reference");
+        }
+    }.done);
+    need(routeFence("actual") and routeFence("reference"), "both loggers drain all preceding inputs before comparison");
     _ = c.kill(pid, c.SIGTERM);
     var status: c_int = 0;
     need(c.waitpid(pid, &status, 0) == pid, "reap reference logger");
+    _ = c.unlink("op766-reference");
     stop();
     for (0..routes) |route| {
         var a: [64:0]u8 = @splat(0);
@@ -443,14 +488,23 @@ fn grammarInstalled(_: [*c]const c.atf_tc_t) callconv(.c) void {
     }
     _ = c.printf("asld_installed_routes routes=%zu inputs=192 private_syslogd_comparison=complete\n", routes);
 }
+fn routeFence(prefix: [*:0]const u8) bool {
+    for (0..installed_routes) |i| {
+        var name: [64:0]u8 = @splat(0);
+        _ = c.snprintf(&name, name.len, "%s.%zu", prefix, i);
+        if (fileMatches(&name, "route_fence") > 0) return true;
+    }
+    return false;
+}
 fn cleanup(_: [*c]const c.atf_tc_t) callconv(.c) void {
-    const file = c.fopen("op766-child", "r");
-    if (file == null) return;
-    var pid: c.pid_t = -1;
-    const parsed = c.fscanf(file, "%d", &pid);
-    _ = c.fclose(file);
-    if (parsed == 1 and pid > 1) _ = c.kill(pid, c.SIGTERM);
-    _ = c.unlink("op766-child");
+    for ([_][*:0]const u8{ "op766-child", "op766-reference" }) |name| {
+        const file = c.fopen(name, "r") orelse continue;
+        var pid: c.pid_t = -1;
+        const parsed = c.fscanf(file, "%d", &pid);
+        _ = c.fclose(file);
+        if (parsed == 1 and pid > 1) _ = c.kill(pid, c.SIGTERM);
+        _ = c.unlink(name);
+    }
 }
 fn testHead(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(tc, "timeout", "%s", "30");
