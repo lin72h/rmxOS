@@ -42,6 +42,9 @@ fn field(m: O, key: [*:0]const u8, expected: []const u8) void {
     if (observed == null or !std.mem.eql(u8, std.mem.span(observed.?), expected)) c.atf_tc_fail("field=%s expected_len=%zu observed=%s", key, expected.len, observed orelse "<null>");
 }
 fn writer(path: [*:0]const u8) O {
+    // The whole-plan runner repeats cases in one working directory.
+    // Each case must read back only the records from its current invocation.
+    need(c.unlink(path) == 0 or c.__error().* == c.ENOENT, "fresh fixture store");
     var store: O = null;
     need(asl_file_open_write(path, 0o600, c.getuid(), c.getgid(), &store) == 0 and store != null, "open writer");
     return store;
@@ -298,11 +301,14 @@ fn mdUnit() c_int {
 }
 fn cleanupFull(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const unit = mdUnit();
-    if (unit < 0) return;
-    _ = c.unmount("full", 0);
-    var cmd: [128:0]u8 = undefined;
-    _ = c.snprintf(&cmd, cmd.len, "/sbin/mdconfig -d -u %d", unit);
-    _ = c.system(&cmd);
+    if (unit >= 0) {
+        _ = c.unmount("full", 0);
+        var cmd: [128:0]u8 = undefined;
+        _ = c.snprintf(&cmd, cmd.len, "/sbin/mdconfig -d -u %d", unit);
+        _ = c.system(&cmd);
+        _ = c.unlink("md-unit");
+    }
+    _ = c.rmdir("full");
 }
 fn fullStore(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(c.getuid() == 0, "memory disk requires guest root");
