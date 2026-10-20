@@ -1054,8 +1054,10 @@ database_server()
  memset(&emergency, 0, sizeof(emergency));
  mach_msg_header_t *head = (mach_msg_header_t *)emergency.bytes;
  ks = mach_msg(head, rbits, 0, sizeof(emergency.bytes), global.listen_set, 0, MACH_PORT_NULL);
- if (ks == KERN_SUCCESS || (ks & ~MACH_MSG_MASK) == MACH_RCV_BODY_ERROR) {
+ if (ks == KERN_SUCCESS || ks == MACH_RCV_TOO_LARGE || (ks & ~MACH_MSG_MASK) == MACH_RCV_BODY_ERROR) {
   ASLD_COUNT(native_malformed);
+  if (ks == KERN_SUCCESS && head->msgh_id == MACH_NOTIFY_DEAD_NAME && head->msgh_size >= sizeof(mach_dead_name_notification_t))
+   mach_port_deallocate(mach_task_self(), ((mach_dead_name_notification_t *)head)->not_port);
   mach_msg_destroy(head);
  }
  continue;
@@ -1066,7 +1068,7 @@ database_server()
 		request->head.msgh_size = rqs;
 
 		ks = mach_msg(&(request->head), rbits, 0, rqs, global.listen_set, 0, MACH_PORT_NULL);
-		if ((ks & ~MACH_MSG_MASK) == MACH_RCV_BODY_ERROR) {
+		if (ks == MACH_RCV_TOO_LARGE || (ks & ~MACH_MSG_MASK) == MACH_RCV_BODY_ERROR) {
 			ASLD_COUNT(native_malformed);
 			mach_msg_destroy(&request->head);
 			free(request);
