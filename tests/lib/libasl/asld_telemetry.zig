@@ -432,7 +432,7 @@ fn grammarInstalled(_: [*c]const c.atf_tc_t) callconv(.c) void {
         _ = c.dup2(fd, 1);
         _ = c.dup2(fd, 2);
         _ = c.close(fd);
-        _ = c.execl("/usr/sbin/syslogd", "syslogd", "-F", "-ss", "-cc", "-k", "-p", &socket, "-S", &privileged, "-P", &pidfile, "-f", &reference_config, @as(?*anyopaque, null));
+        _ = c.execl("/usr/sbin/syslogd", "syslogd", "-F", "-C", "-ss", "-cc", "-k", "-p", &socket, "-S", &privileged, "-P", &pidfile, "-f", &reference_config, @as(?*anyopaque, null));
         c._exit(127);
     }
     const refpid = c.fopen("op766-reference", "w");
