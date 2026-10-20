@@ -1,3 +1,4 @@
 syntax(2)
 test_suite("FreeBSD")
 atf_test_program{name="asl_input_store_test"}
+atf_test_program{name="asld_telemetry_test"}

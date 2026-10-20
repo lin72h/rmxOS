@@ -567,7 +567,29 @@ main(int argc, const char *argv[])
 
 	for (i = 1; i < argc; i++)
 	{
-		if (streq(argv[i], "-d"))
+  if (streq(argv[i], "-private")) {
+   if (++i >= argc || argv[i][0] != '/' || geteuid() != 0) exit(1);
+   struct stat st;
+   if (lstat(argv[i], &st) || !S_ISDIR(st.st_mode) || st.st_uid != geteuid() || (st.st_mode & 0022)) exit(1);
+   global.private_dir = realpath(argv[i], NULL);
+   if (!global.private_dir || !strcmp(global.private_dir, "/")) exit(1);
+   if (asprintf(&global.store_path, "%s/store", global.private_dir) < 0 ||
+       asprintf(&global.bsd_config, "%s/syslog.conf", global.private_dir) < 0 ||
+       asprintf(&global.socket_path, "%s/syslog", global.private_dir) < 0 ||
+       asprintf(&global.kernel_path, "%s/kernel", global.private_dir) < 0) exit(1);
+   activate_udp_in = 0;
+   global.launchd_enabled = 0;
+   remote_enabled = 0;
+  }
+  else if (streq(argv[i], "-wq_max_bytes")) {
+   if (++i >= argc) exit(1);
+   char *end;
+   unsigned long long value = strtoull(argv[i], &end, 10);
+   if (*end || value == 0 || value > INT64_MAX) exit(1);
+   global.max_work_queue_size = value;
+  }
+		else if (streq(argv[i], "-d"))
+
 		{
 			global.debug = 1;
 			if (((i+1) < argc) && (argv[i+1][0] != '-')) global.debug_file = strdup(argv[++i]);
@@ -649,15 +671,27 @@ main(int argc, const char *argv[])
 	tstr[19] = '\0';
 	asldebug("\n%s syslogd PID %d starting\n", tstr, global.pid);
 
-	writepid(&first_syslogd_start);
+	if (!global.private_dir) writepid(&first_syslogd_start);
 
 	/*
 	 * Log UTMPX boot time record
 	 */
-	write_boot_log(first_syslogd_start);
+	if (!global.private_dir) write_boot_log(first_syslogd_start);
 
 	asldebug("reading launch plist\n");
-	launch_config();
+ if (global.private_dir) {
+  if (mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &global.server_port) ||
+      mach_port_insert_right(mach_task_self(), global.server_port, global.server_port, MACH_MSG_TYPE_MAKE_SEND) ||
+      mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_PORT_SET, &global.listen_set) ||
+      mach_port_move_member(mach_task_self(), global.server_port, global.listen_set)) exit(1);
+  char service[128];
+  snprintf(service, sizeof(service), "com.rmxos.asld.private.%u", global.pid);
+  if (bootstrap_register(bootstrap_port, service, global.server_port)) exit(1);
+ } else {
+  launch_config();
+ }
+
+
 
 	asldebug("initializing modules\n");
 	init_modules();
@@ -743,7 +777,7 @@ XXX
 	 * remove the whole stderr/stdout -> ASL mechanism entirely, or come up 
 	 * with a communication channel that we can trigger with a dispatch source.
 	 */
-	dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+	if (global.launchd_enabled) dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
 		for(;;) {
 			_vprocmgr_log_drain(NULL, NULL, launchd_callback);
 			sleep(1);
@@ -764,6 +798,8 @@ XXX
 	/* go to work */
 	asldebug("starting work queue\n");
 	dispatch_resume(global.work_queue);
+	asld_telemetry_init();
+	if (global.private_dir) { printf("asld_ready pid=%u\n", global.pid); fflush(stdout); }
 	dispatch_main();
 
 	/* NOTREACHED */

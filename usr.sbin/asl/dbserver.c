@@ -107,7 +107,7 @@ db_asl_open(uint32_t dbtype)
 	if ((dbtype & DB_TYPE_FILE) && (global.file_db == NULL))
 	{
 		memset(&sb, 0, sizeof(struct stat));
-		if (stat(PATH_ASL_STORE, &sb) == 0)
+		if (stat(global.store_path ? global.store_path : PATH_ASL_STORE, &sb) == 0)
 		{
 			/* must be a directory */
 			if (!S_ISDIR(sb.st_mode))
@@ -121,7 +121,7 @@ db_asl_open(uint32_t dbtype)
 			if (errno == ENOENT)
 			{
 				/* /var/log/asl doesn't exist - create it */
-				if (mkdir(PATH_ASL_STORE, 0755) != 0)
+				if (mkdir(global.store_path ? global.store_path : PATH_ASL_STORE, 0755) != 0)
 				{
 					asldebug("error: can't create data store %s: %s\n", PATH_ASL_STORE, strerror(errno));
 					return;
@@ -135,7 +135,7 @@ db_asl_open(uint32_t dbtype)
 			}
 		}
 
-		status = asl_store_open_write(NULL, &(global.file_db));
+		status = asl_store_open_write(global.store_path, &(global.file_db));
 		if (status != ASL_STATUS_OK)
 		{
 			asldebug("asl_store_open_write: %s\n", asl_core_error(status));
@@ -468,6 +468,7 @@ db_save_message(asl_msg_t *msg)
 {
 	uint64_t msgid;
 	uint32_t status, dbtype;
+	bool fallback = false, file_failed = false;
 	static int armed;
 	static dispatch_source_t timer_src;
 	static dispatch_once_t once;
@@ -496,6 +497,10 @@ db_save_message(asl_msg_t *msg)
 		status = asl_store_save(global.file_db, msg);
 		if (status != ASL_STATUS_OK)
 		{
+			/* Count each failed file record once, regardless of its retry.
+			 * A successful memory rescue is a separate, overlapping event. */
+			ASLD_COUNT(store_failed);
+			file_failed = true;
 			/* write failed - reopen & retry */
 			asldebug("asl_store_save: %s\n", asl_core_error(status));
 			asl_store_release(global.file_db);
@@ -509,6 +514,7 @@ db_save_message(asl_msg_t *msg)
 				asl_store_release(global.file_db);
 				global.file_db = NULL;
 
+				fallback = true;
 				global.dbtype |= DB_TYPE_MEMORY;
 				dbtype |= DB_TYPE_MEMORY;
 				if (global.memory_db == NULL)
@@ -545,6 +551,9 @@ db_save_message(asl_msg_t *msg)
 			}
 		}
 	}
+
+	if ((dbtype & DB_TYPE_MEMORY) && status != ASL_STATUS_OK && !file_failed) ASLD_COUNT(store_failed);
+	if ((dbtype & DB_TYPE_MEMORY) && status == ASL_STATUS_OK && fallback) ASLD_COUNT(store_fallback_memory);
 
 	if (armed == 0)
 	{
@@ -1039,12 +1048,30 @@ database_server()
 		now.tv_usec = 0;
 
 		request = (asl_request_msg *)calloc(1, rqs);
-		if (request == NULL) continue;
+		if (request == NULL) {
+ /* Consume and release exactly one request even under allocation pressure. */
+ union { mach_msg_header_t align; char bytes[sizeof(asl_request_msg) + MAX_TRAILER_SIZE]; } emergency;
+ memset(&emergency, 0, sizeof(emergency));
+ mach_msg_header_t *head = (mach_msg_header_t *)emergency.bytes;
+ ks = mach_msg(head, rbits, 0, sizeof(emergency.bytes), global.listen_set, 0, MACH_PORT_NULL);
+ if (ks == KERN_SUCCESS || (ks & ~MACH_MSG_MASK) == MACH_RCV_BODY_ERROR) {
+  ASLD_COUNT(native_malformed);
+  mach_msg_destroy(head);
+ }
+ continue;
+}
+
 
 		request->head.msgh_local_port = global.server_port;
 		request->head.msgh_size = rqs;
 
 		ks = mach_msg(&(request->head), rbits, 0, rqs, global.listen_set, 0, MACH_PORT_NULL);
+		if ((ks & ~MACH_MSG_MASK) == MACH_RCV_BODY_ERROR) {
+			ASLD_COUNT(native_malformed);
+			mach_msg_destroy(&request->head);
+			free(request);
+			continue;
+		}
 		if (ks != KERN_SUCCESS)
 		{
 			/*
@@ -1075,11 +1102,19 @@ database_server()
 			const uint32_t sbits = MACH_SEND_MSG | MACH_SEND_TIMEOUT;;
 			kern_return_t ks;
 			asl_reply_msg *reply = calloc(1, sizeof(asl_reply_msg) + MAX_TRAILER_SIZE);
+ if (reply == NULL) {
+  ASLD_COUNT(native_malformed);
+  mach_msg_destroy(&request->head);
+  free(request);
+  return;
+ }
+
 
 			//voucher_mach_msg_state_t voucher = voucher_mach_msg_adopt(&(request->head));
 
 			/* MIG server routine */
-			asl_ipc_server(&(request->head), &(reply->head));
+			boolean_t handled = asl_ipc_server(&(request->head), &(reply->head));
+			if (!handled || (!(reply->head.msgh_bits & MACH_MSGH_BITS_COMPLEX) && reply->reply.Reply__asl_server_message.RetCode != KERN_SUCCESS && reply->reply.Reply__asl_server_message.RetCode != MIG_NO_REPLY)) ASLD_COUNT(native_malformed);
 
 			if (!(reply->head.msgh_bits & MACH_MSGH_BITS_COMPLEX))
 			{
@@ -1439,11 +1474,13 @@ __asl_server_message
 
 	if (message == NULL)
 	{
+		ASLD_COUNT(native_malformed);
 		return KERN_SUCCESS;
 	}
 
-	if (message[messageCnt - 1] != '\0')
+	if (messageCnt == 0 || message[messageCnt - 1] != '\0')
 	{
+		ASLD_COUNT(native_malformed);
 		vm_deallocate(mach_task_self(), (vm_address_t)message, messageCnt);
 		return KERN_SUCCESS;
 	}
@@ -1453,7 +1490,7 @@ __asl_server_message
 	msg = asl_msg_from_string(message);
 	vm_deallocate(mach_task_self(), (vm_address_t)message, messageCnt);
 
-	if (msg == NULL) return KERN_SUCCESS;
+	if (msg == NULL) { ASLD_COUNT(native_malformed); return KERN_SUCCESS; }
 
 	uid = (uid_t)-1;
 	gid = (gid_t)-1;
@@ -1507,13 +1544,15 @@ __asl_server_create_aux_link
 
 	if (message == NULL)
 	{
+		ASLD_COUNT(native_malformed);
 		*status = ASL_STATUS_INVALID_ARG;
 		return KERN_SUCCESS;
 	}
 
-	if (message[messageCnt - 1] != '\0')
+	if (messageCnt == 0 || message[messageCnt - 1] != '\0')
 	{
 		*status = ASL_STATUS_INVALID_ARG;
+		ASLD_COUNT(native_malformed);
 		vm_deallocate(mach_task_self(), (vm_address_t)message, messageCnt);
 		return KERN_SUCCESS;
 	}
@@ -1531,7 +1570,7 @@ __asl_server_create_aux_link
 	msg = asl_msg_from_string(message);
 	vm_deallocate(mach_task_self(), (vm_address_t)message, messageCnt);
 
-	if (msg == NULL) return KERN_SUCCESS;
+	if (msg == NULL) { ASLD_COUNT(native_malformed); return KERN_SUCCESS; }
 
 	uid = (uid_t)-1;
 	gid = (gid_t)-1;

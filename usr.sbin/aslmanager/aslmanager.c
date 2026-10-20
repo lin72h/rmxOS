@@ -85,6 +85,8 @@ static time_t module_ttl;
 static uint32_t debug;
 static int dryrun;
 static int asl_aux_fd = -1;
+static struct { uint64_t expired_files, expired_bytes, space_files, space_bytes, failures; } summary;
+static enum { REMOVE_RELOCATE, REMOVE_EXPIRED, REMOVE_SPACE } removal_reason;
 static aslclient aslc;
 static mach_port_t asl_server_port;
 static xpc_connection_t listener;
@@ -286,40 +288,25 @@ copy_asl_file(const char *src, const char *dst, mode_t mode)
 int
 copy_compress_file(asl_out_dst_data_t *asldst, const char *src, const char *dst)
 {
-	int in, out;
-	size_t n;
-	gzFile gz;
-	char buf[IOBUFSIZE];
-
-	in = open(src, O_RDONLY, 0);
-	if (in < 0) return -1;
-
-	out = open(dst, O_WRONLY | O_CREAT, asldst->mode);
-	if (out >= 0) out = asl_out_dst_set_access(out, asldst);
-	if (out < 0)
-	{
-		close(in);
-		return -1;
-	}
-
-	gz = gzdopen(out, "w");
-	if (gz == NULL)
-	{
-		close(in);
-		close(out);
-		return -1;
-	}
-
-	do {
-		n = read(in, buf, sizeof(buf));
-		if (n > 0) gzwrite(gz, buf, n);
-	} while (n == IOBUFSIZE);
-
-	gzclose(gz);
-	close(in);
-	close(out);
-
-	return 0;
+ int in = open(src, O_RDONLY | O_NOFOLLOW);
+ if (in < 0) return -1;
+ int out = open(dst, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, asldst->mode);
+ if (out < 0) { close(in); return -1; }
+ out = asl_out_dst_set_access(out, asldst);
+ if (out < 0) { close(in); unlink(dst); return -1; }
+ gzFile gz = gzdopen(out, "w");
+ if (!gz) { close(in); close(out); unlink(dst); return -1; }
+ char buffer[IOBUFSIZE];
+ ssize_t n;
+ int result = 0;
+ while ((n = read(in, buffer, sizeof(buffer))) != 0) {
+  if (n < 0) { if (errno == EINTR) continue; result = -1; break; }
+  if (gzwrite(gz, buffer, n) != n) { result = -1; break; }
+ }
+ if (gzclose(gz) != Z_OK) result = -1;
+ close(in);
+ if (result) unlink(dst);
+ return result;
 }
 
 void
@@ -334,16 +321,15 @@ filesystem_rename(const char *src, const char *dst)
 	if (status != 0) debug_log(ASL_LEVEL_ERR, "  FAILED status %d errno %d [%s] rename %s ---> %s\n", status, errno, strerror(errno), src, dst);
 }
 
-void
+int
 filesystem_unlink(const char *path)
 {
-	int status = 0;
-
-	debug_log(ASL_LEVEL_NOTICE, "  remove %s\n", path);
-	if (dryrun == 1) return;
-
-	status = unlink(path);
-	if (status != 0) debug_log(ASL_LEVEL_ERR, "  FAILED status %d errno %d [%s] unlink %s\n", status, errno, strerror(errno), path);
+ struct stat st;
+ if (dryrun) return 0;
+ if (lstat(path, &st) || unlink(path)) { summary.failures++; return -1; }
+ if (removal_reason == REMOVE_SPACE) { summary.space_files++; summary.space_bytes += st.st_size; }
+ else if (removal_reason == REMOVE_EXPIRED) { summary.expired_files++; summary.expired_bytes += st.st_size; }
+ return 0;
 }
 
 void
@@ -370,6 +356,53 @@ filesystem_rmdir(const char *path)
 	if (status != 0) debug_log(ASL_LEVEL_ERR, "  FAILED status %d errno %d [%s] rmdir %s\n", status, errno, strerror(errno), path);
 }
 
+/* Copy first, then remove. Never report success for a stubbed or partial copy. */
+static int
+copy_checked(const char *src, const char *dst, unsigned depth)
+{
+ struct stat st;
+ if (depth > 32 || lstat(src, &st)) return -1;
+ if (S_ISDIR(st.st_mode)) {
+  if (mkdir(dst, st.st_mode & 0777)) return -1;
+  DIR *dir = opendir(src);
+  if (!dir) return -1;
+  struct dirent *de;
+  int result = 0;
+  while ((de = readdir(dir))) {
+   if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+   char a[PATH_MAX], b[PATH_MAX];
+   if (snprintf(a, sizeof(a), "%s/%s", src, de->d_name) >= sizeof(a) ||
+       snprintf(b, sizeof(b), "%s/%s", dst, de->d_name) >= sizeof(b) || copy_checked(a, b, depth + 1)) { result = -1; break; }
+  }
+  closedir(dir);
+  return result;
+ }
+ if (!S_ISREG(st.st_mode)) return -1;
+ int in = open(src, O_RDONLY | O_NOFOLLOW);
+ if (in < 0) return -1;
+ int out = open(dst, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, st.st_mode & 0777);
+ if (out < 0) { close(in); return -1; }
+ char buffer[65536];
+ ssize_t n;
+ int result = 0;
+ while ((n = read(in, buffer, sizeof(buffer))) != 0) {
+  if (n < 0) { if (errno == EINTR) continue; result = -1; break; }
+  ssize_t off = 0;
+  while (off < n) {
+   ssize_t wrote = write(out, buffer + off, n - off);
+   if (wrote < 0 && errno == EINTR) continue;
+   if (wrote <= 0) { result = -1; break; }
+   off += wrote;
+  }
+  if (result) break;
+ }
+ if (fsync(out)) result = -1;
+ if (close(out)) result = -1;
+ close(in);
+ if (result) unlink(dst);
+ return result;
+}
+
 int32_t
 filesystem_copy(asl_out_dst_data_t *asldst, const char *src, const char *dst, uint32_t flags)
 {
@@ -394,6 +427,7 @@ filesystem_copy(asl_out_dst_data_t *asldst, const char *src, const char *dst, ui
 		if (status != 0)
 		{
 			debug_log(ASL_LEVEL_ERR, "  FAILED status %u [%s] asl copy %s ---> %s\n", status, asl_core_error(status), src, dst);
+			summary.failures++;
 			return 0;
 		}
 	}
@@ -407,15 +441,17 @@ filesystem_copy(asl_out_dst_data_t *asldst, const char *src, const char *dst, ui
 		if (status != 0)
 		{
 			debug_log(ASL_LEVEL_ERR, "  FAILED status %d errno %d [%s] copy & compress %s ---> %s\n", status, errno, strerror(errno), src, dst);
+			summary.failures++;
 			return 0;
 		}
 	}
 	else
 	{
-		int status = 0; //copyfile(src, dst, NULL, COPYFILE_ALL | COPYFILE_RECURSIVE);
+		int status = copy_checked(src, dst, 0);
 		if (status != 0)
 		{
 			debug_log(ASL_LEVEL_ERR, "  FAILED status %d errno %d [%s] copy %s ---> %s\n", status, errno, strerror(errno), src, dst);
+			summary.failures++;
 			return 0;
 		}
 	}
@@ -837,11 +873,12 @@ process_asl_data_store(asl_out_dst_data_t *dst)
 				asprintf(&str, "%s/%s", dst->rotate_dir, e->name);
 				if (str == NULL) return -1;
 
-				filesystem_copy(dst, e->name, str, 0);
+				int copied = filesystem_copy(dst, e->name, str, 0);
 				free(str);
+				if (!copied) { e = e->next; continue; }
 			}
 
-			filesystem_unlink(e->name);
+			if (filesystem_unlink(e->name)) { e = e->next; continue; }
 			store_size -= e->size;
 			e->size = 0;
 		}
@@ -891,8 +928,9 @@ process_asl_data_store(asl_out_dst_data_t *dst)
 			asprintf(&str, "%s/%s", dst->rotate_dir, e->name);
 			if (str == NULL) return -1;
 
-			filesystem_copy(dst, e->name, str, 0);
+			int copied = filesystem_copy(dst, e->name, str, 0);
 			free(str);
+			if (!copied) { e = e->next; continue; }
 		}
 
 		remove_directory(e->name);
@@ -919,8 +957,9 @@ process_asl_data_store(asl_out_dst_data_t *dst)
 			asprintf(&str, "%s/%s", dst->rotate_dir, e->name);
 			if (str == NULL) return -1;
 
-			filesystem_copy(dst, e->name, str, 0);
+			int copied = filesystem_copy(dst, e->name, str, 0);
 			free(str);
+			if (!copied) { e = e->next; continue; }
 		}
 
 		remove_directory(e->name);
@@ -948,11 +987,12 @@ process_asl_data_store(asl_out_dst_data_t *dst)
 			if (str == NULL) return -1;
 
 			/* syslog -x [str] -f [e->name] */
-			filesystem_copy(dst, e->name, str, 0);
+			int copied = filesystem_copy(dst, e->name, str, 0);
 			free(str);
+			if (!copied) { e = e->next; continue; }
 		}
 
-		filesystem_unlink(e->name);
+		if (filesystem_unlink(e->name)) { e = e->next; continue; }
 		store_size -= e->size;
 		e->size = 0;
 
@@ -961,6 +1001,7 @@ process_asl_data_store(asl_out_dst_data_t *dst)
 
 	debug_log(ASL_LEVEL_NOTICE, "Finished BB Scan\n");
 
+	removal_reason = REMOVE_SPACE;
 	if (dst->all_max > 0)
 	{
 		/* if data store is over max_size, delete/archive more YMD files */
@@ -988,11 +1029,12 @@ process_asl_data_store(asl_out_dst_data_t *dst)
 					if (str == NULL) return -1;
 
 					/* syslog -x [str] -f [e->name] */
-					filesystem_copy(dst, e->name, str, 0);
+					int copied = filesystem_copy(dst, e->name, str, 0);
 					free(str);
+					if (!copied) { e = e->next; continue; }
 				}
 
-				filesystem_unlink(e->name);
+				if (filesystem_unlink(e->name)) { e = e->next; continue; }
 				store_size -= e->size;
 				e->size = 0;
 			}
@@ -1015,11 +1057,12 @@ process_asl_data_store(asl_out_dst_data_t *dst)
 					if (str == NULL) return -1;
 
 					/* syslog -x [str] -f [e->name] */
-					filesystem_copy(dst, e->name, str, 0);
+					int copied = filesystem_copy(dst, e->name, str, 0);
 					free(str);
+					if (!copied) { e = e->next; continue; }
 				}
 
-				filesystem_unlink(e->name);
+				if (filesystem_unlink(e->name)) { e = e->next; continue; }
 				store_size -= e->size;
 				e->size = 0;
 			}
@@ -1042,6 +1085,7 @@ process_asl_data_store(asl_out_dst_data_t *dst)
 static int
 module_copy_rename(asl_out_dst_data_t *dst)
 {
+ removal_reason = REMOVE_RELOCATE;
 	asl_out_file_list_t *src_list, *dst_list, *f, *dst_last;
 	char *base, *dst_dir;
 	char fpathsrc[MAXPATHLEN], fpathdst[MAXPATHLEN];
@@ -1159,6 +1203,7 @@ module_copy_rename(asl_out_dst_data_t *dst)
 static int
 module_expire(asl_out_dst_data_t *dst)
 {
+	removal_reason = REMOVE_EXPIRED;
 	asl_out_file_list_t *dst_list, *f;
 	char *base, *dst_dir, fpath[MAXPATHLEN];
 	time_t now, ttl, cutoff;
@@ -1218,6 +1263,7 @@ module_expire(asl_out_dst_data_t *dst)
 static int
 module_check_size(asl_out_dst_data_t *dst)
 {
+	removal_reason = REMOVE_SPACE;
 	asl_out_file_list_t *dst_list, *f, *dst_end;
 	char *base, *dst_dir, fpath[MAXPATHLEN];
 	size_t total;
@@ -1529,7 +1575,10 @@ cli_main(int argc, char *argv[])
 
 	debug_log(ASL_LEVEL_ERR, "aslmanager starting%s\n", (dryrun == 1) ? " dryrun" : "");
 
-	if (work & DO_ASLDB) process_asl_data_store(asl_store_dst);
+	char *summary_path = realpath(asl_store_dst->path, NULL);
+	memset(&summary, 0, sizeof(summary));
+	removal_reason = REMOVE_EXPIRED;
+	if ((work & DO_ASLDB) && process_asl_data_store(asl_store_dst) != 0) summary.failures++;
 
 	if (work & DO_MODULE)
 	{
@@ -1547,9 +1596,38 @@ cli_main(int argc, char *argv[])
 		}
 	}
 
-	asl_out_module_free(mod);
+ if (!dryrun) {
+  asl_store_t *store = NULL;
+  asl_msg_t *message = asl_msg_new(ASL_TYPE_MSG);
+  char value[32];
+  uint32_t rc = ASL_STATUS_NO_MEMORY;
+  if (message) {
+   asl_msg_set_key_val(message, "Sender", "aslmanager");
+   asl_msg_set_key_val(message, "Message", "aslmanager run summary");
+   asl_msg_set_key_val(message, "com.rmxos.aslmanager.record", "summary");
+   snprintf(value, sizeof(value), "%jd", (intmax_t)time(NULL));
+   asl_msg_set_key_val(message, "Time", value);
+#define SUMMARY_FIELD(n) snprintf(value, sizeof(value), "%ju", (uintmax_t)summary.n); asl_msg_set_key_val(message, #n, value);
+   SUMMARY_FIELD(expired_files) SUMMARY_FIELD(expired_bytes)
+   SUMMARY_FIELD(space_files) SUMMARY_FIELD(space_bytes) SUMMARY_FIELD(failures)
+#undef SUMMARY_FIELD
+   rc = summary_path ? asl_store_open_write(summary_path, &store) : ASL_STATUS_INVALID_STORE;
+   if (rc == ASL_STATUS_OK) rc = asl_store_save(store, message);
+   asl_store_close(store);
+   asl_msg_release(message);
+  }
+  if (rc != ASL_STATUS_OK) {
+   fprintf(stderr, "aslmanager: summary write failed status=%u failures=%ju\n", rc, (uintmax_t)summary.failures);
+   free(summary_path);
+   asl_out_module_free(mod);
+   return 1;
+  }
+ }
+ free(summary_path);
+ asl_out_module_free(mod);
 
-	debug_log(ASL_LEVEL_NOTICE, "----------------------------------------\n");
+ debug_log
+(ASL_LEVEL_NOTICE, "----------------------------------------\n");
 	debug_log(ASL_LEVEL_ERR, "aslmanager finished%s\n", (dryrun == 1) ? " dryrun" : "");
 	if (asl_aux_fd >= 0) asl_close_auxiliary_file(asl_aux_fd);
 

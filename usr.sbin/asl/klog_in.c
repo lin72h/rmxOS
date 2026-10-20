@@ -75,7 +75,7 @@ klog_in_init()
 	asldebug("%s: init\n", MY_ID);
 	if (kfd >= 0) return 0;
 
-	kfd = open(_PATH_KLOG, O_RDONLY, 0);
+	kfd = global.kernel_path ? open(global.kernel_path, O_RDWR | O_NONBLOCK | O_NOFOLLOW) : open(_PATH_KLOG, O_RDONLY, 0);
 	if (kfd < 0)
 	{
 		asldebug("%s: couldn't open %s: %s\n", MY_ID, _PATH_KLOG, strerror(errno));

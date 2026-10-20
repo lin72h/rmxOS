@@ -1131,10 +1131,11 @@ _asl_action_save_failed(const char *where, asl_out_module_t *m, asl_out_rule_t *
 	if (r->dst->flags & MODULE_FLAG_SOFT_WRITE) return;
 
 	r->dst->fails++;
+	ASLD_COUNT(file_action_failed);
 	asldebug("%s: %s save to %s failed: %s\n", where, m->name, r->dst->path, asl_core_error(status));
 
 	/* disable further activity after multiple failures */
-	if (r->dst->fails > MAX_FAILURES)
+	if (r->dst->fails >= MAX_FAILURES)
 	{
 		char *str = NULL;
 		asprintf(&str, "[Sender syslogd] [Level 3] [PID %u] [Facility syslog] [Message Disabling module %s writes to %s following %u failures (%s)]", global.pid, m->name, r->dst->path, r->dst->fails, asl_core_error(status));
@@ -1519,6 +1520,7 @@ _act_file_final(asl_out_module_t *m, asl_out_rule_t *r, asl_msg_t *msg)
 
 	if (is_dup == 1)
 	{
+		asld_count_duplicate();
 		if (f_data->last_count == 0)
 		{
 			/* start the timer */
@@ -1712,12 +1714,20 @@ _asl_out_process_message(asl_out_module_t *m, asl_msg_t *msg)
 }
 
 void
-asl_out_message(asl_msg_t *msg)
+asl_out_telemetry(asl_msg_t *msg)
+{
+	asl_msg_retain(msg);
+	dispatch_async(asl_action_queue, ^{ if (!strcmp(asl_msg_get_val_for_key(msg, "com.rmxos.asld.record"), "status")) asld_telemetry_snapshot(msg); db_save_message(msg); asl_msg_release(msg); });
+}
+
+void
+asl_out_message(asl_msg_t *msg, struct asld_delivery *delivery)
 {
 	OSAtomicIncrement32(&global.asl_queue_count);
 	asl_msg_retain(msg);
 
 	dispatch_async(asl_action_queue, ^{
+		asld_delivery_begin(delivery);
 		int ignore = 0;
 		const char *p;
 		time_t now = time(NULL);
@@ -1756,6 +1766,7 @@ asl_out_message(asl_msg_t *msg)
 
 		asl_msg_release(msg);
 		OSAtomicDecrement32(&global.asl_queue_count);
+		asld_delivery_end();
 
 		if ((now - sweep_time) >= IDLE_CLOSE)
 		{
@@ -2053,7 +2064,15 @@ _asl_action_configure()
 	asl_out_module_t *m;
 	uint32_t flags = 0;
 
-	if (global.asl_out_module == NULL) global.asl_out_module = asl_out_module_init();
+	if (global.asl_out_module == NULL) {
+ if (global.private_dir) {
+  char path[PATH_MAX];
+  snprintf(path, sizeof(path), "%s/asl.conf", global.private_dir);
+  FILE *config = fopen(path, "r");
+  if (config) { global.asl_out_module = asl_out_module_init_from_file("com.apple.asl", config); fclose(config); }
+ } else global.asl_out_module = asl_out_module_init();
+}
+
 	if (global.asl_out_module == NULL) return;
 
 	asldebug("%s: init\n", MY_ID);

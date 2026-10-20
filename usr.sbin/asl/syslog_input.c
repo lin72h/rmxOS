@@ -37,7 +37,17 @@ asl_rfc5424_candidate(const char *in, size_t len)
 	size_t i = 1;
 	if (len < 5 || in[0] != '<') return 0;
 	while (i < len && in[i] >= '0' && in[i] <= '9') i++;
-	return i + 2 < len && in[i] == '>' && in[i + 1] == '1' && in[i + 2] == ' ';
+	if (!(i + 2 < len && in[i] == '>' && in[i + 1] == '1' && in[i + 2] == ' ')) return 0;
+	/* A short legacy body such as "1 hello" is not an RFC header. Once
+	 * all five header fields and the SD position exist, invalid fields must
+	 * be refused rather than silently reinterpreted as legacy text. */
+	i += 3;
+	for (unsigned field = 0; field < 5; field++) {
+		while (i < len && in[i] != ' ') i++;
+		if (i == len) return 0;
+		i++;
+	}
+	return i < len;
 }
 
 static int
@@ -88,6 +98,8 @@ rfc_time(asl_msg_t *m, const char *text)
 		if (hours > 23 || minutes > 59) return -1;
 		seconds += (*p == '+' ? -1 : 1) * (hours * 3600 + minutes * 60);
 	} else return -1;
+	/* ASL interprets nonpositive decimal Time as now/relative time. */
+	if (seconds <= 0) return 0;
 	char value[40];
 	snprintf(value, sizeof(value), "%lld", (long long)seconds);
 	if (asl_msg_set_key_val(m, ASL_KEY_TIME, value) != 0) return -1;
@@ -178,6 +190,7 @@ asl_rfc5424_parse(const char *in, size_t len)
 	}
 	if (rfc_set(m, "RFC5424.StructuredData", sd, (size_t)(p - sd)) != 0) goto invalid;
 	if (p < end && *p++ != ' ') goto invalid;
+	if (end - p >= 3 && memcmp(p, "\xef\xbb\xbf", 3) == 0) p += 3;
 	if (rfc_set(m, ASL_KEY_MSG, p, (size_t)(end - p)) != 0) goto invalid;
 	return m;
 invalid:

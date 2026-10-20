@@ -30,6 +30,7 @@
 #include <time.h>
 #include <asl.h>
 #include <asl_msg.h>
+#include "telemetry.h"
 #include <asl_core.h>
 #include <asl_private.h>
 #include <asl_store.h>
@@ -109,6 +110,7 @@ typedef struct
 
 struct global_s
 {
+	char *private_dir, *store_path, *bsd_config, *socket_path, *kernel_path;
 	OSSpinLock lock;
 	int client_count;
 	int disaster_occurred;
@@ -182,8 +184,8 @@ const char *asl_syslog_faciliy_num_to_name(int num);
 asl_msg_t *asl_input_parse(const char *in, int len, char *rhost, uint32_t source);
 
 void process_message(asl_msg_t *msg, uint32_t source);
-void asl_out_message(asl_msg_t *msg);
-void bsd_out_message(asl_msg_t *msg);
+void asl_out_message(asl_msg_t *msg, struct asld_delivery *delivery);
+void bsd_out_message(asl_msg_t *msg, struct asld_delivery *delivery);
 int control_set_param(const char *s, bool eval);
 int asl_action_control_set_param(const char *s);
 

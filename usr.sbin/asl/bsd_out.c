@@ -40,6 +40,8 @@ struct _not_empty;
 #include <fcntl.h>
 #include <errno.h>
 #include <netdb.h>
+#include <glob.h>
+#include <ctype.h>
 #include <pthread.h>
 #include <notify.h>
 #include "daemon.h"
@@ -251,115 +253,68 @@ _syslog_dst_close(struct config_rule *r)
 	}
 }
 
-static char *
-_clean_facility_name(char *s)
+static void
+_free_rule(struct config_rule *r)
 {
-	uint32_t len;
-	char *p, *out;
-
-	if (s == NULL) return NULL;
-	len = strlen(s);
-	if (len == 0) return NULL;
-
-	p = s;
-
-	if ((*s == '\'') || (*s == '"'))
-	{
-		len--;
-		p++;
-		if (p[len - 1] == *s) len --;
-	}
-
-	out = calloc(1, len + 1);
-	if (out == NULL) return NULL;
-
-	memcpy(out, p, len);
-	return out;
+ if (!r) return;
+ for (uint32_t i = 0; i < r->count; i++) free(r->facility[i]);
+ free(r->facility); free(r->fac_prefix_len); free(r->pri); free(r->dst); free(r);
 }
 
 static int
 _parse_line(char *s)
 {
-	char **semi, **comma, *star;
-	int i, j, n, lasts, lastc, pri;
-	struct config_rule *out;
-
-	if (s == NULL) return -1;
-	while ((*s == ' ') || (*s == '\t')) s++;
-	if (*s == '#') return -1;
-
-	semi = explode(s, "; \t");
-
-	if (semi == NULL) return -1;
-	out = (struct config_rule *)calloc(1, sizeof(struct config_rule));
-	if (out == NULL) return -1;
-	out->fd = -1;
-
-	n = 0;
-	lasts = -1;
-	for (i = 0; semi[i] != NULL; i++)
-	{
-		if (semi[i][0] == '\0') continue;
-		n++;
-		lasts = i;
-	}
-
-	out->dst = strdup(semi[lasts]);
-	if (out->dst == NULL) return -1;
-
-	for (i = 0; i < lasts; i++)
-	{
-		if (semi[i][0] == '\0') continue;
-		comma = explode(semi[i], ",.");
-		lastc = -1;
-		for (j = 0; comma[j] != NULL; j++)
-		{
-			if (comma[j][0] == '\0') continue;
-			lastc = j;
-		}
-
-		for (j = 0; j < lastc; j++)
-		{
-			if (comma[j][0] == '\0') continue;
-			pri = _level_for_name(comma[lastc]);
-			if (pri == -1) continue;
-
-			if (out->count == 0)
-			{
-				out->facility = (char **)calloc(1, sizeof(char *));
-				out->fac_prefix_len = (uint32_t *)calloc(1, sizeof(uint32_t));
-				out->pri = (int *)calloc(1, sizeof(int));
-			}
-			else
-			{
-				out->facility = (char **)reallocf(out->facility, (out->count + 1) * sizeof(char *));
-				out->fac_prefix_len = (uint32_t *)reallocf(out->fac_prefix_len, (out->count + 1) * sizeof(uint32_t));
-				out->pri = (int *)reallocf(out->pri, (out->count + 1) * sizeof(int));
-			}
-
-			if (out->facility == NULL) return -1;
-			if (out->fac_prefix_len == NULL) return -1;
-			if (out->pri == NULL) return -1;
-
-			out->facility[out->count] = _clean_facility_name(comma[j]);
-			if (out->facility[out->count] == NULL) return -1;
-
-			out->fac_prefix_len[out->count] = 0;
-			star = strchr(out->facility[out->count], '*');
-			if (star != NULL) out->fac_prefix_len[out->count] = (uint32_t)(star - out->facility[out->count]);
-
-			out->pri[out->count] = pri;
-			out->count++;
-		}
-
-		free_string_list(comma);
-	}
-
-	free_string_list(semi);
-
-	TAILQ_INSERT_TAIL(&bsd_out_rule, out, entries);
-
-	return 0;
+ char *selector, *dst, *extra, *save, *part, *walk;
+ struct config_rule *out = NULL;
+ if (!s) return -1;
+ while (isspace((unsigned char)*s)) s++;
+ if (!*s || *s == '#') return 0;
+ selector = strtok_r(s, " \t", &save);
+ dst = strtok_r(NULL, " \t", &save);
+ extra = strtok_r(NULL, " \t", &save);
+ if (!dst || (extra && extra[0] != '#')) return -1;
+ out = calloc(1, sizeof(*out));
+ if (!out) return -1;
+ out->fd = -1;
+ /* FreeBSD's leading '-' suppresses sync for a file destination. */
+ if (dst[0] == '-' && dst[1] == '/') dst++;
+ out->dst = strdup(dst);
+ if (!out->dst) goto bad;
+ walk = selector;
+ while ((part = strsep(&walk, ";")) != NULL) {
+  char *dot = strchr(part, '.');
+  if (!dot || dot == part || strchr(dot + 1, '.')) goto bad;
+  *dot++ = 0;
+  int exact = (*dot == '=');
+  if (exact) dot++;
+  int level = _level_for_name(dot);
+  if (level == -1 || (exact && (level < 0 || !strcmp(dot, "*")))) goto bad;
+  char *facility;
+  while ((facility = strsep(&part, ",")) != NULL) {
+   if (!*facility || (strcmp(facility, "*") && asl_syslog_faciliy_name_to_num(facility) < 0)) goto bad;
+   uint32_t n = out->count;
+   char **f = realloc(out->facility, (n + 1) * sizeof(*f));
+   if (!f) goto bad;
+   out->facility = f;
+   uint32_t *prefix = realloc(out->fac_prefix_len, (n + 1) * sizeof(*prefix));
+   if (!prefix) goto bad;
+   out->fac_prefix_len = prefix;
+   int *pri = realloc(out->pri, (n + 1) * sizeof(*pri));
+   if (!pri) goto bad;
+   out->pri = pri;
+   out->facility[n] = strdup(!strcmp(facility, "*") ? "*" : asl_syslog_faciliy_num_to_name(asl_syslog_faciliy_name_to_num(facility)));
+   if (!out->facility[n]) goto bad;
+   out->fac_prefix_len[n] = 0;
+   out->pri[n] = level + (exact ? 8 : 0);
+   out->count++;
+  }
+ }
+ if (!out->count) goto bad;
+ TAILQ_INSERT_TAIL(&bsd_out_rule, out, entries);
+ return 0;
+bad:
+ _free_rule(out);
+ return -1;
 }
 
 static int
@@ -558,6 +513,7 @@ _bsd_send(asl_msg_t *msg, struct config_rule *r, char **out, char **fwd, time_t 
 
 	if (is_dup == 1)
 	{
+		asld_count_duplicate();
 		r->last_count++;
 	}
 	else
@@ -592,8 +548,6 @@ _bsd_rule_match(asl_msg_t *msg, struct config_rule *r)
 	{
 		if (r->pri[i] == -1) continue;
 
-		if ((test == 1) && (r->pri[i] >= 0)) continue;
-		if ((test == 0) && (r->pri[i] == -2)) continue;
 
 		f = 0;
 		val = asl_msg_get_val_for_key(msg, ASL_KEY_FACILITY);
@@ -626,7 +580,8 @@ _bsd_rule_match(asl_msg_t *msg, struct config_rule *r)
 		pri = atoi(val);
 		if (pri < 0) continue;
 
-		if (pri <= r->pri[i]) test = 1;
+		/* Later selectors override earlier selectors for the same facility. */
+		test = r->pri[i] >= 8 ? pri == r->pri[i] - 8 : pri <= r->pri[i];
 	}
 
 	return test;
@@ -658,7 +613,7 @@ _bsd_match_and_send(asl_msg_t *msg)
 }
 
 void
-bsd_out_message(asl_msg_t *msg)
+bsd_out_message(asl_msg_t *msg, struct asld_delivery *delivery)
 {
 	if (msg == NULL) return;
 
@@ -666,9 +621,11 @@ bsd_out_message(asl_msg_t *msg)
 	asl_msg_retain((asl_msg_t *)msg);
 
 	dispatch_async(bsd_out_queue, ^{
+		asld_delivery_begin(delivery);
 		_bsd_match_and_send(msg);
 		asl_msg_release((asl_msg_t *)msg);
 		OSAtomicDecrement32(&global.bsd_queue_count);
+		asld_delivery_end();
 	});
 }
 
@@ -698,23 +655,56 @@ _bsd_close_idle_files()
 }
 
 static int
+_read_config(const char *confname, unsigned depth)
+{
+ FILE *cf = fopen(confname, "r");
+ if (!cf) return 1;
+ char *line;
+ unsigned number = 0;
+ while ((line = get_line_from_file(cf)) != NULL) {
+  number++;
+  char *p = line;
+  while (isspace((unsigned char)*p)) p++;
+  int rejected = 0;
+  if (!strncmp(p, "include", 7) && isspace((unsigned char)p[7])) {
+   char *save, *dir = strtok_r(p + 7, " \t", &save);
+   char *extra = strtok_r(NULL, " \t", &save);
+   if (!dir || (extra && *extra != '#') || depth >= 16) rejected = 1;
+   else {
+    char pattern[PATH_MAX];
+    glob_t files;
+    memset(&files, 0, sizeof(files));
+    int length = snprintf(pattern, sizeof(pattern), "%s/*.conf", dir);
+    if (length < 0 || (size_t)length >= sizeof(pattern)) rejected = 1;
+    else {
+     int rc = glob(pattern, 0, NULL, &files);
+     if (rc != 0 && rc != GLOB_NOMATCH) rejected = 1;
+     if (!rc) for (size_t i = 0; i < files.gl_pathc; i++)
+      if (_read_config(files.gl_pathv[i], depth + 1)) rejected = 1;
+    }
+    globfree(&files);
+   }
+  } else if (!strcmp(p, "!*")) {
+   /* Reset marker carries no routing state; program blocks are unsupported. */
+  } else rejected = _parse_line(p) != 0;
+  if (rejected) {
+   ASLD_COUNT(config_rejected);
+   /* Exactly one diagnostic per rejected source line, never a destination. */
+   char *notice = NULL;
+   asprintf(&notice, "[Sender asld] [Facility syslog] [Level 4] [Message Unsupported syslog.conf line %s:%u]", confname, number);
+   internal_log_message(notice);
+   free(notice);
+  }
+  free(line);
+ }
+ fclose(cf);
+ return 0;
+}
+
+static int
 _parse_config_file(const char *confname)
 {
-	FILE *cf;
-	char *line;
-
-	cf = fopen(confname, "r");
-	if (cf == NULL) return 1;
-
-	while (NULL != (line = get_line_from_file(cf)))
-	{
-		_parse_line(line);
-		free(line);
-	}
-
-	fclose(cf);
-
-	return 0;
+ return _read_config(confname, 0);
 }
 
 int
@@ -725,7 +715,7 @@ bsd_out_init(void)
 	asldebug("%s: init\n", MY_ID);
 
 	TAILQ_INIT(&bsd_out_rule);
-	_parse_config_file(_PATH_SYSLOG_CONF);
+	_parse_config_file(global.bsd_config ? global.bsd_config : _PATH_SYSLOG_CONF);
 
 	dispatch_once(&once, ^{
 		bsd_out_queue = dispatch_queue_create("BSD Out Queue", NULL);

@@ -93,7 +93,6 @@ static vproc_transaction_t vproc_trans = {0};
 
 static time_t quota_time = 0;
 static int32_t kern_quota;
-static int32_t kern_level;
 
 static const char *kern_notify_key[] = 
 {
@@ -109,41 +108,46 @@ static const char *kern_notify_key[] =
 
 static int kern_notify_token[8] = {-1, -1, -1, -1, -1, -1, -1, -1 };
 
+static uint64_t kern_dropped, wq_dropped;
+static bool wq_draining;
+static pthread_mutex_t admission_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* Called on the work queue. Notices report completed episodes, including a
+ * quiet second after the final kernel packet (no next packet is required). */
+void
+asld_telemetry_flush(void)
+{
+ time_t now = time(NULL);
+ if (kern_dropped && now != quota_time) {
+  asld_telemetry_record("kernel quota exceeded", "dropped_kern_quota", kern_dropped);
+  kern_dropped = 0;
+ }
+ pthread_mutex_lock(&admission_lock);
+ uint64_t count = 0;
+ if (wq_draining && __atomic_load_n(&global.work_queue_size, __ATOMIC_RELAXED) <= global.max_work_queue_size / 2) {
+  count = wq_dropped;
+  wq_dropped = 0;
+  wq_draining = false;
+ }
+ pthread_mutex_unlock(&admission_lock);
+ if (count) asld_telemetry_record("work queue drained", "dropped_wq", count);
+}
+
 static uint32_t
 kern_quota_check(time_t now, asl_msg_t *msg, uint32_t level)
 {
-	char *str, lstr[2];
-
-	if (msg == NULL) return VERIFY_STATUS_INVALID_MESSAGE;
-	if (global.mps_limit == 0) return VERIFY_STATUS_OK;
-
-	if (quota_time != now)
-	{
-		kern_quota = global.mps_limit;
-		kern_level = 7;
-		quota_time = now;
-	}
-
-	if (level < kern_level) kern_level = level;
-	if (kern_quota > 0) kern_quota--;
-
-	if (kern_quota > 0) return VERIFY_STATUS_OK;
-	if (kern_quota < 0)	return VERIFY_STATUS_EXCEEDED_QUOTA;
-
-	kern_quota = -1;
-
-	str = NULL;
-	asprintf(&str, QUOTA_KERN_EXCEEDED_MESSAGE, global.mps_limit);
-	if (str != NULL)
-	{
-		asl_msg_set_key_val(msg, ASL_KEY_MSG, str);
-		free(str);
-		lstr[0] = kern_level + '0';
-		lstr[1] = 0;
-		asl_msg_set_key_val(msg, ASL_KEY_LEVEL, lstr);
-	}
-
-	return VERIFY_STATUS_OK;
+ if (msg == NULL) return VERIFY_STATUS_INVALID_MESSAGE;
+ if (global.mps_limit == 0) return VERIFY_STATUS_OK;
+ if (quota_time != now) {
+  if (kern_dropped) asld_telemetry_record("kernel quota exceeded", "dropped_kern_quota", kern_dropped);
+  kern_dropped = 0;
+  kern_quota = global.mps_limit;
+  quota_time = now;
+ }
+ if (kern_quota > 0) { kern_quota--; return VERIFY_STATUS_OK; }
+ kern_dropped++;
+ ASLD_COUNT(dropped_kern_quota);
+ return VERIFY_STATUS_EXCEEDED_QUOTA;
 }
 
 static const char *
@@ -756,45 +760,24 @@ void
 process_message(asl_msg_t *msg, uint32_t source)
 {
 	int64_t msize = 0;
-	static bool wq_draining = false;
 	bool is_control = false;
 	asl_msg_t *x;
 
-	if (msg == NULL) return;
-
-	is_control = asl_check_option(msg, ASL_OPT_CONTROL) != 0;
-
-	if ((!is_control) && wq_draining)
-	{
-		if (global.work_queue_size >= (global.max_work_queue_size / 2))
-		{
-			asldebug("Work queue draining: dropped message.\n");
-			asl_msg_release(msg);
-			return;
-		}
-		else
-		{
-			asldebug("Work queue re-enabled at 1/2 max.  size %llu  max %llu\n", global.work_queue_size, global.max_work_queue_size);
-			wq_draining = false;
-		}
-	}
-
-	for (x = msg; x != NULL; x = x->next) msize += x->mem_size;
-
-	if ((global.work_queue_size + msize) >= global.max_work_queue_size)
-	{
-		char *str = NULL;
-
-		wq_draining = true;
-		asl_msg_release(msg);
-
-		asldebug("Work queue disabled.  msize %llu  size %llu  max %llu\n", msize, global.work_queue_size + msize, global.max_work_queue_size);
-		asprintf(&str, "[Sender syslogd] [Level 2] [PID %u] [Message Internal work queue size limit exceeded - dropping messages] [UID 0] [UID 0] [Facility syslog]", global.pid);
-		msg = asl_msg_from_string(str);
-		free(str);
-	}
-
-	OSAtomicAdd64(msize, &global.work_queue_size);
+ if (msg == NULL) { ASLD_COUNT(dropped_parse); return; }
+ is_control = asl_check_option(msg, ASL_OPT_CONTROL) != 0;
+ for (x = msg; x != NULL; x = x->next) msize += x->mem_size;
+ pthread_mutex_lock(&admission_lock);
+ uint64_t size = __atomic_load_n(&global.work_queue_size, __ATOMIC_RELAXED);
+ if (!is_control && (wq_draining || (size + msize >= global.max_work_queue_size))) {
+  wq_draining = true;
+  wq_dropped++;
+  ASLD_COUNT(dropped_wq);
+  pthread_mutex_unlock(&admission_lock);
+  asl_msg_release(msg);
+  return;
+ }
+ __atomic_fetch_add(&global.work_queue_size, msize, __ATOMIC_RELAXED);
+ pthread_mutex_unlock(&admission_lock);
 	OSAtomicIncrement32(&global.work_queue_count);
 	dispatch_async(global.work_queue, ^{
 		int32_t kplevel;
@@ -821,13 +804,18 @@ process_message(asl_msg_t *msg, uint32_t source)
 
 			if ((uid == 0) && is_control) control_message(msg);
 
-			/* send message to output modules */
-			asl_out_message(msg);
+			/* Share one duplicate-accounting token across all destinations. */
+			struct asld_delivery *delivery = asld_delivery_new(global.bsd_out_enabled ? 2 : 1);
+			if (delivery == NULL) { ASLD_COUNT(dropped_parse); }
+			else {
+			asl_out_message(msg, delivery);
 #if !TARGET_IPHONE_SIMULATOR
-			if (global.bsd_out_enabled) bsd_out_message(msg);
+			if (global.bsd_out_enabled) bsd_out_message(msg, delivery);
 #endif
+			}
 		}
 
+		if (status != VERIFY_STATUS_OK && status != VERIFY_STATUS_EXCEEDED_QUOTA) ASLD_COUNT(dropped_parse);
 		asl_msg_release(msg);
 
 		OSAtomicAdd64(-1ll * msize, &global.work_queue_size);

@@ -41,7 +41,7 @@
 #include "asl_input.h"
 
 /* Datagrams larger than the supported libc syslog bound are discarded. */
-uint64_t bsd_in_truncated_messages;
+/* Counter storage is shared with the telemetry snapshot. */
 
 static int sock = -1;
 static dispatch_source_t in_src;
@@ -54,7 +54,7 @@ bsd_in_acceptmsg(int fd)
 	char line[ASL_SOCKET_MAX + 1];
 	asl_msg_t *m;
 
-	n = asl_bsd_receive(fd, line, &bsd_in_truncated_messages);
+	n = asl_bsd_receive(fd, line, &asld_counters.bsd_in_truncated);
 	if (n <= 0) return;
 
 	m = asl_input_parse(line, n, NULL, SOURCE_BSD_SOCKET);
@@ -80,7 +80,19 @@ bsd_in_init()
 	asldebug("%s: init\n", MY_ID);
 	if (sock >= 0) return -1;
 
+ if (global.socket_path) {
+  struct sockaddr_un address;
+  memset(&address, 0, sizeof(address));
+  address.sun_family = AF_UNIX;
+  if (strlcpy(address.sun_path, global.socket_path, sizeof(address.sun_path)) >= sizeof(address.sun_path)) return -1;
+  address.sun_len = SUN_LEN(&address);
+  sock = socket(AF_UNIX, SOCK_DGRAM, 0);
+  if (sock < 0) return -1;
+  if (bind(sock, (struct sockaddr *)&address, address.sun_len)) { close(sock); sock = -1; return -1; }
+  goto socket_ready;
+ }
 	if (global.launch_dict == NULL)
+
 	{
 		asldebug("%s: launchd dict is NULL\n", MY_ID);
 		return -1;
@@ -121,6 +133,7 @@ bsd_in_init()
 
 	sock = launch_data_get_fd(fd_dict);
 
+socket_ready:
 	rbufsize = 128 * 1024;
 	len = sizeof(rbufsize);
 
