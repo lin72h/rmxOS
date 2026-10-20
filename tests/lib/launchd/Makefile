@@ -1,6 +1,6 @@
 TESTSDIR= ${TESTSBASE}/lib/launchd
 KYUAFILE= yes
-SCRIPTS+= launchd_consumer_test legacy_ipc_test reply_ownership_test
+SCRIPTS+= launchd_consumer_test legacy_ipc_test reply_ownership_test receive_capacity_test
 SCRIPTSDIR= ${TESTSDIR}
 all: coordination.o libop484_launchd.so
 ZIG?= zig
@@ -23,3 +23,6 @@ op674_reply.h op674_replyUser.c: ${.CURDIR}/op674_reply.defs
 reply_ownership_test: ${.CURDIR}/reply_ownership.zig ${.CURDIR}/fd_inventory.zig op674_reply.h op674_replyUser.c ${SRCTOP}/usr.sbin/notifyd/mach_ownership.c ${SRCTOP}/usr.sbin/notifyd/mach_ownership.h
 	${ZIG} build-exe ${.CURDIR}/reply_ownership.zig ${ATF_C_ARCHIVE} ${MACH_SO} ${SYSROOT}/usr/lib/liblaunch.so.5 ${SYSROOT}/usr/lib/libxpc.so.5 ${SYSROOT}/usr/lib/libdispatch.so.5 ${SYSROOT}/lib/libthr.so.3 -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -I. -cflags -D__MigTypeCheck=1 -- op674_replyUser.c ${SRCTOP}/usr.sbin/notifyd/mach_ownership.c -femit-bin=${.TARGET}
 CLEANFILES+= op674_reply.h op674_replyUser.c
+
+receive_capacity_test: ${.CURDIR}/receive_capacity.zig
+	${ZIG} build-exe ${.CURDIR}/receive_capacity.zig ${ATF_C_ARCHIVE} ${MACH_SO} ${SYSROOT}/usr/lib/liblaunch.so.5 -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -femit-bin=${.TARGET}

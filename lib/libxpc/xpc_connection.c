@@ -64,6 +64,8 @@ static void xpc_connection_dispatch_event(struct xpc_connection *conn,
     xpc_object_t event, mach_port_t remote_port);
 static void xpc_connection_invoke_event(void *context);
 static void xpc_connection_invoke_pending(void *context);
+static void xpc_connection_dispatch_pending(struct xpc_connection *conn,
+    struct xpc_pending_call *call);
 static void xpc_connection_interrupt(struct xpc_connection *conn);
 static void xpc_connection_arm_send_source(struct xpc_connection *conn);
 static bool xpc_connection_can_reconnect(struct xpc_connection *conn);
@@ -362,8 +364,13 @@ xpc_connection_send_message_with_reply(xpc_connection_t xconn,
 	if (call == NULL || send == NULL) {
 		free(call);
 		free(send);
-		/* No pending entry exists: complete directly, outside every lock. */
-		handler(XPC_ERROR_CONNECTION_INVALID);
+		/* Dispatch copies the handler; the completion owns its queue reference. */
+		dispatch_queue_t queue = targetq ? targetq : conn->xc_target_queue;
+		dispatch_retain(queue);
+		dispatch_async(queue, ^{
+			handler(XPC_ERROR_CONNECTION_INVALID);
+			dispatch_release(queue);
+		});
 		return;
 	}
 	call->xp_id = XPC_CONNECTION_NEXT_ID(conn);
@@ -381,7 +388,7 @@ xpc_connection_send_message_with_reply(xpc_connection_t xconn,
 		xpc_release(send->xsc_connection);
 		free(send);
 		call->xp_response = xpc_retain(XPC_ERROR_CONNECTION_INVALID);
-		xpc_connection_invoke_pending(call);
+		xpc_connection_dispatch_pending(conn, call);
 		return;
 	}
 	TAILQ_INSERT_TAIL(&conn->xc_pending, call, xp_link);
@@ -393,12 +400,12 @@ xpc_object_t
 xpc_connection_send_message_with_reply_sync(xpc_connection_t conn,
     xpc_object_t message)
 {
-	struct xpc_connection *xconn;
 	__block xpc_object_t result = NULL;
 	dispatch_semaphore_t sem = dispatch_semaphore_create(0);
 
-	xconn = conn;
-	xpc_connection_send_message_with_reply(conn, message, xconn->xc_recv_queue,
+	/* The connection's receive queue may be suspended, including at cancel. */
+	xpc_connection_send_message_with_reply(conn, message,
+	    dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0),
 	    ^(xpc_object_t o) {
 		result = xpc_retain(o);
 		dispatch_semaphore_signal(sem);
@@ -607,11 +614,22 @@ xpc_connection_invoke_pending(void *context)
 	free(call);
 }
 
+/* Called only by the unique owner of a detached pending entry. */
+static void
+xpc_connection_dispatch_pending(struct xpc_connection *conn,
+    struct xpc_pending_call *call)
+{
+	if (call->xp_queue == NULL) {
+		call->xp_queue = conn->xc_target_queue;
+		dispatch_retain(call->xp_queue);
+	}
+	dispatch_async_f(call->xp_queue, call, xpc_connection_invoke_pending);
+}
+
 static void
 xpc_connection_complete_pending(struct xpc_connection *conn, xpc_object_t error)
 {
 	struct xpc_pending_call *call;
-	dispatch_queue_t queue;
 	TAILQ_HEAD(, xpc_pending_call) pending;
 
 	TAILQ_INIT(&pending);
@@ -621,8 +639,7 @@ xpc_connection_complete_pending(struct xpc_connection *conn, xpc_object_t error)
 	while ((call = TAILQ_FIRST(&pending)) != NULL) {
 		TAILQ_REMOVE(&pending, call, xp_link);
 		call->xp_response = xpc_retain(error);
-		queue = call->xp_queue ? call->xp_queue : conn->xc_target_queue;
-		dispatch_async_f(queue, call, xpc_connection_invoke_pending);
+		xpc_connection_dispatch_pending(conn, call);
 	}
 }
 
@@ -1040,7 +1057,6 @@ xpc_connection_recv_message(void *context)
 {
 	struct xpc_pending_call *call;
 	struct xpc_connection *conn, *peer;
-	dispatch_queue_t queue;
 	xpc_handler_t handler;
 	xpc_object_t result;
 	mach_port_t remote;
@@ -1123,11 +1139,8 @@ xpc_connection_recv_message(void *context)
 				TAILQ_REMOVE(&conn->xc_pending, call, xp_link);
 				call->xp_response = result;
 				call->xp_remote_port = remote;
-				queue = call->xp_queue ? call->xp_queue :
-				    conn->xc_target_queue;
 				pthread_mutex_unlock(&conn->xc_pending_lock);
-				dispatch_async_f(queue, call,
-				    xpc_connection_invoke_pending);
+				xpc_connection_dispatch_pending(conn, call);
 				return;
 			}
 		}

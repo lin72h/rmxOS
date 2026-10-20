@@ -3,3 +3,4 @@ test_suite("FreeBSD")
 atf_test_program{name="launchd_consumer_test"}
 atf_test_program{name="legacy_ipc_test"}
 atf_test_program{name="reply_ownership_test"}
+atf_test_program{name="receive_capacity_test"}

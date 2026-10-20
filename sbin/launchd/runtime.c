@@ -1275,7 +1275,10 @@ launchd_runtime2(mach_msg_size_t msg_size)
 		xpc_object_t request = NULL;
 
 		int result;
-		result = xpc_pipe_try_receive(ipc_port_set, &request, &recvp, launchd_mig_demux, msg_size, 0);
+		/* msg_size bounds the MIG body; the receiver also requests audit data.
+		 * xpc_pipe_try_receive clamps the total to its backing buffer. */
+		result = xpc_pipe_try_receive(ipc_port_set, &request, &recvp, launchd_mig_demux,
+		    msg_size + sizeof(mach_msg_audit_trailer_t), 0);
 		if (result != 1)
 			syslog(LOG_ERR, "result=%d", result);
 		if (result == 0 && request) {

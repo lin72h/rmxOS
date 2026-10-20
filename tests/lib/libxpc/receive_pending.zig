@@ -274,13 +274,231 @@ fn nonmig(_: [*c]const c.atf_tc_t) callconv(.c) void {
     }
     need(c.mach_port_destroy(c.mach_task_self(), dst) == 0 and c.mach_port_destroy(c.mach_task_self(), reply) == 0, "non-MIG ports cleanup");
 }
+extern fn dispatch_queue_set_specific(O, O, O, O) void;
+extern fn dispatch_get_specific(O) O;
+extern fn dispatch_set_context(O, O) void;
+extern fn dispatch_set_finalizer_f(O, *const fn (O) callconv(.c) void) void;
+extern fn xpc_connection_set_context(O, O) void;
+extern fn xpc_connection_set_finalizer_f(O, *const fn (O) callconv(.c) void) void;
+extern fn op746_fail_audit_alloc() void;
+extern fn xpc_array_create(O, usize) O;
+const Gate = struct { entered: c.sem_t, release: c.sem_t };
+fn post(ctx: O) callconv(.c) void {
+    const sem: *c.sem_t = @ptrCast(@alignCast(ctx.?));
+    _ = c.sem_post(sem);
+}
+fn blockQueue(ctx: O) callconv(.c) void {
+    const gate: *Gate = @ptrCast(@alignCast(ctx.?));
+    _ = c.sem_post(&gate.entered);
+    wait(&gate.release);
+}
+fn initSem(sem: *c.sem_t) void {
+    need(c.sem_init(sem, 0, 0) == 0, "semaphore initialization");
+}
+fn ownedTarget(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const queue = dispatch_queue_create("op746.owned", null);
+    const conn = xpc_connection_create(null, queue);
+    const message = xpc_dictionary_create(null, null, 0);
+    need(queue != null and conn != null and message != null, "owned queue setup");
+    var gate: Gate = undefined;
+    var done: c.sem_t = undefined;
+    var destroyed: c.sem_t = undefined;
+    var queueDestroyed: c.sem_t = undefined;
+    for ([_]*c.sem_t{ &gate.entered, &gate.release, &done, &destroyed, &queueDestroyed }) |sem| initSem(sem);
+    xpc_connection_set_context(conn, &destroyed);
+    xpc_connection_set_finalizer_f(conn, &post);
+    dispatch_set_context(queue, &queueDestroyed);
+    dispatch_set_finalizer_f(queue, &post);
+    dispatch_async_f(queue, &gate, &blockQueue);
+    wait(&gate.entered);
+    // Drop the creator's queue reference. Only connection/completion own it.
+    dispatch_release(queue);
+    const sendq = op500_send_queue(conn);
+    dispatch_suspend(sendq);
+    var slot = Slot{ .done = &done };
+    op500_reply(conn, message, null, &slot, &handler);
+    xpc_connection_cancel(conn);
+    dispatch_resume(sendq);
+    dispatch_sync_f(sendq, null, &empty);
+    xpc_release(conn);
+    wait(&destroyed);
+    need(@atomicLoad(u32, &slot.calls, .seq_cst) == 0, "blocker holds completion after connection destruction");
+    _ = c.sem_post(&gate.release);
+    wait(&done);
+    wait(&queueDestroyed);
+    need(slot.calls == 1 and slot.invalid == 1, "owned target completion exactly once");
+    _ = c.printf("queue_owned_target expected_handlers=1 observed_handlers=%u connection_destroyed_before_release=1 queue_finalized=1\n", slot.calls);
+    xpc_release(message);
+    for ([_]*c.sem_t{ &gate.entered, &gate.release, &done, &destroyed, &queueDestroyed }) |sem| _ = c.sem_destroy(sem);
+}
+var specific_key: u8 = 0;
+var specific_value: u8 = 0;
+const QueueSlot = struct { slot: Slot, returned: u32 = 0, on_queue: u32 = 0, after_return: u32 = 0 };
+fn queuedHandler(ctx: O, reply: O) callconv(.c) void {
+    const state: *QueueSlot = @ptrCast(@alignCast(ctx.?));
+    state.on_queue = @intFromBool(dispatch_get_specific(&specific_key) == @as(O, &specific_value));
+    state.after_return = @atomicLoad(u32, &state.returned, .seq_cst);
+    handler(&state.slot, reply);
+}
+fn failureQueue(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const queue = dispatch_queue_create("op746.failures", null);
+    dispatch_queue_set_specific(queue, &specific_key, &specific_value, null);
+    var done: c.sem_t = undefined;
+    initSem(&done);
+    for (0..2) |kind| {
+        const conn = xpc_connection_create(null, queue);
+        const message = xpc_dictionary_create(null, null, 0);
+        need(conn != null and message != null, "failure queue setup");
+        if (kind == 0) xpc_connection_cancel(conn) else op736_fail_pending_alloc();
+        var state = QueueSlot{ .slot = .{ .done = &done } };
+        dispatch_suspend(queue);
+        op500_reply(conn, message, queue, &state, &queuedHandler);
+        @atomicStore(u32, &state.returned, 1, .seq_cst);
+        need(@atomicLoad(u32, &state.slot.calls, .seq_cst) == 0, "failure completion is asynchronous");
+        dispatch_resume(queue);
+        wait(&done);
+        dispatch_sync_f(queue, null, &empty);
+        need(state.slot.calls == 1 and state.slot.invalid == 1 and state.on_queue == 1 and state.after_return == 1, "failure on requested queue after return, exactly once");
+        _ = c.printf("failure_queue kind=%zu expected_handlers=1 observed_handlers=%u expected_queue=1 observed_queue=%u expected_after_return=1 observed_after_return=%u\n", kind, state.slot.calls, state.on_queue, state.after_return);
+        xpc_connection_cancel(conn);
+        xpc_release(conn);
+        xpc_release(message);
+    }
+    dispatch_release(queue);
+    _ = c.sem_destroy(&done);
+}
+const SyncState = struct { conn: O, message: O, started: c.sem_t, done: c.sem_t, invalid: bool = false };
+fn syncWork(ctx: O) callconv(.c) void {
+    const state: *SyncState = @ptrCast(@alignCast(ctx.?));
+    _ = c.sem_post(&state.started);
+    const result = xpc_connection_send_message_with_reply_sync(state.conn, state.message);
+    state.invalid = result == @as(O, @ptrCast(&_xpc_error_connection_invalid));
+    xpc_release(result);
+    _ = c.sem_post(&state.done);
+}
+extern fn op500_recv_queue(O) O;
+fn syncSuspended(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const queue = dispatch_queue_create("op746.sync", null);
+    const conn = xpc_connection_create(null, queue);
+    const message = xpc_dictionary_create(null, null, 0);
+    need(conn != null and message != null, "suspended sync setup");
+    // This additional fixture suspension remains even when cancel balances the
+    // connection's own suspension. A completion on recv_queue would hang here.
+    const recvq = op500_recv_queue(conn);
+    dispatch_suspend(recvq);
+    const worker = dispatch_queue_create("op746.sync.caller", null);
+    var state = SyncState{ .conn = conn, .message = message, .started = undefined, .done = undefined };
+    initSem(&state.started);
+    initSem(&state.done);
+    dispatch_async_f(worker, &state, &syncWork);
+    wait(&state.started);
+    xpc_connection_cancel(conn);
+    wait(&state.done);
+    need(state.invalid, "synchronous suspended/cancelled call returns invalid");
+    dispatch_sync_f(worker, null, &empty);
+    dispatch_resume(recvq);
+    dispatch_sync_f(recvq, null, &empty);
+    _ = c.printf("sync_suspended expected_invalid=1 observed_invalid=%u recv_queue_held=1\n", @as(u32, @intFromBool(state.invalid)));
+    xpc_release(conn);
+    xpc_release(message);
+    dispatch_release(worker);
+    dispatch_release(queue);
+    _ = c.sem_destroy(&state.started);
+    _ = c.sem_destroy(&state.done);
+}
+fn decodeHook(h: *c.mach_msg_header_t, o: c_int, s: u32, r: u32, p: u32, t: u32, n: u32) callconv(.c) c_int {
+    const kr = c.mach_msg(h, o, s, r, p, t, n);
+    if (kr == 0) {
+        const tr: *align(4) c.mach_msg_audit_trailer_t = @ptrFromInt(@intFromPtr(h) + ((h.msgh_size + 3) & ~@as(u32, 3)));
+        switch (mode) {
+            10 => h.msgh_size = @sizeOf(c.mach_msg_header_t),
+            12 => h.msgh_size = r + 4,
+            14 => tr.msgh_trailer_type = c.MACH_MSG_TRAILER_FORMAT_0 + 1,
+            15 => tr.msgh_trailer_size = @sizeOf(c.mach_msg_trailer_t),
+            19 => tr.msgh_trailer_size = r,
+            else => {},
+        }
+    }
+    return kr;
+}
+fn decodeRefusals(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const dst = port();
+    const reply = port();
+    const before = refs(reply);
+    op500_install(&Hooks{ .receive = &decodeHook });
+    // Short header, declared length, body capacity, complex wrapper, trailer
+    // type, short trailer, unpack, array root, audit malloc, oversized trailer.
+    for (0..10) |bad| {
+        for (0..2) |pipe| {
+            var wire = prepare(dst, reply, 512);
+            if (bad == 1) wire.size = wire.header.msgh_size;
+            if (bad == 3) {
+                wire.size = 0; // complex body's descriptor count is zero
+                wire.header.msgh_bits |= c.MACH_MSGH_BITS_COMPLEX;
+            }
+            if (bad == 6) @memset(wire.data[0..wire.size], 0);
+            if (bad == 7) {
+                const array = xpc_array_create(null, 0);
+                need(array != null and op500_pipe_send(array, dst, 0, 746) == 0, "serialize array root");
+                xpc_release(array);
+                var arrayWire = std.mem.zeroes(Wire);
+                need(c.mach_msg(&arrayWire.header, c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, @sizeOf(Wire), dst, 1000, 0) == 0, "capture array root");
+                wire.size = arrayWire.size;
+                @memcpy(wire.data[0..wire.size], arrayWire.data[0..wire.size]);
+            }
+            mode = @intCast(10 + bad);
+            send(&wire);
+            if (bad == 8) op746_fail_audit_alloc();
+            var obj: O = null;
+            var remote: u32 = 0;
+            var id: u64 = 0;
+            const rc = if (pipe == 0) xpc_pipe_try_receive(dst, &obj, &remote, &noDemux, 0, 0) else op736_pipe_receive(dst, &remote, &obj, &id);
+            const expected = if (bad == 8) c.ENOMEM else c.EINVAL;
+            const after = refs(reply);
+            _ = c.printf("decode_refusal branch=%zu pipe=%zu expected_rc=%d observed_rc=%d expected_refs=%u observed_refs=%u\n", bad, pipe, expected, rc, before, after);
+            need(rc == expected and obj == null and after == before, "decode refusal releases message once");
+            mode = 0;
+            wire = prepare(dst, reply, 512);
+            send(&wire);
+            const next = if (pipe == 0) xpc_pipe_try_receive(dst, &obj, &remote, &noDemux, 0, 0) else op736_pipe_receive(dst, &remote, &obj, &id);
+            need(next == 0 and obj != null, "valid receive after each decode refusal");
+            xpc_release(obj);
+            if (pipe == 1) need(c.mach_port_deallocate(c.mach_task_self(), remote) == 0, "valid returned reply right release");
+            need(refs(reply) == before, "next valid reply right restored");
+        }
+    }
+    mode = 0;
+    op500_install(&Hooks{});
+    need(c.mach_port_destroy(c.mach_task_self(), dst) == 0 and c.mach_port_destroy(c.mach_task_self(), reply) == 0, "decode ports cleanup");
+}
+fn replyTwice(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const dst = port();
+    const reply = port();
+    const before = refs(reply);
+    var objects: [2]O = @splat(null);
+    for (&objects, 0..) |*obj, i| {
+        var wire = prepare(dst, reply, 512);
+        send(&wire);
+        var remote: u32 = 0;
+        need(xpc_pipe_try_receive(dst, obj, &remote, &noDemux, 0, 0) == 0 and obj.* != null, "two owned request receives");
+        need(refs(reply) == before + i + 1, "each received request owns one reply right");
+    }
+    for (objects, 0..) |obj, i| {
+        xpc_release(obj);
+        const after = refs(reply);
+        _ = c.printf("reply_port_twice released=%zu expected_refs=%zu observed_refs=%u\n", i + 1, before + 1 - i, after);
+        need(after == before + 1 - i, "each request releases reply right exactly once");
+    }
+    need(c.mach_port_destroy(c.mach_task_self(), dst) == 0 and c.mach_port_destroy(c.mach_task_self(), reply) == 0, "two request ports cleanup");
+}
+
 fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(tc, "timeout", "%s", "20");
 }
-var cases: [6]c.atf_tc_t = undefined;
+var cases: [11]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "cancelled_reply", "cancel_pending", "allocation_reply", "receive_sizes", "rejected_receive", "nonmig_request" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &cancelled, &cancelPending, &allocFailure, &sizes, &rejected, &nonmig };
+    const names = [_][*:0]const u8{ "cancelled_reply", "cancel_pending", "allocation_reply", "receive_sizes", "rejected_receive", "nonmig_request", "queue_owned_target", "failure_on_reply_queue", "sync_on_suspended", "decode_refusals", "reply_port_twice" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &cancelled, &cancelPending, &allocFailure, &sizes, &rejected, &nonmig, &ownedTarget, &failureQueue, &syncSuspended, &decodeRefusals, &replyTwice };
     for (&cases, names, bodies) |*tc, name, body| {
         var e = c.atf_tc_init(tc, name, &head, body, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(e)) return e;

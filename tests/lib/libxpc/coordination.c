@@ -35,3 +35,7 @@ void op500_reply(xpc_connection_t c,xpc_object_t o,dispatch_queue_t q,void *ctx,
 void op507_barrier(xpc_connection_t c,void *ctx,void (*f)(void *)) {
  xpc_connection_send_barrier(c, ^{ f(ctx); });
 }
+
+static unsigned op746_fail_audit;
+void op746_fail_audit_alloc(void) { __atomic_store_n(&op746_fail_audit, 1, __ATOMIC_SEQ_CST); }
+int op746_audit_alloc_fail(void) { return __atomic_exchange_n(&op746_fail_audit, 0, __ATOMIC_SEQ_CST); }

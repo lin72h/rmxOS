@@ -29,4 +29,6 @@ kern_return_t op502_lookup(mach_port_t, const char *, mach_port_t *);
 /* One-shot allocation failure, isolated to the pending-entry allocation. */
 int op736_pending_alloc_fail(void);
 void op736_fail_pending_alloc(void);
+int op746_audit_alloc_fail(void);
+void op746_fail_audit_alloc(void);
 #endif

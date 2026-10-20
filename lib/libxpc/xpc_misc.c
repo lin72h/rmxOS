@@ -478,6 +478,12 @@ xpc_pipe_decode(struct xpc_recv_message *message, size_t capacity,
 		goto invalid;
 	}
 	xo->xo_audit_token = malloc(sizeof(tr->msgh_audit));
+#ifdef XPC_CONSUMER_TESTING
+	if (op746_audit_alloc_fail()) {
+		free(xo->xo_audit_token);
+		xo->xo_audit_token = NULL;
+	}
+#endif
 	if (xo->xo_audit_token == NULL) {
 		xpc_release(xo);
 		mach_msg_destroy(request);
