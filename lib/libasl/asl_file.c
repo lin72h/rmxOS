@@ -276,7 +276,11 @@ asl_file_open_write_fd(int fd, asl_file_t **s)
 	}
 
 	/* flush data */
-	fflush(out->store);
+	if (fflush(out->store) != 0) {
+		fclose(out->store);
+		free(out);
+		return ASL_STATUS_WRITE_FAILED;
+	}
 
 	out->file_size = sizeof(buf);
 
@@ -767,7 +771,7 @@ asl_file_string_encode(asl_file_t *s, const char *str, uint64_t *out)
 	if (i != 1) return ASL_STATUS_WRITE_FAILED;
 
 	/* flush data */
-	fflush(s->store);
+	if (fflush(s->store) != 0) return ASL_STATUS_WRITE_FAILED;
 
 	/* create file_string_t and insert into the cache */
 	sx = (file_string_t *)calloc(1, offsetof(file_string_t, str) + len + 1);
@@ -1131,10 +1135,11 @@ asl_file_save(asl_file_t *s, asl_msg_t *in, uint64_t *mid)
 	v = asl_core_htonq(s->last);
 
 	status = fwrite(buf, len, 1, s->store);
-	fflush(s->store);
+	int flush_status = fflush(s->store);
 
-	/* free the buffer if it was allocated here */
+	/* Do not publish a link to a record that was not completely written. */
 	if (buf != s->scratch) free(buf);
+	if (status != 1 || flush_status != 0) return ASL_STATUS_WRITE_FAILED;
 
 	/* seek to "next" field of previous record, write last offset */
 	off = s->prev + RECORD_COMMON_LEN;
@@ -1160,7 +1165,7 @@ asl_file_save(asl_file_t *s, asl_msg_t *in, uint64_t *mid)
 	if (status != 0) return ASL_STATUS_WRITE_FAILED;
 
 	/* flush data */
-	fflush(s->store);
+	if (fflush(s->store) != 0) return ASL_STATUS_WRITE_FAILED;
 
 	s->file_size = (size_t)ftello(s->store);
 

@@ -43,44 +43,24 @@ struct _not_empty;
 #define forever for(;;)
 
 #define MY_ID "klog_in"
-#define BUFF_SIZE 4096
+#include "asl_input.h"
 
-static char inbuf[BUFF_SIZE];
-static int bx;
+static struct asl_klog_state input_state;
 static int kfd = -1;
 static dispatch_source_t in_src;
 static dispatch_queue_t in_queue;
 
+static void
+klog_emit(const char *line, size_t length, void *ctx __unused)
+{
+	asl_msg_t *m = asl_input_parse(line, (int)length, NULL, SOURCE_KERN);
+	process_message(m, SOURCE_KERN);
+}
+
 void
 klog_in_acceptdata(int fd)
 {
-	ssize_t len;
-	uint32_t i;
-	char *p, *q;
-	asl_msg_t *m;
-
-	len = read(fd, inbuf + bx, BUFF_SIZE - bx);
-	if (len <= 0) return;
-
-	p = inbuf;
-	q = p + bx;
-
-	for (i = 0; i < len; i++, q++)
-	{
-		if (*q == '\n')
-		{
-			*q = '\0';
-			m = asl_input_parse(p, q - p, NULL, SOURCE_KERN);
-			process_message(m, SOURCE_KERN);
-			p = q + 1;
-		}
-	}
-
-	if (p != inbuf)
-	{
-		memmove(inbuf, p, BUFF_SIZE - bx - 1);
-		bx = q - p;
-	}
+	(void)asl_klog_read(fd, &input_state, klog_emit, NULL);
 }
 
 int

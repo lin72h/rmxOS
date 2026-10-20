@@ -38,7 +38,10 @@
 
 #define BSD_SOCKET_NAME "BSDSystemLogger"
 #define MY_ID "bsd_in"
-#define MAXLINE 4096
+#include "asl_input.h"
+
+/* Datagrams larger than the supported libc syslog bound are discarded. */
+uint64_t bsd_in_truncated_messages;
 
 static int sock = -1;
 static dispatch_source_t in_src;
@@ -47,18 +50,12 @@ static dispatch_queue_t in_queue;
 void
 bsd_in_acceptmsg(int fd)
 {
-	uint32_t len;
-	int n;
-	char line[MAXLINE];
-	struct sockaddr_un sun;
+	ssize_t n;
+	char line[ASL_SOCKET_MAX + 1];
 	asl_msg_t *m;
 
-	len = sizeof(struct sockaddr_un);
-	n = recvfrom(fd, line, MAXLINE, 0, (struct sockaddr *)&sun, &len);
-
+	n = asl_bsd_receive(fd, line, &bsd_in_truncated_messages);
 	if (n <= 0) return;
-
-	line[n] = '\0';
 
 	m = asl_input_parse(line, n, NULL, SOURCE_BSD_SOCKET);
 	process_message(m, SOURCE_BSD_SOCKET);
