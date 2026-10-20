@@ -288,8 +288,40 @@ fn counters(_: [*c]const c.atf_tc_t) callconv(.c) void {
 fn restore() void {
     if (ownerIs("syslogd")) _ = run(&.{ "/etc/rc.d/syslogd", "forcestop" });
     _ = run(&.{ "/usr/sbin/sysrc", "syslogd_enable=NO" });
-    if (!ownerIs("asld")) _ = run(&.{ "/bin/launchctl", "load", "-w", job });
+    setDisabled(false);
+    if (!ownerIs("asld")) _ = run(&.{ "/bin/launchctl", "load", job });
     awaitOwner("asld");
+}
+fn setDisabled(disabled: bool) void {
+    const input = c.fopen(job, "r");
+    need(input != null, "read installed job");
+    var bytes: [8192]u8 = undefined;
+    const n = c.fread(&bytes, 1, bytes.len, input);
+    need(n < bytes.len and c.ferror(input) == 0, "bounded installed job read");
+    _ = c.fclose(input);
+    const text = bytes[0..n];
+    var start: usize = 0;
+    var end: usize = 0;
+    const key = "<key>Disabled</key>";
+    if (std.mem.indexOf(u8, text, key)) |i| {
+        start = i;
+        var value = i + key.len;
+        while (value < n and std.ascii.isWhitespace(text[value])) value += 1;
+        if (std.mem.startsWith(u8, text[value..], "<true/>")) {
+            end = value + 7;
+        } else if (std.mem.startsWith(u8, text[value..], "<false/>")) {
+            end = value + 8;
+        } else need(false, "known Disabled boolean");
+    } else {
+        start = (std.mem.indexOf(u8, text, "<dict>") orelse unreachable) + 6;
+        end = start;
+    }
+    const output = c.fopen("/etc/launchd.d/.op767-syslogd.tmp", "w");
+    need(output != null, "write job switch");
+    const middle: []const u8 = if (disabled) "<key>Disabled</key><true/>" else "";
+    need(c.fwrite(text.ptr, 1, start, output) == start and c.fwrite(middle.ptr, 1, middle.len, output) == middle.len and c.fwrite(text[end..].ptr, 1, n - end, output) == n - end, "write complete job with only Disabled changed");
+    need(c.fchmod(c.fileno(output), 0o644) == 0 and c.fclose(output) == 0, "close switched job");
+    need(c.rename("/etc/launchd.d/.op767-syslogd.tmp", job) == 0, "publish switched job");
 }
 fn wayBack(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const initially_syslogd = ownerIs("syslogd");
@@ -300,7 +332,20 @@ fn wayBack(_: [*c]const c.atf_tc_t) callconv(.c) void {
         need(flag != null, "record preliminary fallback boot");
         _ = c.fclose(flag);
     }
-    if (ownerIs("asld")) _ = run(&.{ "/bin/launchctl", "unload", "-w", job });
+    setDisabled(true);
+    if (ownerIs("asld")) {
+        const previous = pidfile();
+        _ = run(&.{ "/bin/launchctl", "unload", job });
+        var stopped = false;
+        for (0..100) |_| {
+            if (c.kill(previous, 0) != 0 and c.__error().* == c.ESRCH) {
+                stopped = true;
+                break;
+            }
+            _ = c.usleep(50000);
+        }
+        need(stopped, "asld exited before fallback starts");
+    }
     _ = run(&.{ "/usr/sbin/sysrc", "syslogd_enable=YES" });
     _ = run(&.{ "/etc/rc.d/syslogd", "start" });
     awaitOwner("syslogd");
