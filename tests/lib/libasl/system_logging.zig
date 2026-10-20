@@ -10,6 +10,8 @@ const c = @cImport({
     @cInclude("signal.h");
     @cInclude("errno.h");
     @cInclude("sys/stat.h");
+    @cInclude("sys/socket.h");
+    @cInclude("sys/un.h");
     @cInclude("sys/wait.h");
     @cInclude("termios.h");
 });
@@ -88,7 +90,32 @@ fn ownerIs(name: []const u8) bool {
 }
 fn awaitOwner(name: []const u8) void {
     for (0..100) |_| {
-        if (ownerIs(name)) return;
+        if (ownerIs(name)) {
+            var signal_ready = true;
+            if (std.mem.eql(u8, name, "asld")) {
+                var pid: [32:0]u8 = @splat(0);
+                _ = c.snprintf(&pid, pid.len, "%d", pidfile());
+                const observed = run(&.{ "/usr/bin/procstat", "-i", &pid });
+                signal_ready = false;
+                var lines = std.mem.tokenizeAny(u8, observed, "\r\n");
+                while (lines.next()) |line| {
+                    if (std.mem.indexOf(u8, line, "USR1") != null) {
+                        const flags = std.mem.trimEnd(u8, line, " \t");
+                        signal_ready = flags.len >= 3 and flags[flags.len - 2] == 'I';
+                    }
+                }
+            }
+            const fd = c.socket(c.AF_UNIX, c.SOCK_DGRAM, 0);
+            if (fd >= 0) {
+                var address = std.mem.zeroes(c.struct_sockaddr_un);
+                address.sun_family = c.AF_UNIX;
+                address.sun_len = @sizeOf(c.struct_sockaddr_un);
+                @memcpy(address.sun_path[0..12], "/var/run/log");
+                const connected = c.connect(fd, @ptrCast(&address), @sizeOf(c.struct_sockaddr_un));
+                _ = c.close(fd);
+                if (connected == 0 and signal_ready) return;
+            }
+        }
         _ = c.usleep(50000);
     }
     need(false, "bounded logger ownership transition");
@@ -238,11 +265,14 @@ fn rotation(_: [*c]const c.atf_tc_t) callconv(.c) void {
     rotateAndLog();
 }
 fn counters(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    awaitOwner("asld");
+    const status_args = &.{ "/usr/bin/aslutil", "-d", "/var/log/asl", "-F", "raw", "-k", "com.rmxos.asld.record", "status" };
+    const before = count(run(status_args), "[com.rmxos.asld.record status]");
     need(c.kill(pidfile(), c.SIGUSR1) == 0, "request system logger status");
     const names = [_][]const u8{ "dropped_wq", "dropped_kern_quota", "dropped_parse", "bsd_in_truncated", "store_failed", "store_fallback_memory", "file_action_failed", "native_malformed", "dup_suppressed", "config_rejected" };
-    for (0..100) |_| {
-        const raw = run(&.{ "/usr/bin/aslutil", "-d", "/var/log/asl", "-F", "raw", "-k", "com.rmxos.asld.record", "status" });
-        if (raw.len > 0) {
+    for (0..100) |i| {
+        const raw = run(status_args);
+        if (count(raw, "[com.rmxos.asld.record status]") > before) {
             for (names) |name| {
                 var pattern: [128]u8 = undefined;
                 const match = std.fmt.bufPrint(&pattern, "[{s} 0]", .{name}) catch unreachable;
@@ -250,6 +280,7 @@ fn counters(_: [*c]const c.atf_tc_t) callconv(.c) void {
             }
             return;
         }
+        if (i % 5 == 4) _ = c.kill(pidfile(), c.SIGUSR1);
         _ = c.usleep(20000);
     }
     need(false, "status written through store");
