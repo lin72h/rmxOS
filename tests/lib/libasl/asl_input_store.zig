@@ -7,6 +7,7 @@ const c = @cImport({
     @cInclude("sys/stat.h");
     @cInclude("sys/mount.h");
     @cInclude("sys/statvfs.h");
+    @cInclude("sys/sysctl.h");
     @cInclude("fcntl.h");
     @cInclude("unistd.h");
     @cInclude("stdio.h");
@@ -62,7 +63,10 @@ fn next(store: O) O {
 }
 fn end(store: O) void {
     var m: O = null;
-    need(asl_file_fetch_next(store, &m) == 14 and m == null, "no duplicate or extra record");
+    // This file API reaches cursor=0 at EOF and returns INVALID_ARG (1).
+    const status = asl_file_fetch_next(store, &m);
+    _ = c.printf("asl_store_end expected_status=1 observed_status=%u expected_null=1 observed_null=%u\n", status, @as(u32, @intFromBool(m == null)));
+    need(status == 1 and m == null, "no duplicate or extra record");
     need(asl_file_close(store) == 0, "close reader");
 }
 fn pair(kind: c_int) [2]c_int {
@@ -71,6 +75,17 @@ fn pair(kind: c_int) [2]c_int {
     return fds;
 }
 const prefix = "<14>Jan  1 00:00:00 tag[42]: ";
+fn restoreDgram(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const fp = c.fopen("dgram-limit", "r");
+    if (fp == null) return;
+    var old: c_ulong = 0;
+    const got = c.fscanf(fp, "%lu", &old);
+    _ = c.fclose(fp);
+    if (got == 1) {
+        need(c.sysctlbyname("net.local.dgram.maxdgram", null, null, &old, @sizeOf(c_ulong)) == 0, "restore fixture datagram ceiling");
+        _ = c.unlink("dgram-limit");
+    }
+}
 fn socketSizes(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const fds = pair(c.SOCK_DGRAM);
     const store = writer("socket.asl");
@@ -96,6 +111,20 @@ fn socketSizes(_: [*c]const c.atf_tc_t) callconv(.c) void {
         asl_msg_release(m);
         _ = c.printf("asl_socket expected_bytes=%zu observed_bytes=%zd expected_guard=165 observed_guard=%u truncated=%ju\n", size, n, guard.after[0], truncated);
     }
+    // Raise only the guest's Unix transport fixture limit, so oversized
+    // datagrams can actually reach the production 8192-byte receive bound.
+    var old: c_ulong = 0;
+    var old_size: usize = @sizeOf(c_ulong);
+    need(c.sysctlbyname("net.local.dgram.maxdgram", &old, &old_size, null, 0) == 0, "read datagram ceiling");
+    const fp = c.fopen("dgram-limit", "w");
+    need(fp != null, "save fixture ceiling for cleanup");
+    _ = c.fprintf(fp, "%lu\n", old);
+    need(c.fclose(fp) == 0, "save fixture ceiling");
+    var socket_bytes: c_int = 32768;
+    need(c.setsockopt(fds[0], c.SOL_SOCKET, c.SO_SNDBUF, &socket_bytes, @sizeOf(c_int)) == 0, "raise private send buffer");
+    need(c.setsockopt(fds[1], c.SOL_SOCKET, c.SO_RCVBUF, &socket_bytes, @sizeOf(c_int)) == 0, "raise private receive buffer");
+    var raised: c_ulong = @max(old, 16384);
+    need(c.sysctlbyname("net.local.dgram.maxdgram", null, null, &raised, @sizeOf(c_ulong)) == 0, "raise fixture datagram ceiling");
     for ([_]usize{ 8193, 9000 }, 1..) |size, count| {
         var wire: [9000]u8 = @splat('t');
         var guard: Guard = undefined;
@@ -104,6 +133,8 @@ fn socketSizes(_: [*c]const c.atf_tc_t) callconv(.c) void {
         need(asl_bsd_receive(fds[1], &guard.line, &truncated) == 0 and truncated == count, "truncation counted and discarded");
         for ([_]u8{} ++ guard.before ++ guard.after) |byte| need(byte == 0xa5, "oversize guard unchanged");
     }
+    restoreDgram(null);
+    _ = c.printf("asl_socket_truncation expected_count=2 observed_count=%ju transport_limit_restored=%lu\n", truncated, old);
     need(asl_file_close(store) == 0, "close socket writer");
     const read = reader("socket.asl");
     for (sizes) |size| {
@@ -134,6 +165,7 @@ fn rfc5424(_: [*c]const c.atf_tc_t) callconv(.c) void {
         const n = asl_bsd_receive(fds[1], &line, &truncated);
         need(n == wire.len and truncated == 0, "RFC receive");
         const m = asl_input_parse(@ptrCast(&line), @intCast(n), null, 2);
+        if (std.mem.eql(u8, wire, records[2])) field(m, "PID", "-1");
         save(store, m);
         asl_msg_release(m);
     }
@@ -162,7 +194,7 @@ fn rfc5424(_: [*c]const c.atf_tc_t) callconv(.c) void {
         } else {
             field(m, "Host", "-");
             field(m, "Sender", "-");
-            field(m, "PID", "-1");
+            field(m, "PID", "4294967295"); // existing uint32 store representation of -1
             field(m, "RFC5424.ProcID", "-");
             field(m, "RFC5424.MsgID", "-");
             field(m, "RFC5424.Timestamp", "-");
@@ -361,7 +393,7 @@ fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     const names = [_][*:0]const u8{ "socket_sizes", "rfc5424", "kernel_splits", "kernel_burst", "store_full" };
     const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &socketSizes, &rfc5424, &kernelSplits, &kernelBurst, &fullStore };
     for (&cases, names, bodies, 0..) |*tc, name, body, i| {
-        var err = c.atf_tc_init(tc, name, &head, body, if (i == 4) &cleanupFull else null, c.atf_tp_get_config(tp));
+        var err = c.atf_tc_init(tc, name, &head, body, if (i == 4) &cleanupFull else if (i == 0) &restoreDgram else null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
         err = c.atf_tp_add_tc(tp, tc);
         if (c.atf_is_error(err)) return err;
