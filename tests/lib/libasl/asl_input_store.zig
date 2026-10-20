@@ -168,7 +168,10 @@ fn rfc5424(_: [*c]const c.atf_tc_t) callconv(.c) void {
         const n = asl_bsd_receive(fds[1], &line, &truncated);
         need(n == wire.len and truncated == 0, "RFC receive");
         const m = asl_input_parse(@ptrCast(&line), @intCast(n), null, 2);
-        if (std.mem.eql(u8, wire, records[2])) field(m, "PID", "-1");
+        if (std.mem.eql(u8, wire, records[2])) {
+            field(m, "PID", "-1");
+            need(asl_msg_get_val_for_key(m, "Message") == null, "ASL empty Message normalizes to null");
+        }
         save(store, m);
         asl_msg_release(m);
     }
@@ -201,7 +204,7 @@ fn rfc5424(_: [*c]const c.atf_tc_t) callconv(.c) void {
             field(m, "RFC5424.ProcID", "-");
             field(m, "RFC5424.MsgID", "-");
             field(m, "RFC5424.Timestamp", "-");
-            field(m, "Message", "");
+            need(asl_msg_get_val_for_key(m, "Message") == null, "no Message for NIL RFC record");
         }
         asl_msg_release(m);
     }
@@ -302,13 +305,13 @@ fn mdUnit() c_int {
 fn cleanupFull(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const unit = mdUnit();
     if (unit >= 0) {
-        _ = c.unmount("full", 0);
+        need(c.unmount("full", 0) == 0 or c.__error().* == c.EINVAL or c.__error().* == c.ENOENT, "cleanup unmount memory filesystem");
         var cmd: [128:0]u8 = undefined;
         _ = c.snprintf(&cmd, cmd.len, "/sbin/mdconfig -d -u %d", unit);
-        _ = c.system(&cmd);
-        _ = c.unlink("md-unit");
+        command(&cmd);
+        need(c.unlink("md-unit") == 0, "remove memory disk unit record");
     }
-    _ = c.rmdir("full");
+    need(c.rmdir("full") == 0 or c.__error().* == c.ENOENT, "remove memory disk mount directory");
 }
 fn fullStore(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(c.getuid() == 0, "memory disk requires guest root");
@@ -385,10 +388,7 @@ fn fullStore(_: [*c]const c.atf_tc_t) callconv(.c) void {
     }
     end(read);
     _ = c.printf("asl_store_full filler_bytes=%ju expected_status=8 observed_status=8 expected_prior_records=%zu observed_prior_records=%zu\n", filled, saved, saved);
-    need(c.unmount("full", 0) == 0, "unmount memory filesystem");
-    _ = c.snprintf(&cmd, cmd.len, "/sbin/mdconfig -d -u %d", unit);
-    command(&cmd);
-    _ = c.unlink("md-unit");
+    // ATF cleanup unmounts after this process exits and closes its descriptors.
 }
 fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(tc, "timeout", "%s", "30");
