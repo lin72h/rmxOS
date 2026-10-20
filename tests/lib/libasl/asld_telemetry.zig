@@ -70,12 +70,12 @@ fn start(limit: [*:0]const u8, quota: [*:0]const u8) void {
     need(child >= 0, "fork private asld");
     if (child == 0) {
         const p = path("daemon.log");
-        const fd = c.open(&p, c.O_WRONLY | c.O_CREAT | c.O_TRUNC, @as(c.mode_t, 0o600));
+        const fd = c.open(&p, c.O_WRONLY | c.O_CREAT | c.O_TRUNC | c.O_APPEND, @as(c.mode_t, 0o600));
         if (fd < 0) c._exit(127);
         _ = c.dup2(fd, 1);
         _ = c.dup2(fd, 2);
         _ = c.close(fd);
-        _ = c.execl("/usr/sbin/asld", "asld", "-private", &root, "-wq_max_bytes", limit, "-mps_limit", quota, "-dup_delay", "0", "-d", @as(?*anyopaque, null));
+        _ = c.execl("/usr/sbin/asld", "asld", "-private", &root, "-wq_max_bytes", limit, "-mps_limit", quota, "-dup_delay", "0", "-d", &p, @as(?*anyopaque, null));
         c._exit(127);
     }
     const pidfile = c.fopen("op766-child", "w");
