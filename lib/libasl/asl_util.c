@@ -272,7 +272,9 @@ asl_syslog_faciliy_name_to_num(const char *name)
 //	if (strcaseeq(name, "netinfo")) return LOG_NETINFO;
 //	if (strcaseeq(name, "remoteauth")) return LOG_REMOTEAUTH;
 	if (strcaseeq(name, "news")) return LOG_NEWS;
-	if (strcaseeq(name, "security")) return LOG_AUTH;
+	if (strcaseeq(name, "ntp")) return LOG_NTP;
+	if (strcaseeq(name, "security")) return LOG_SECURITY;
+	if (strcaseeq(name, "console")) return LOG_CONSOLE;
 	if (strcaseeq(name, "syslog")) return LOG_SYSLOG;
 	if (strcaseeq(name, "user")) return LOG_USER;
 	if (strcaseeq(name, "uucp")) return LOG_UUCP;
@@ -306,7 +308,9 @@ asl_syslog_faciliy_num_to_name(int n)
 //	if (n == LOG_NETINFO) return "netinfo";
 //	if (n == LOG_REMOTEAUTH) return "remoteauth";
 	if (n == LOG_NEWS) return "news";
-	if (n == LOG_AUTH) return "security";
+	if (n == LOG_NTP) return "ntp";
+	if (n == LOG_SECURITY) return "security";
+	if (n == LOG_CONSOLE) return "console";
 	if (n == LOG_SYSLOG) return "syslog";
 	if (n == LOG_USER) return "user";
 	if (n == LOG_UUCP) return "uucp";
