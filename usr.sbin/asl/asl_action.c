@@ -1538,10 +1538,6 @@ _act_file_final(asl_out_module_t *m, asl_out_rule_t *r, asl_msg_t *msg)
 			free(str);
 			return;
 		}
-		else
-		{
-			r->dst->fails = 0;
-		}
 
 		/*
 		 * The current message is not a duplicate.  If f_data->last_count > 0
@@ -1551,7 +1547,11 @@ _act_file_final(asl_out_module_t *m, asl_out_rule_t *r, asl_msg_t *msg)
 		 */
 		if (f_data->last_count > 0)
 		{
-			_send_repeat_msg(r);
+			if (_send_repeat_msg(r) != 0) {
+				_asl_action_save_failed("_act_file_repeat", m, r, ASL_STATUS_WRITE_FAILED);
+				free(str);
+				return;
+			}
 		}
 		else
 		{
@@ -1568,8 +1568,14 @@ _act_file_final(asl_out_module_t *m, asl_out_rule_t *r, asl_msg_t *msg)
 		if ((str != NULL) && (len > 1))
 		{
 			/* write line to file and update dst size */
-			size_t bytes = write(f_data->fd, str, len - 1);
+			ssize_t bytes = write(f_data->fd, str, len - 1);
 			if (bytes > 0) r->dst->size += bytes;
+			if (bytes < 0 || (size_t)bytes != len - 1) {
+				_asl_action_save_failed("_act_file_write", m, r, ASL_STATUS_WRITE_FAILED);
+				free(str);
+				return;
+			}
+			r->dst->fails = 0;
 
 			if (_act_checkpoint(r, CHECKPOINT_TEST) == 1) trigger_aslmanager();
 		}
