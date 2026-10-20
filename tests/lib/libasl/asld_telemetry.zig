@@ -230,6 +230,8 @@ fn kernelQuota(_: [*c]const c.atf_tc_t) callconv(.c) void {
     var wire: [100 * 18]u8 = undefined;
     const record = "<6>payload kernel\n";
     for (0..100) |i| @memcpy(wire[i * record.len ..][0..record.len], record);
+    const second = c.time(null);
+    while (c.time(null) == second) _ = c.usleep(1000);
     need(c.write(fd, &wire, 100 * record.len) == 100 * record.len, "one FIFO burst in one read");
     _ = c.close(fd);
     const f = statusAfter(struct {
