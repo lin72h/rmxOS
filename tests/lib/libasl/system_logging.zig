@@ -16,11 +16,18 @@ const c = @cImport({
     @cInclude("termios.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-const job = "/etc/launchd.d/com.apple.syslogd.plist";
+var cleaning = false;
 var captured: [262144]u8 = undefined;
 const Result = struct { status: c_int, text: []const u8 };
 fn need(ok: bool, message: [*:0]const u8) void {
-    if (!ok) c.atf_tc_fail("%s errno=%d", message, c.__error().*);
+    if (!ok) {
+        if (cleaning) {
+            _ = c.printf("cleanup failed: %s errno=%d\n", message, c.__error().*);
+            _ = c.fflush(null);
+            c._exit(1);
+        }
+        c.atf_tc_fail("%s errno=%d", message, c.__error().*);
+    }
 }
 fn command(args: []const [*:0]const u8) Result {
     need(args.len < 32, "command argument bound");
@@ -172,9 +179,9 @@ fn oneOwner(_: [*c]const c.atf_tc_t) callconv(.c) void {
     var st: c.struct_stat = undefined;
     need(c.lstat("/var/run/log", &st) == 0 and st.st_mode & c.S_IFMT == c.S_IFSOCK and st.st_mode & 0o777 == 0o666, "BSD datagram socket mode 0666");
     const inode = st.st_ino;
-    const denied = command(&.{ "/etc/rc.d/syslogd", "onestart" });
-    need(denied.status != 0, "rc refuses to start syslogd over live asld");
-    need(c.lstat("/var/run/log", &st) == 0 and st.st_ino == inode and ownerIs("asld"), "refusal preserves the live socket and owner");
+    const ready = command(&.{ "/etc/rc.d/syslogd", "onestart" });
+    need(ready.status == 0, "compatibility service accepts the running asld owner");
+    need(c.lstat("/var/run/log", &st) == 0 and st.st_ino == inode and ownerIs("asld"), "compatibility readiness preserves the live socket and owner");
     var target: [256]u8 = undefined;
     const n = c.readlink("/dev/log", &target, target.len);
     need(n == 12 and std.mem.eql(u8, target[0..12], "/var/run/log"), "dev log symlink");
@@ -232,10 +239,9 @@ fn kernel(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const before_unload = count(store(unload), unload);
     // Later repetitions rotate the boot text out of messages. Check it before
     // the first fixture load; the store keeps the boot record across rotations.
-    if (before_load == 0 and c.access("/tmp/op767-fallback-boot", c.F_OK) != 0) awaitFile("/var/log/messages", boot, 1);
+    if (before_load == 0 and true) awaitFile("/var/log/messages", boot, 1);
     // The preliminary fixture boots syslogd, which consumes the boot backlog.
-    // Whole-plan boots start asld and must also have exactly one store copy.
-    if (c.access("/tmp/op767-fallback-boot", c.F_OK) != 0) _ = awaitStore(boot, 1);
+    _ = awaitStore(boot, 1);
     const text_load = fileCount("/var/log/messages", load);
     const text_unload = fileCount("/var/log/messages", unload);
     _ = run(&.{ "/sbin/kldload", "/usr/tests/lib/launchd/op767_logger.ko" });
@@ -285,85 +291,45 @@ fn counters(_: [*c]const c.atf_tc_t) callconv(.c) void {
     }
     need(false, "status written through store");
 }
-fn restore() void {
-    if (ownerIs("syslogd")) _ = run(&.{ "/etc/rc.d/syslogd", "forcestop" });
-    _ = run(&.{ "/usr/sbin/sysrc", "syslogd_enable=NO" });
-    setDisabled(false);
-    if (!ownerIs("asld")) _ = run(&.{ "/bin/launchctl", "load", job });
+fn compatibilityService(_: [*c]const c.atf_tc_t) callconv(.c) void {
     awaitOwner("asld");
-}
-fn setDisabled(disabled: bool) void {
-    const input = c.fopen(job, "r");
-    need(input != null, "read installed job");
-    var bytes: [8192]u8 = undefined;
-    const n = c.fread(&bytes, 1, bytes.len, input);
-    need(n < bytes.len and c.ferror(input) == 0, "bounded installed job read");
-    _ = c.fclose(input);
-    const text = bytes[0..n];
-    var start: usize = 0;
-    var end: usize = 0;
-    const key = "<key>Disabled</key>";
-    if (std.mem.indexOf(u8, text, key)) |i| {
-        start = i;
-        var value = i + key.len;
-        while (value < n and std.ascii.isWhitespace(text[value])) value += 1;
-        if (std.mem.startsWith(u8, text[value..], "<true/>")) {
-            end = value + 7;
-        } else if (std.mem.startsWith(u8, text[value..], "<false/>")) {
-            end = value + 8;
-        } else need(false, "known Disabled boolean");
-    } else {
-        start = (std.mem.indexOf(u8, text, "<dict>") orelse unreachable) + 6;
-        end = start;
+    need(c.access("/usr/sbin/syslogd", c.F_OK) != 0 and c.__error().* == c.ENOENT, "FreeBSD syslogd binary is not installed");
+    const defaults = run(&.{ "/bin/cat", "/etc/defaults/rc.conf" });
+    need(std.mem.indexOf(u8, defaults, "syslogd_enable") == null, "no syslogd_enable setting installed");
+    const ready = c.fopen("/var/run/asld.service-ready", "r");
+    need(ready != null, "rc dependency observed the socket and running asld");
+    var ready_pid: c.pid_t = -1;
+    need(c.fscanf(ready, "%d", &ready_pid) == 1 and ready_pid == pidfile(), "rc readiness belongs to the running logger");
+    _ = c.fclose(ready);
+    _ = run(&.{ "/usr/sbin/service", "syslogd", "status" });
+    // Fixed dependency inventory: rcorder enforces every installed REQUIRE edge.
+    const observed = run(&.{ "/bin/sh", "-c", "/sbin/rcorder /etc/rc.d/*" });
+    const own = std.mem.indexOf(u8, observed, "/etc/rc.d/syslogd\n") orelse {
+        need(false, "compatibility service in rc order");
+        unreachable;
+    };
+    for ([_][]const u8{ "auditd", "bsnmpd", "power_profile", "watchdogd", "bgfsck", "savecore", "pwcheck", "hastd", "ntpdate", "rpcbind" }) |name| {
+        var full: [128:0]u8 = @splat(0);
+        _ = c.snprintf(&full, full.len, "/etc/rc.d/%.*s\n", @as(c_int, @intCast(name.len)), name.ptr);
+        const position = std.mem.indexOf(u8, observed, z(&full)) orelse {
+            need(false, "logging dependent service installed");
+            unreachable;
+        };
+        need(position > own, "REQUIRE syslogd service ordered after socket readiness");
     }
-    const output = c.fopen("/etc/launchd.d/.op767-syslogd.tmp", "w");
-    need(output != null, "write job switch");
-    const middle: []const u8 = if (disabled) "<key>Disabled</key><true/>" else "";
-    need(c.fwrite(text.ptr, 1, start, output) == start and c.fwrite(middle.ptr, 1, middle.len, output) == middle.len and c.fwrite(text[end..].ptr, 1, n - end, output) == n - end, "write complete job with only Disabled changed");
-    need(c.fchmod(c.fileno(output), 0o644) == 0 and c.fclose(output) == 0, "close switched job");
-    need(c.rename("/etc/launchd.d/.op767-syslogd.tmp", job) == 0, "publish switched job");
-}
-fn wayBack(_: [*c]const c.atf_tc_t) callconv(.c) void {
-    const initially_syslogd = ownerIs("syslogd");
-    _ = c.printf("op767_fallback initially_syslogd=%d\n", @as(c_int, if (initially_syslogd) 1 else 0));
-    if (initially_syslogd) {
-        awaitFile("/var/log/messages", "FreeBSD is a registered trademark of The FreeBSD Foundation.", 1);
-        const flag = c.fopen("/tmp/op767-fallback-boot", "w");
-        need(flag != null, "record preliminary fallback boot");
-        _ = c.fclose(flag);
-    }
-    setDisabled(true);
-    if (ownerIs("asld")) {
-        const previous = pidfile();
-        _ = run(&.{ "/bin/launchctl", "unload", job });
-        var stopped = false;
-        for (0..100) |_| {
-            if (c.kill(previous, 0) != 0 and c.__error().* == c.ESRCH) {
-                stopped = true;
-                break;
-            }
-            _ = c.usleep(50000);
-        }
-        need(stopped, "asld exited before fallback starts");
-    }
-    _ = run(&.{ "/usr/sbin/sysrc", "syslogd_enable=YES" });
-    _ = run(&.{ "/etc/rc.d/syslogd", "start" });
-    awaitOwner("syslogd");
-    rotateAndLog();
-    const debug = unique("fallback_debug");
-    log("user.debug", "op767", &debug);
-    awaitFile("/var/log/debug.log", z(&debug), 1);
-    const excluded = unique("fallback_devd");
-    log("daemon.debug", "devd", &excluded);
-    const fence = unique("fallback_fence");
-    log("daemon.info", "op767", &fence);
-    awaitFile("/var/log/daemon.log", z(&fence), 1);
-    need(fileCount("/var/log/debug.log", z(&excluded)) == 0 and fileCount("/var/log/daemon.log", z(&excluded)) == 0, "fallback restores devd filter");
-    restore();
-    const after = unique("restored_asld");
+    const before = unique("service_before");
+    log("user.notice", "op767", &before);
+    awaitFile("/var/log/messages", z(&before), 1);
+    _ = c.unlink("/var/log/op767-service-messages");
+    need(c.rename("/var/log/messages", "/var/log/op767-service-messages") == 0, "rotate file before compatibility reload");
+    const fd = c.open("/var/log/messages", c.O_WRONLY | c.O_CREAT | c.O_EXCL, @as(c.mode_t, 0o644));
+    need(fd >= 0, "create replacement messages file");
+    _ = c.close(fd);
+    _ = run(&.{ "/usr/sbin/service", "syslogd", "reload" });
+    const after = unique("service_after");
     log("user.notice", "op767", &after);
     awaitFile("/var/log/messages", z(&after), 1);
-    _ = awaitStore(&after, 1);
+    need(fileCount("/var/log/op767-service-messages", z(&after)) == 0, "service reload reopens the destination");
 }
 fn retention(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const jobs = run(&.{ "/bin/launchctl", "list" });
@@ -387,11 +353,11 @@ fn retention(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(observed >= before + 2, "launchd StartInterval ran the same retention command twice");
 }
 fn cleanup(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    cleaning = true;
     if (c.access("/tmp/op767-interval.plist", c.F_OK) == 0) {
         _ = command(&.{ "/bin/launchctl", "unload", "/tmp/op767-interval.plist" });
         _ = c.unlink("/tmp/op767-interval.plist");
     }
-    restore();
 }
 fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(tc, "timeout", "%s", "90");
@@ -400,8 +366,8 @@ fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
 }
 var cases: [8]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "one_owner", "routes", "native", "kernel", "rotation", "counters", "retention", "way_back" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ oneOwner, routes, native, kernel, rotation, counters, retention, wayBack };
+    const names = [_][*:0]const u8{ "one_owner", "routes", "native", "kernel", "rotation", "counters", "retention", "compat_service" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ oneOwner, routes, native, kernel, rotation, counters, retention, compatibilityService };
     for (&cases, names, bodies) |*tc, name, body| {
         var err = c.atf_tc_init(tc, name, head, body, cleanup, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;

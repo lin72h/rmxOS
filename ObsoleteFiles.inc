@@ -1,3 +1,6 @@
+# 20261021: asld is the only system logger; rc.d/syslogd is its compatibility service.
+OLD_FILES+=usr/sbin/syslogd
+OLD_FILES+=usr/lib/debug/usr/sbin/syslogd.debug
 #
 #
 # This file lists old files (OLD_FILES), libraries (OLD_LIBS, MOVED_LIBS)

@@ -5,7 +5,20 @@ FILESGROUPS+= LAUNCHD
 LAUNCHD= com.apple.syslogd.plist
 LAUNCHDDIR= /etc/launchd.d
 LAUNCHDMODE= 0644
+CONFGROUPS= CONFS SYSLOGD_D
 CONFS= ${SRCTOP}/etc/asl.conf ${SRCTOP}/etc/syslog.conf
+SYSLOGD_D=
+SYSLOGD_DDIR= /etc/syslog.d
+.if ${MK_LPR} != "no"
+CONFGROUPS+= LP
+LP= ${SRCTOP}/usr.sbin/syslogd/lpr.conf
+LPDIR= /etc/syslog.d
+.endif
+.if ${MK_PPP} != "no"
+CONFGROUPS+= PPP
+PPP= ${SRCTOP}/usr.sbin/syslogd/ppp.conf
+PPPDIR= /etc/syslog.d
+.endif
 
 .PATH: .
 .PATH: ${.CURDIR}

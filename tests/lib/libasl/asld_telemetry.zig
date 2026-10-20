@@ -395,107 +395,97 @@ fn grammarInclude(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(c.access(&forbidden, c.F_OK) != 0, "unknown directive never becomes destination");
     stop();
 }
+// Fixed expected routes from validator1 ef725c0, reviews/op-766/op-766.md.
+const InstalledRoute = struct { selector: [*:0]const u8, sink: []const u8 };
+const installed_table = [_]InstalledRoute{
+    .{ .selector = "*.err;kern.warning;auth.notice;mail.crit", .sink = "/dev/console" },
+    .{ .selector = "*.notice;authpriv.none;kern.debug;lpr.info;mail.crit;news.err", .sink = "/var/log/messages" },
+    .{ .selector = "security.*", .sink = "/var/log/security" },
+    .{ .selector = "auth.info;authpriv.info", .sink = "/var/log/auth.log" },
+    .{ .selector = "mail.info", .sink = "/var/log/maillog" },
+    .{ .selector = "cron.*", .sink = "/var/log/cron" },
+    .{ .selector = "*.emerg", .sink = "*" },
+};
+fn installedExpected(route: usize, facility: usize, level: usize) bool {
+    return switch (route) {
+        0 => level <= (if (facility == 0) @as(usize, 4) else if (facility == 4) @as(usize, 5) else if (facility == 2) @as(usize, 2) else @as(usize, 3)),
+        1 => facility != 10 and level <= (switch (facility) {
+            0 => @as(usize, 7),
+            6 => @as(usize, 6),
+            2 => @as(usize, 2),
+            7 => @as(usize, 3),
+            else => @as(usize, 5),
+        }),
+        2 => facility == 13,
+        3 => (facility == 4 or facility == 10) and level <= 6,
+        4 => facility == 2 and level <= 6,
+        5 => facility == 9,
+        6 => level == 0,
+        else => unreachable,
+    };
+}
 fn grammarInstalled(_: [*c]const c.atf_tc_t) callconv(.c) void {
     prepare();
     const installed = c.fopen("/etc/syslog.conf", "r");
     need(installed != null, "installed syslog.conf available");
+    defer _ = c.fclose(installed);
     const actual_config = path("syslog.conf");
-    const reference_config = path("reference.conf");
     const actual = c.fopen(&actual_config, "w");
-    const reference = c.fopen(&reference_config, "w");
-    need(actual != null and reference != null, "private route comparison configurations");
+    need(actual != null, "private route configuration");
+    var seen = [_]bool{false} ** installed_table.len;
     var line: [4096]u8 = undefined;
-    var routes: usize = 0;
     while (c.fgets(&line, line.len, installed) != null) {
         var selector: [2048:0]u8 = @splat(0);
         var destination: [2048:0]u8 = @splat(0);
         if (c.sscanf(&line, "%2047s %2047s", &selector, &destination) != 2) continue;
         if (selector[0] == '#' or selector[0] == '!') continue;
-        if (std.mem.eql(u8, std.mem.span(@as([*:0]const u8, @ptrCast(&selector))), "include")) continue;
-        // Redirect each installed route to a private file, preserving selectors.
-        _ = c.fprintf(actual, "%s %s/actual.%zu\n", &selector, &root, routes);
-        _ = c.fprintf(reference, "%s %s/reference.%zu\n", &selector, &root, routes);
-        routes += 1;
-    }
-    _ = c.fclose(installed);
-    need(c.fclose(actual) == 0 and c.fclose(reference) == 0 and routes > 0, "installed selectors projected without devd blocks or global includes");
-    start("10000000", "0");
-    const pid = c.fork();
-    need(pid >= 0, "fork reference syslogd");
-    if (pid == 0) {
-        const socket = path("reference.socket");
-        const privileged = path("reference.priv");
-        const pidfile = path("reference.pid");
-        const logfile = path("reference.log");
-        const fd = c.open(&logfile, c.O_WRONLY | c.O_CREAT | c.O_TRUNC, @as(c.mode_t, 0o600));
-        if (fd < 0) c._exit(127);
-        _ = c.dup2(fd, 1);
-        _ = c.dup2(fd, 2);
-        _ = c.close(fd);
-        _ = c.execl("/usr/sbin/syslogd", "syslogd", "-F", "-C", "-ss", "-cc", "-k", "-p", &socket, "-S", &privileged, "-P", &pidfile, "-f", &reference_config, @as(?*anyopaque, null));
-        c._exit(127);
-    }
-    const refpid = c.fopen("op766-reference", "w");
-    need(refpid != null, "record own reference logger for cleanup");
-    _ = c.fprintf(refpid, "%d\n", pid);
-    _ = c.fclose(refpid);
-    const socket = path("reference.socket");
-    var ready = false;
-    for (0..200) |_| {
-        if (c.access(&socket, c.F_OK) == 0) {
-            ready = true;
-            break;
+        const selected = std.mem.span(@as([*:0]const u8, @ptrCast(&selector)));
+        if (std.mem.eql(u8, selected, "include")) continue;
+        var matched = false;
+        for (installed_table, 0..) |row, index| {
+            if (!std.mem.eql(u8, selected, std.mem.span(row.selector))) continue;
+            need(!seen[index] and std.mem.eql(u8, std.mem.span(@as([*:0]const u8, @ptrCast(&destination))), row.sink), "installed selector/sink matches fixed table exactly once");
+            seen[index] = true;
+            matched = true;
+            _ = c.fprintf(actual, "%s %s/actual.%zu\n", &selector, &root, index);
         }
-        _ = c.usleep(10000);
+        need(matched, "installed selector exists in fixed route table");
     }
-    need(ready, "private reference syslogd socket ready");
+    for (seen) |found| need(found, "every fixed route installed");
+    need(c.fclose(actual) == 0, "close private configuration");
+    start("10000000", "0");
     for (0..24) |facility| {
         for (0..8) |level| {
             var message: [256:0]u8 = @splat(0);
             const n = c.snprintf(&message, message.len, "<%zu>1 2000-01-01T00:00:00Z host app 42 ID - route_%zu_%zu", facility * 8 + level, facility, level);
             send(message[0..@intCast(n)]);
-            sendTo("reference.socket", message[0..@intCast(n)]);
         }
     }
-    installed_routes = routes;
-    const fence = "<8>1 2000-01-01T00:00:00Z host app 42 ID - route_fence";
-    send(fence);
-    sendTo("reference.socket", fence);
+    installed_routes = installed_table.len;
+    send("<8>1 2000-01-01T00:00:00Z host app 42 ID - route_fence");
     _ = statusAfter(struct {
         fn done(f: Facts) bool {
-            return f.status > 0 and routeFence("actual") and routeFence("reference");
+            return f.status > 0 and routeFence();
         }
     }.done);
-    need(routeFence("actual") and routeFence("reference"), "both loggers drain all preceding inputs before comparison");
-    _ = c.kill(pid, c.SIGTERM);
-    var status: c_int = 0;
-    need(c.waitpid(pid, &status, 0) == pid, "reap reference logger");
-    _ = c.unlink("op766-reference");
     stop();
-    for (0..routes) |route| {
-        var a: [64:0]u8 = @splat(0);
-        var b: [64:0]u8 = @splat(0);
-        _ = c.snprintf(&a, a.len, "actual.%zu", route);
-        _ = c.snprintf(&b, b.len, "reference.%zu", route);
+    for (0..installed_table.len) |route| {
+        var name: [64:0]u8 = @splat(0);
+        _ = c.snprintf(&name, name.len, "actual.%zu", route);
         for (0..24) |facility| {
             for (0..8) |level| {
                 var token: [64:0]u8 = @splat(0);
                 _ = c.snprintf(&token, token.len, "route_%zu_%zu", facility, level);
-                const observed = fileMatches(&a, &token);
-                const expected = fileMatches(&b, &token);
+                const observed = fileMatches(&name, &token);
+                const expected: usize = if (installedExpected(route, facility, level)) 1 else 0;
                 if (observed != expected) c.atf_tc_fail("installed route=%zu facility=%zu level=%zu expected=%zu observed=%zu", route, facility, level, expected, observed);
             }
         }
     }
-    _ = c.printf("asld_installed_routes routes=%zu inputs=192 private_syslogd_comparison=complete\n", routes);
+    _ = c.printf("asld_installed_routes routes=%zu inputs=192 fixed_table=validator1-ef725c0\n", installed_table.len);
 }
-fn routeFence(prefix: [*:0]const u8) bool {
-    for (0..installed_routes) |i| {
-        var name: [64:0]u8 = @splat(0);
-        _ = c.snprintf(&name, name.len, "%s.%zu", prefix, i);
-        if (fileMatches(&name, "route_fence") > 0) return true;
-    }
-    return false;
+fn routeFence() bool {
+    return fileMatches("actual.1", "route_fence") == 1;
 }
 fn cleanup(_: [*c]const c.atf_tc_t) callconv(.c) void {
     for ([_][*:0]const u8{ "op766-child", "op766-reference" }) |name| {

@@ -4,8 +4,6 @@
 .include <bsd.compat.pre.mk>
 
 FILESGROUPS=	FILES
-# rmxOS logging configuration is installed with the root configuration set.
-CONFS=	asl.conf syslog.conf
 NLS_ALIASES=	POSIX C \
 		en_US.US_ASCII C
 

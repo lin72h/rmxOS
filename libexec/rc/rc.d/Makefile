@@ -12,6 +12,7 @@ CONFS=	DAEMON \
 	SERVERS \
 	adjkerntz \
 	asld_ready \
+	syslogd \
 	bgfsck \
 	bridge \
 	cfumass \
@@ -277,9 +278,6 @@ CONFGROUPS+=			PPPOED
 PPPOEDPACKAGE=			ppp
 PPPOED=		pppoed
 
-CONFGROUPS+=			SYSLOGD
-SYSLOGDPACKAGE=			syslogd
-SYSLOGD=	syslogd
 
 CONFGROUPS+=			RCMDS
 RCMDSPACKAGE=			rcmds
