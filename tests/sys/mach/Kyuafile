@@ -1,5 +1,6 @@
 syntax(2)
 test_suite("FreeBSD")
+atf_test_program{name="mach_error_prints_test"}
 atf_test_program{name="mach_identity_test"}
 atf_test_program{name="mach_lifetime_test"}
 atf_test_program{name="mach_fileops_test"}

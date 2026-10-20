@@ -55,6 +55,10 @@ MACH_SO?= ${SYSROOT}/usr/lib/libmach.so.5
 SCRIPTS+= mach_mig_pointers_test
 SCRIPTS+= mach_trap_returns_test
 SCRIPTS+= mach_ool_failure_test
+SCRIPTS+= mach_error_prints_test
+mach_error_prints_test: ${.CURDIR}/mach_error_prints.zig
+	${ZIG} build-exe ${.CURDIR}/mach_error_prints.zig ${MACH_SO} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc \
+	    --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -femit-bin=${.TARGET}
 mach_ool_failure_test: ${.CURDIR}/mach_ool_failure.zig ${.CURDIR}/file_message.zig
 	${ZIG} build-exe ${.CURDIR}/mach_ool_failure.zig ${MACH_SO} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc \
 	    --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -femit-bin=${.TARGET}

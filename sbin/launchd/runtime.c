@@ -1257,6 +1257,14 @@ launchd_mig_demux(mach_msg_header_t *request, mach_msg_header_t *reply)
 	return result;
 }
 
+static void
+launchd_reject_nonmig(xpc_object_t request)
+{
+	time_of_mach_msg_return = runtime_get_opaque_time();
+	_launchd_syslog(LOG_DEBUG, "Ignoring unsupported non-MIG XPC request.");
+	xpc_release(request);
+}
+
 void
 launchd_runtime2(mach_msg_size_t msg_size)
 {
@@ -1271,37 +1279,7 @@ launchd_runtime2(mach_msg_size_t msg_size)
 		if (result != 1)
 			syslog(LOG_ERR, "result=%d", result);
 		if (result == 0 && request) {
-			boolean_t handled = false;
-			time_of_mach_msg_return = runtime_get_opaque_time();
-			_launchd_syslog(LOG_DEBUG, "XPC request.");
-
-			xpc_object_t reply = NULL;
-			if (xpc_event_demux(recvp, request, &reply)) {
-				handled = true;
-			} else if (xpc_process_demux(recvp, request, &reply)) {
-				handled = true;
-			}
-
-			if (!handled) {
-				_launchd_syslog(LOG_DEBUG, "XPC routine could not be handled.");
-				xpc_release(request);
-				continue;
-			}
-
-			_launchd_syslog(LOG_DEBUG, "XPC routine was handled.");
-			if (reply) {
-				_launchd_syslog(LOG_DEBUG, "Sending reply.");
-				result = xpc_pipe_routine_reply(reply);
-				if (result == 0) {
-					_launchd_syslog(LOG_DEBUG, "Reply sent successfully.");
-				} else if (result != EPIPE) {
-					_launchd_syslog(LOG_ERR, "Failed to send reply message: 0x%x", result);
-				}
-
-				xpc_release(reply);
-			}
-
-			xpc_release(request);
+			launchd_reject_nonmig(request);
 		} else if (result == 0) {
 			_launchd_syslog(LOG_DEBUG, "MIG request.");
 		} else if (result == EINVAL) {

@@ -194,6 +194,7 @@ _xpc_prim_create_flags(int type, xpc_u value, size_t size, uint16_t flags)
 	xo->xo_u = value;
 	xo->xo_refcnt = 1;
 	xo->xo_audit_token = NULL;
+	xo->xo_reply_port = MACH_PORT_NULL;
 
 	if (type == _XPC_TYPE_DICTIONARY)
 		TAILQ_INIT(&xo->xo_dict);

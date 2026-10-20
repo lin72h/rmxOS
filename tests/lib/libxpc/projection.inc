@@ -1,5 +1,6 @@
 /* Private field projection only. */
 unsigned op500_local(struct xpc_connection *c) { return c->xc_local_port; }
+int op736_audit_pid(struct xpc_object *o) { return o->xo_audit_token ? o->xo_audit_token->val[5] : -1; }
 void op500_remote(struct xpc_connection *c,unsigned p) { c->xc_remote_port=p; c->xc_owns_remote_port=true; }
 unsigned op500_cancel_count(struct xpc_connection *c) { return c->xc_source_cancel_count; }
 unsigned op500_cancelled(struct xpc_connection *c) { return c->xc_cancelled; }

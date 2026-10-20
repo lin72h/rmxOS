@@ -26,4 +26,7 @@ void op500_source_cancelled(void *);
 void op500_port_release(void *, unsigned, unsigned);
 void op500_pending_free(void *);
 kern_return_t op502_lookup(mach_port_t, const char *, mach_port_t *);
+/* One-shot allocation failure, isolated to the pending-entry allocation. */
+int op736_pending_alloc_fail(void);
+void op736_fail_pending_alloc(void);
 #endif

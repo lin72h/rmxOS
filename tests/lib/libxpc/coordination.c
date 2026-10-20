@@ -8,6 +8,9 @@
 #include "projection.h"
 #include <servers/bootstrap.h>
 static struct op500_hooks hooks;
+static unsigned op736_fail_alloc;
+void op736_fail_pending_alloc(void) { __atomic_store_n(&op736_fail_alloc, 1, __ATOMIC_SEQ_CST); }
+int op736_pending_alloc_fail(void) { return __atomic_exchange_n(&op736_fail_alloc, 0, __ATOMIC_SEQ_CST); }
 void op500_install(const struct op500_hooks *h) { hooks = *h; }
 void op500_before_handler(void *p) { if (hooks.before_handler) hooks.before_handler(p); }
 void op500_after_receive(void *p, int r) { if (hooks.after_receive) hooks.after_receive(p, r); }

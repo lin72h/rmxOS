@@ -39,7 +39,7 @@
 #include "../../tests/lib/libxpc/projection.h"
 #endif
 
-#define XPC_CONNECTION_NEXT_ID(conn) (atomic_fetchadd_int(&conn->xc_last_id, 1))
+#define XPC_CONNECTION_NEXT_ID(conn) (atomic_fetchadd_64(&conn->xc_last_id, 1))
 
 struct xpc_send_context {
 	struct xpc_connection *xsc_connection;
@@ -90,6 +90,12 @@ xpc_connection_create(const char *name, dispatch_queue_t targetq)
 
 	memset(conn, 0, sizeof(struct xpc_connection));
 	if (pthread_mutex_init(&conn->xc_remote_lock, NULL) != 0) {
+		free(conn);
+		errno = ENOMEM;
+		return (NULL);
+	}
+	if (pthread_mutex_init(&conn->xc_pending_lock, NULL) != 0) {
+		pthread_mutex_destroy(&conn->xc_remote_lock);
 		free(conn);
 		errno = ENOMEM;
 		return (NULL);
@@ -268,7 +274,7 @@ xpc_connection_suspend(xpc_connection_t xconn)
 	struct xpc_connection *conn;
 
 	conn = xconn;
-	if (conn->xc_cancelled)
+	if (atomic_load_acq_int(&conn->xc_cancelled))
 		return;
 	atomic_add_int(&conn->xc_suspend_count, 1);
 	dispatch_suspend(conn->xc_recv_queue);
@@ -282,7 +288,7 @@ xpc_connection_resume(xpc_connection_t xconn)
 
 	debugf("connection=%p", xconn);
 	conn = xconn;
-	if (conn->xc_cancelled)
+	if (atomic_load_acq_int(&conn->xc_cancelled))
 		return;
 	for (;;) {
 		count = atomic_load_acq_int(&conn->xc_suspend_count);
@@ -320,7 +326,7 @@ xpc_connection_send_message(xpc_connection_t xconn,
 	uint64_t id;
 
 	conn = xconn;
-	if (conn->xc_cancelled)
+	if (atomic_load_acq_int(&conn->xc_cancelled))
 		return;
 	id = xpc_dictionary_get_uint64(message, XPC_SEQID);
 
@@ -345,14 +351,19 @@ xpc_connection_send_message_with_reply(xpc_connection_t xconn,
 	struct xpc_send_context *send;
 
 	conn = xconn;
-	if (conn->xc_cancelled)
-		return;
-
 	call = calloc(1, sizeof(*call));
 	send = malloc(sizeof(*send));
+#ifdef XPC_CONSUMER_TESTING
+	if (op736_pending_alloc_fail()) {
+		free(call);
+		call = NULL;
+	}
+#endif
 	if (call == NULL || send == NULL) {
 		free(call);
 		free(send);
+		/* No pending entry exists: complete directly, outside every lock. */
+		handler(XPC_ERROR_CONNECTION_INVALID);
 		return;
 	}
 	call->xp_id = XPC_CONNECTION_NEXT_ID(conn);
@@ -360,11 +371,21 @@ xpc_connection_send_message_with_reply(xpc_connection_t xconn,
 	call->xp_queue = targetq;
 	if (call->xp_queue != NULL)
 		dispatch_retain(call->xp_queue);
-	TAILQ_INSERT_TAIL(&conn->xc_pending, call, xp_link);
-
 	send->xsc_connection = xpc_retain(conn);
 	send->xsc_message = xpc_retain(message);
 	send->xsc_id = call->xp_id;
+	pthread_mutex_lock(&conn->xc_pending_lock);
+	if (atomic_load_acq_int(&conn->xc_cancelled)) {
+		pthread_mutex_unlock(&conn->xc_pending_lock);
+		xpc_release(send->xsc_message);
+		xpc_release(send->xsc_connection);
+		free(send);
+		call->xp_response = xpc_retain(XPC_ERROR_CONNECTION_INVALID);
+		xpc_connection_invoke_pending(call);
+		return;
+	}
+	TAILQ_INSERT_TAIL(&conn->xc_pending, call, xp_link);
+	pthread_mutex_unlock(&conn->xc_pending_lock);
 	dispatch_async_f(conn->xc_send_queue, send, xpc_connection_send_work);
 }
 
@@ -403,8 +424,12 @@ xpc_connection_cancel(xpc_connection_t connection)
 	struct xpc_connection *conn;
 
 	conn = connection;
-	if (!atomic_cmpset_int(&conn->xc_cancelled, 0, 1))
+	pthread_mutex_lock(&conn->xc_pending_lock);
+	if (!atomic_cmpset_int(&conn->xc_cancelled, 0, 1)) {
+		pthread_mutex_unlock(&conn->xc_pending_lock);
 		return;
+	}
+	pthread_mutex_unlock(&conn->xc_pending_lock);
 
 	xpc_connection_invalidate(conn, XPC_ERROR_CONNECTION_INVALID);
 	(void)xpc_connection_cancel_sources(conn);
@@ -528,12 +553,12 @@ xpc_send(xpc_connection_t xconn, xpc_object_t message, uint64_t id)
 	if (xpc_connection_can_reconnect(conn) &&
 	    atomic_load_acq_int(&conn->xc_interrupted) != 0 &&
 	    !xpc_connection_reconnect(conn)) {
-		if (!conn->xc_cancelled)
+		if (!atomic_load_acq_int(&conn->xc_cancelled))
 			xpc_connection_invalidate(conn,
 			    XPC_ERROR_CONNECTION_INTERRUPTED);
 		return;
 	}
-	if (conn->xc_cancelled)
+	if (atomic_load_acq_int(&conn->xc_cancelled))
 		return;
 	kr = xpc_pipe_send(message, conn->xc_remote_port,
 	    conn->xc_local_port, id);
@@ -553,7 +578,7 @@ xpc_connection_send_work(void *context)
 	struct xpc_send_context *send;
 
 	send = context;
-	if (!send->xsc_connection->xc_cancelled)
+	if (!atomic_load_acq_int(&send->xsc_connection->xc_cancelled))
 		xpc_send(send->xsc_connection, send->xsc_message, send->xsc_id);
 	xpc_release(send->xsc_message);
 	xpc_release(send->xsc_connection);
@@ -587,9 +612,14 @@ xpc_connection_complete_pending(struct xpc_connection *conn, xpc_object_t error)
 {
 	struct xpc_pending_call *call;
 	dispatch_queue_t queue;
+	TAILQ_HEAD(, xpc_pending_call) pending;
 
-	while ((call = TAILQ_FIRST(&conn->xc_pending)) != NULL) {
-		TAILQ_REMOVE(&conn->xc_pending, call, xp_link);
+	TAILQ_INIT(&pending);
+	pthread_mutex_lock(&conn->xc_pending_lock);
+	TAILQ_CONCAT(&pending, &conn->xc_pending, xp_link);
+	pthread_mutex_unlock(&conn->xc_pending_lock);
+	while ((call = TAILQ_FIRST(&pending)) != NULL) {
+		TAILQ_REMOVE(&pending, call, xp_link);
 		call->xp_response = xpc_retain(error);
 		queue = call->xp_queue ? call->xp_queue : conn->xc_target_queue;
 		dispatch_async_f(queue, call, xpc_connection_invoke_pending);
@@ -659,7 +689,7 @@ static void
 xpc_connection_interrupt(struct xpc_connection *conn)
 {
 
-	if (conn->xc_cancelled)
+	if (atomic_load_acq_int(&conn->xc_cancelled))
 		return;
 	if (!atomic_cmpset_int(&conn->xc_interrupted, 0, 1))
 		return;
@@ -742,31 +772,17 @@ void
 xpc_connection_destroy(struct xpc_connection *conn)
 {
 	struct xpc_connection *peer;
-	struct xpc_pending_call *call;
 	xpc_finalizer_t finalizer;
 	void *context;
 
-	if (atomic_cmpset_int(&conn->xc_cancelled, 0, 1))
-		xpc_connection_complete_pending(conn,
-		    XPC_ERROR_CONNECTION_INVALID);
+	pthread_mutex_lock(&conn->xc_pending_lock);
+	atomic_store_rel_int(&conn->xc_cancelled, 1);
+	pthread_mutex_unlock(&conn->xc_pending_lock);
+	xpc_connection_complete_pending(conn, XPC_ERROR_CONNECTION_INVALID);
 	if (xpc_connection_cancel_sources(conn))
 		return;
 	if (atomic_load_acq_int(&conn->xc_source_cancel_count) != 0)
 		return;
-
-	while ((call = TAILQ_FIRST(&conn->xc_pending)) != NULL) {
-		TAILQ_REMOVE(&conn->xc_pending, call, xp_link);
-		if (call->xp_response != NULL)
-			xpc_release(call->xp_response);
-		if (call->xp_handler != NULL)
-			Block_release(call->xp_handler);
-		if (call->xp_queue != NULL)
-			dispatch_release(call->xp_queue);
-		if (call->xp_remote_port != MACH_PORT_NULL)
-			(void)mach_port_deallocate(mach_task_self(),
-			    call->xp_remote_port);
-		free(call);
-	}
 
 	while ((peer = TAILQ_FIRST(&conn->xc_peers)) != NULL) {
 		TAILQ_REMOVE(&conn->xc_peers, peer, xc_link);
@@ -816,6 +832,7 @@ xpc_connection_destroy(struct xpc_connection *conn)
 	if (finalizer != NULL)
 		finalizer(context);
 	pthread_mutex_destroy(&conn->xc_remote_lock);
+	pthread_mutex_destroy(&conn->xc_pending_lock);
 	free(conn);
 }
 
@@ -853,7 +870,7 @@ xpc_connection_send_source(struct xpc_connection *conn, mach_port_t port)
 		bool current, reconnectable;
 		pthread_mutex_lock(&conn->xc_remote_lock);
 		current = conn->xc_send_source == source &&
-		    conn->xc_remote_port == port && !conn->xc_cancelled;
+		    conn->xc_remote_port == port && !atomic_load_acq_int(&conn->xc_cancelled);
 		reconnectable = xpc_connection_can_reconnect(conn);
 		if (current && reconnectable)
 			xpc_connection_interrupt(conn);
@@ -870,7 +887,7 @@ xpc_connection_arm_send_source(struct xpc_connection *conn)
 {
 	pthread_mutex_lock(&conn->xc_remote_lock);
 	if (conn->xc_send_source != NULL ||
-	    conn->xc_remote_port == MACH_PORT_NULL || conn->xc_cancelled ||
+	    conn->xc_remote_port == MACH_PORT_NULL || atomic_load_acq_int(&conn->xc_cancelled) ||
 	    conn->xc_sources_cancelled) {
 		pthread_mutex_unlock(&conn->xc_remote_lock);
 		return;
@@ -889,7 +906,7 @@ xpc_connection_reconnect(struct xpc_connection *conn)
 	dispatch_source_t replacement_source, old_source;
 	kern_return_t kr;
 
-	if (conn->xc_cancelled || conn->xc_sources_cancelled)
+	if (atomic_load_acq_int(&conn->xc_cancelled) || conn->xc_sources_cancelled)
 		return (false);
 #ifdef XPC_CONSUMER_TESTING
 	kr = op502_lookup(bootstrap_port, conn->xc_name, &replacement);
@@ -899,7 +916,7 @@ xpc_connection_reconnect(struct xpc_connection *conn)
 	if (kr != KERN_SUCCESS)
 		return (false);
 	pthread_mutex_lock(&conn->xc_remote_lock);
-	if (conn->xc_cancelled || conn->xc_sources_cancelled) {
+	if (atomic_load_acq_int(&conn->xc_cancelled) || conn->xc_sources_cancelled) {
 		pthread_mutex_unlock(&conn->xc_remote_lock);
 		(void)mach_port_deallocate(mach_task_self(), replacement);
 		return (false);
@@ -970,7 +987,7 @@ xpc_connection_arm_proc_source(struct xpc_connection *conn)
 	pid_t pid = conn->xc_remote_pid;
 
 	/* Credentials and source publication share xc_remote_lock. */
-	if (conn->xc_cancelled || conn->xc_sources_cancelled)
+	if (atomic_load_acq_int(&conn->xc_cancelled) || conn->xc_sources_cancelled)
 		return;
 	if (conn->xc_proc_source != NULL && conn->xc_proc_pid == pid)
 		return;
@@ -988,7 +1005,7 @@ xpc_connection_arm_proc_source(struct xpc_connection *conn)
 	dispatch_source_set_event_handler(source, ^{
 		pthread_mutex_lock(&conn->xc_remote_lock);
 		if (conn->xc_proc_source == source && conn->xc_proc_pid == pid &&
-		    !conn->xc_cancelled)
+		    !atomic_load_acq_int(&conn->xc_cancelled))
 			xpc_connection_remote_proc_dead(conn);
 		pthread_mutex_unlock(&conn->xc_remote_lock);
 	});
@@ -1046,7 +1063,7 @@ xpc_connection_recv_message(void *context)
 			xpc_connection_cancel(conn);
 		return;
 	}
-	if (conn->xc_cancelled) {
+	if (atomic_load_acq_int(&conn->xc_cancelled)) {
 		xpc_release(result);
 		(void)mach_port_deallocate(mach_task_self(), remote);
 		return;
@@ -1057,7 +1074,7 @@ xpc_connection_recv_message(void *context)
 	if (conn->xc_flags & XPC_CONNECTION_MACH_SERVICE_LISTENER) {
 		TAILQ_FOREACH(peer, &conn->xc_peers, xc_link) {
 			if (remote == peer->xc_remote_port) {
-				if (!peer->xc_cancelled && peer->xc_handler != NULL)
+				if (!atomic_load_acq_int(&peer->xc_cancelled) && peer->xc_handler != NULL)
 					xpc_connection_dispatch_event(peer, result, remote);
 				else
 					(void)mach_port_deallocate(mach_task_self(), remote);
@@ -1092,7 +1109,7 @@ xpc_connection_recv_message(void *context)
 		}
 
 		/* Peer setup has completed; its receive queue now holds delivery. */
-		if (!peer->xc_cancelled && peer->xc_handler != NULL)
+		if (!atomic_load_acq_int(&peer->xc_cancelled) && peer->xc_handler != NULL)
 			xpc_connection_dispatch_event(peer, result, MACH_PORT_NULL);
 		xpc_release(result);
 
@@ -1100,6 +1117,7 @@ xpc_connection_recv_message(void *context)
 		xpc_connection_set_credentials(conn,
 		    ((struct xpc_object *)result)->xo_audit_token);
 
+		pthread_mutex_lock(&conn->xc_pending_lock);
 		TAILQ_FOREACH(call, &conn->xc_pending, xp_link) {
 			if (call->xp_id == id) {
 				TAILQ_REMOVE(&conn->xc_pending, call, xp_link);
@@ -1107,11 +1125,13 @@ xpc_connection_recv_message(void *context)
 				call->xp_remote_port = remote;
 				queue = call->xp_queue ? call->xp_queue :
 				    conn->xc_target_queue;
+				pthread_mutex_unlock(&conn->xc_pending_lock);
 				dispatch_async_f(queue, call,
 				    xpc_connection_invoke_pending);
 				return;
 			}
 		}
+		pthread_mutex_unlock(&conn->xc_pending_lock);
 
 		if (conn->xc_handler != NULL)
 			xpc_connection_dispatch_event(conn, result, remote);

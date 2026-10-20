@@ -90,6 +90,8 @@ struct xpc_object {
 	size_t			xo_size;
 	xpc_u			xo_u;
 	audit_token_t *		xo_audit_token;
+	/* Only a received pipe request owns this right; dictionary values borrow it. */
+	mach_port_t		xo_reply_port;
 	TAILQ_ENTRY(xpc_object) xo_link;
 };
 
@@ -121,6 +123,7 @@ struct xpc_connection {
 	dispatch_queue_t	xc_target_queue;
 	dispatch_source_t	xc_send_source;
 	pthread_mutex_t		xc_remote_lock;
+	pthread_mutex_t		xc_pending_lock;
 	dispatch_source_t	xc_proc_source;
 	volatile u_int		xc_suspend_count;
 	int			xc_transaction_count;

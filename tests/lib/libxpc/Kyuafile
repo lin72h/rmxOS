@@ -1,3 +1,4 @@
 syntax(2)
 test_suite("FreeBSD")
 atf_test_program{name="xpc_receive_test"}
+atf_test_program{name="receive_pending_test"}
