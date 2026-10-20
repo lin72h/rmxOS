@@ -1128,10 +1128,10 @@ _asl_action_set_param_data_free(asl_action_set_param_data_t *spdata)
 static void
 _asl_action_save_failed(const char *where, asl_out_module_t *m, asl_out_rule_t *r, uint32_t status)
 {
+	asld_count_file_failure();
 	if (r->dst->flags & MODULE_FLAG_SOFT_WRITE) return;
 
 	r->dst->fails++;
-	ASLD_COUNT(file_action_failed);
 	asldebug("%s: %s save to %s failed: %s\n", where, m->name, r->dst->path, asl_core_error(status));
 
 	/* disable further activity after multiple failures */

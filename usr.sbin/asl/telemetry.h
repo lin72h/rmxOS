@@ -11,11 +11,12 @@ struct asld_counters {
 #undef ASLD_FIELD
 };
 extern struct asld_counters asld_counters;
-struct asld_delivery { unsigned refs; unsigned duplicate_counted; };
+struct asld_delivery { unsigned refs; unsigned duplicate_counted; unsigned file_failure_counted; };
 struct asld_delivery *asld_delivery_new(unsigned);
 void asld_delivery_begin(struct asld_delivery *);
 void asld_delivery_end(void);
 void asld_count_duplicate(void);
+void asld_count_file_failure(void);
 #define ASLD_COUNT(n) ((void)__atomic_fetch_add(&asld_counters.n, 1, __ATOMIC_RELAXED))
 void asld_telemetry_snapshot(struct asl_msg_s *);
 void asld_telemetry_init(void);

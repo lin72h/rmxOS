@@ -37,6 +37,12 @@ asld_count_duplicate(void)
  if (current_delivery && !__atomic_exchange_n(&current_delivery->duplicate_counted, 1, __ATOMIC_RELAXED)) ASLD_COUNT(dup_suppressed);
 }
 
+void
+asld_count_file_failure(void)
+{
+ if (!current_delivery || !__atomic_exchange_n(&current_delivery->file_failure_counted, 1, __ATOMIC_RELAXED)) ASLD_COUNT(file_action_failed);
+}
+
 /* These records bypass admission, quota and destination/duplicate rules. The
  * action queue still serializes all store access with normal messages. */
 void
