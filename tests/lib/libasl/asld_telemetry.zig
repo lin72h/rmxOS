@@ -86,8 +86,7 @@ fn start(limit: [*:0]const u8, quota: [*:0]const u8) void {
     for (0..400) |_| {
         var status: c_int = 0;
         need(c.waitpid(child, &status, c.WNOHANG) == 0, "asld remains alive during startup");
-        if (c.access(&p, c.F_OK) == 0) {
-            _ = c.usleep(100000);
+        if (c.access(&p, c.F_OK) == 0 and fileMatches("daemon.log", "asld_ready pid=") == 1) {
             return;
         }
         _ = c.usleep(10000);
