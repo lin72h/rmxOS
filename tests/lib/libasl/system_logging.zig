@@ -371,7 +371,7 @@ fn retention(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const path = "/tmp/op767-interval.plist";
     const f = c.fopen(path, "w");
     need(f != null, "interval fixture plist");
-    _ = c.fputs("<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>Label</key><string>com.rmxos.op767.interval</string><key>ProgramArguments</key><array><string>/usr/sbin/aslmanager</string><string>-once</string><string>-s</string><string>/var/log/asl</string></array><key>ThrottleInterval</key><integer>0</integer><key>StartInterval</key><integer>2</integer></dict></plist>", f);
+    _ = c.fputs("<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>Label</key><string>com.rmxos.op767.interval</string><key>ProgramArguments</key><array><string>/usr/sbin/aslmanager</string><string>-once</string><string>-wait-for-filesystems</string><string>-s</string><string>/var/log/asl</string></array><key>ThrottleInterval</key><integer>0</integer><key>StartInterval</key><integer>2</integer></dict></plist>", f);
     need(c.fclose(f) == 0, "close interval fixture");
     const marker = "[com.rmxos.aslmanager.record summary]";
     const before = count(run(&.{ "/usr/bin/aslutil", "-d", "/var/log/asl", "-F", "raw", "-k", "com.rmxos.aslmanager.record", "summary" }), marker);

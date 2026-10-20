@@ -1,0 +1,22 @@
+#!/bin/sh
+# PROVIDE: asld_ready
+# REQUIRE: FILESYSTEMS mountcritremote
+# BEFORE: newsyslog syslogd SERVERS
+# KEYWORD: nojail
+
+. /etc/rc.subr
+name="asld_ready"
+desc="Release launchd logging jobs after filesystem setup"
+start_cmd="asld_ready_start"
+stop_cmd=":"
+
+asld_ready_start()
+{
+	# No logger, socket or pidfile is required here. The binary boot token
+	# prevents an old marker from releasing a job during a later boot.
+	(umask 077; /sbin/sysctl -bn kern.boottime > /var/run/asld.filesystems-ready.tmp) || return 1
+	mv -f /var/run/asld.filesystems-ready.tmp /var/run/asld.filesystems-ready
+}
+
+load_rc_config "$name"
+run_rc_command "$1"

@@ -8,6 +8,7 @@
 	<array>
 		<string>/usr/sbin/aslmanager</string>
 		<string>-once</string>
+		<string>-wait-for-filesystems</string>
 		<string>-s</string>
 		<string>/var/log/asl</string>
 	</array>

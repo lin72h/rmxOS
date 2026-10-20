@@ -46,6 +46,7 @@
 #include <asl_file.h>
 #include <asl_store.h>
 #include "asl_common.h"
+#include "../asl/filesystems.h"
 
 #define DEFAULT_MAX_SIZE 150000000
 #define IOBUFSIZE 4096
@@ -1687,6 +1688,10 @@ main(int argc, char *argv[])
 	for (i = 1; i < argc; i++)
 	{
 		if (!strcmp(argv[i], "-once")) run_once = 1;
+		if (!strcmp(argv[i], "-wait-for-filesystems") && asl_wait_for_filesystems() != 0) {
+			fprintf(stderr, "aslmanager: filesystem setup not ready: %s\n", strerror(errno));
+			return 1;
+		}
 	}
 
 	vproc_swap_integer(NULL, VPROC_GSK_IS_MANAGED, NULL, &is_managed);

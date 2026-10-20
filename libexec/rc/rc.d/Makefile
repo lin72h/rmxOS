@@ -11,6 +11,7 @@ CONFS=	DAEMON \
 	NETWORKING \
 	SERVERS \
 	adjkerntz \
+	asld_ready \
 	bgfsck \
 	bridge \
 	cfumass \

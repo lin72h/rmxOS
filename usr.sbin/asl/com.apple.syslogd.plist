@@ -34,6 +34,7 @@
 		<string>/usr/share/sandbox/syslogd.sb</string>
 -->
 		<string>/usr/sbin/asld</string>
+		<string>-wait-for-filesystems</string>
 		<string>-bsd_in</string><string>1</string>
 		<string>-klog_in</string><string>1</string>
 		<string>-udp_in</string><string>0</string>

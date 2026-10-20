@@ -55,6 +55,7 @@
 // XXX #include <quarantine.h>
 #endif
 #include "daemon.h"
+#include "filesystems.h"
 
 #define SERVICE_NAME "com.apple.system.logger"
 #define SERVER_STATUS_ERROR -1
@@ -457,6 +458,7 @@ int
 main(int argc, const char *argv[])
 {
 	int32_t i;
+	int wait_filesystems = 0;
 #if !TARGET_IPHONE_SIMULATOR
 	int network_change_token;
 #endif
@@ -679,6 +681,12 @@ main(int argc, const char *argv[])
 	tstr[19] = '\0';
 	asldebug("\n%s syslogd PID %d starting\n", tstr, global.pid);
 
+	for (i = 1; i < argc; i++)
+		if (!strcmp(argv[i], "-wait-for-filesystems")) wait_filesystems = 1;
+	if (wait_filesystems && asl_wait_for_filesystems() != 0) {
+		fprintf(stderr, "asld: filesystem setup not ready: %s\n", strerror(errno));
+		exit(1);
+	}
 	if (!global.private_dir) writepid(&first_syslogd_start);
 
 	/*
