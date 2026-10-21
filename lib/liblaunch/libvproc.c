@@ -780,7 +780,6 @@ _vprocmgr_log_drain(vproc_t vp __attribute__((unused)), pthread_mutex_t *mutex, 
 		tmp_cnt -= lm->obj_sz;
 		cursor += lm->obj_sz;
 	}
-	if (mutex) pthread_mutex_lock(mutex);
 	tmp_cnt = outdata_cnt;
 	for (vm_offset_t cursor = outdata; tmp_cnt > 0; ) {
 		lm = (struct logmsg_s *)cursor;
@@ -790,12 +789,19 @@ _vprocmgr_log_drain(vproc_t vp __attribute__((unused)), pthread_mutex_t *mutex, 
 		lm->session_name = (char *)lm + lm->session_name_offset;
 		tv.tv_sec = lm->when / USEC_PER_SEC;
 		tv.tv_usec = lm->when % USEC_PER_SEC;
+		if (mutex) {
+			pthread_mutex_lock(mutex);
 		func(&tv, lm->from_pid, lm->about_pid, lm->sender_uid, lm->sender_gid, lm->pri,
 		    lm->from_name, lm->about_name, lm->session_name, lm->msg);
+			pthread_mutex_unlock(mutex);
+		} else {
+		func(&tv, lm->from_pid, lm->about_pid, lm->sender_uid, lm->sender_gid, lm->pri,
+		    lm->from_name, lm->about_name, lm->session_name, lm->msg);
+		}
+
 		tmp_cnt -= lm->obj_sz;
 		cursor += lm->obj_sz;
 	}
-	if (mutex) pthread_mutex_unlock(mutex);
 
 	if (outdata) {
 		mig_deallocate(outdata, outdata_cnt);
