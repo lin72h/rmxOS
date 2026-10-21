@@ -13,3 +13,18 @@ It loads `/usr/lib/liblaunch.so.5` inside its body and requires a nonzero
 the older socket handler that already exports the correct job. ATF `-l` only
 lists metadata and never loads liblaunch. No expected-failure annotation hides
 the before result. No guest result is recorded by this op.
+
+## Logger workload sizing (op-860)
+
+The logger `stopped` fixture selects its workload through the running kernel's
+`kern.features.kasan` (FEATURE(kasan)). Missing means RELEASE; query errors or
+unexpected values fail closed. The shared fixture policy uses 1200 RELEASE
+jobs and 1100 KASAN jobs, both above the 1000-record queue bound. Worker,
+launchd-parent, ATF and batch deadlines are strictly nested. The existing
+queue/byte/RSS bounds, replacement asld process, newest message, exact drop
+record and fresh cumulative status assertions remain mandatory.
+
+Host-only sizing/build checks: `elixir tools/selfcheck/op860-host.exs --build-only`,
+then `elixir tools/selfcheck/op860-host.exs --check` in the implementer repo.
+The latter uses the retained r112 KASAN serial as timing input; it does not
+establish a guest pass.

@@ -1,5 +1,6 @@
 // Run a test under launchd when the interactive shell has no bootstrap port.
 const std = @import("std");
+pub const budget = @import("logging_budget.zig");
 const c = @cImport({
     @cInclude("unistd.h");
     @cInclude("sys/wait.h");
@@ -8,6 +9,9 @@ const c = @cImport({
     @cInclude("atf-c.h");
 });
 const a = std.heap.page_allocator;
+pub fn stoppedLimits() budget.Limits {
+    return budget.limits(budget.running() catch c.atf_tc_fail("query kern.features.kasan"));
+}
 pub fn z(s: []const u8) [:0]const u8 {
     return a.dupeZ(u8, s) catch c.atf_tc_fail("fixture allocation");
 }
@@ -43,7 +47,8 @@ pub fn enter(binary: []const u8, case_name: []const u8) bool {
         std.fs.cwd().deleteFile(state) catch {};
     }
     var printed: usize = 0;
-    for (0..(if (std.mem.eql(u8, case_name, "churn")) @as(usize, 11500) else 2000)) |_| {
+    const polls: usize = if (std.mem.eql(u8, case_name, "stopped")) @as(usize, stoppedLimits().parent_seconds) * 10 else if (std.mem.eql(u8, case_name, "churn")) 11500 else 2000;
+    for (0..polls) |_| {
         const progress = std.fs.cwd().readFileAlloc(a, output, 1048576) catch "";
         if (progress.len > printed) {
             _ = c.printf("%.*s", @as(c_int, @intCast(progress.len - printed)), progress[printed..].ptr);

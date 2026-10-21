@@ -1,0 +1,1 @@
+{"queue_records":1000,"tail_seconds":180,"layer_seconds":15,"release":{"extra_jobs":200,"job_ms":100},"kasan":{"extra_jobs":100,"job_ms":750},"normal_case_seconds":2,"cleanup_seconds":35,"churn_seconds":1100,"boot_overhead_seconds":1500,"max_boot_seconds":86400}

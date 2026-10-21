@@ -133,7 +133,10 @@ fn stopped() void {
         _ = c.usleep(100000);
     }
     need(c.kill(pid, 0) != 0, "old asld process exited before queue workload");
-    const count: u32 = 1200;
+    const limits = f.stoppedLimits();
+    const count = limits.jobs;
+    _ = c.printf("launchd_stopped_budget jobs=%u queue_records=%u job_ms=%u worker_s=%u parent_s=%u atf_s=%u runner_s=%u\n", count, limits.queue_records, limits.job_ms, limits.worker_seconds, limits.parent_seconds, limits.atf_seconds, limits.runner_seconds);
+    _ = c.fflush(null);
     var newest: []const u8 = "";
     for (0..count) |i| {
         const label = text("com.rmxos.op789.full.{d}.{d}", .{ c.getpid(), i });
@@ -149,7 +152,7 @@ fn stopped() void {
     const bytes = stat(queue_bytes);
     const lost = stat(queue_dropped);
     _ = c.printf("launchd_stopped produced_jobs=%u queued=%ju bytes=%ju dropped=%ju\n", count, retained, bytes, lost);
-    need(retained <= 1000 and bytes <= 256 * 1024 and lost > 0, "stopped queue bounded and all losses counted");
+    need(count > limits.queue_records and retained <= limits.queue_records and bytes <= 256 * 1024 and lost > 0, "stopped queue bounded and all losses counted");
     const rss_peak = rss();
     need(rss_peak <= rss_before + 8192, "stopped logger RSS remains within queue/allocation bound");
     need(f.run(&.{ "/bin/launchctl", "load", "/etc/launchd.d/com.apple.syslogd.plist" }) == 0, "start asld candidate job");
@@ -243,7 +246,7 @@ fn churn() void {
 fn body(tc: [*c]const c.atf_tc_t) callconv(.c) void {
     const name = std.mem.span(c.atf_tc_get_ident(tc));
     if (!f.enter("/usr/tests/sys/launchd/launchd_logging_test", name)) return;
-    _ = c.alarm(150);
+    _ = c.alarm(if (std.mem.eql(u8, name, "stopped")) f.stoppedLimits().worker_seconds else 150);
     if (std.mem.eql(u8, name, "early_boot")) early() else if (std.mem.eql(u8, name, "drain")) drain() else if (std.mem.eql(u8, name, "stopped")) stopped() else if (std.mem.eql(u8, name, "pid1_boot")) boot() else churn();
 }
 fn cleanup(tc: [*c]const c.atf_tc_t) callconv(.c) void {
@@ -258,7 +261,8 @@ fn cleanup(tc: [*c]const c.atf_tc_t) callconv(.c) void {
 }
 fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     const name = std.mem.span(c.atf_tc_get_ident(tc));
-    const timeout: [*:0]const u8 = if (std.mem.eql(u8, name, "churn")) "1100" else if (std.mem.eql(u8, name, "stopped")) "180" else "60";
+    var timeout_buffer: [32]u8 = undefined;
+    const timeout: [*:0]const u8 = if (std.mem.eql(u8, name, "churn")) "1100" else if (std.mem.eql(u8, name, "stopped")) (std.fmt.bufPrintZ(&timeout_buffer, "{d}", .{f.stoppedLimits().atf_seconds}) catch unreachable).ptr else "60";
     _ = c.atf_tc_set_md_var(tc, "timeout", "%s", timeout);
     _ = c.atf_tc_set_md_var(tc, "require.user", "%s", "root");
 }
