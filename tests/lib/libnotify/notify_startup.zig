@@ -35,7 +35,7 @@ pub export fn mach_port_insert_right(_: u32, _: u32, _: u32, _: u32) c_int {
 fn body(_: [*c]const c.atf_tc_t) callconv(.c) void {
     var token: c_int = -1;
     for (0..3) |_| {
-        const status = notify_register_dispatch("com.apple.system.notify.service.path:/etc/asl/.noquota", &token, dispatch_get_global_queue(0, 0), &block);
+        const status = notify_register_dispatch("com.apple.system.notify.service.path:0x87:/etc/asl/.noquota", &token, dispatch_get_global_queue(0, 0), &block);
         if (status != c.NOTIFY_STATUS_FAILED or token != -1) c.atf_tc_fail("early dispatch status=%u token=%d", status, token);
         var port: u32 = 0;
         const reused = c.notify_register_mach_port("op824.unavailable", &port, c.NOTIFY_REUSE, &token);

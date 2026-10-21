@@ -106,11 +106,11 @@ fn fileInsert() void {
     _ = c.close(pipe[0]);
 }
 // The file projection is transient: no port allocation or file hold may survive.
-fn allocatedPorts() u64 {
-    var n: u64 = 0;
-    var len: usize = @sizeOf(u64);
+fn allocatedPorts() u32 {
+    var n: u32 = 0;
+    var len: usize = @sizeOf(u32);
     fact("port_zone_snapshot", 0, c.sysctlbyname("vm.uma.ipc_ports.stats.current", &n, &len, null, 0));
-    if (len != @sizeOf(u64)) c.atf_tc_fail("invalid port-zone counter size");
+    if (len != @sizeOf(u32)) c.atf_tc_fail("invalid port-zone counter size");
     return n;
 }
 fn fileInsertZero() void {
