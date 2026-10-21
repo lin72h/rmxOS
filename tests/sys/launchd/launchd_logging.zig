@@ -256,9 +256,15 @@ fn cleanup(tc: [*c]const c.atf_tc_t) callconv(.c) void {
     }
     f.cleanup(name);
 }
+fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
+    const name = std.mem.span(c.atf_tc_get_ident(tc));
+    const timeout: [*:0]const u8 = if (std.mem.eql(u8, name, "churn")) "1100" else if (std.mem.eql(u8, name, "stopped")) "180" else "60";
+    _ = c.atf_tc_set_md_var(tc, "timeout", "%s", timeout);
+    _ = c.atf_tc_set_md_var(tc, "require.user", "%s", "root");
+}
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     for (names, 0..) |name, i| {
-        var e = c.atf_tc_init(&cases[i], name, null, body, cleanup, c.atf_tp_get_config(tp));
+        var e = c.atf_tc_init(&cases[i], name, head, body, cleanup, c.atf_tp_get_config(tp));
         if (c.atf_is_error(e)) return e;
         e = c.atf_tp_add_tc(tp, &cases[i]);
         if (c.atf_is_error(e)) return e;
