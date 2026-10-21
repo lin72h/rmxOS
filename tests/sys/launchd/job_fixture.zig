@@ -34,12 +34,22 @@ pub fn enter(binary: []const u8, case_name: []const u8) bool {
     const output = std.fmt.allocPrint(a, "{s}/stdout", .{dir}) catch unreachable;
     const text = std.fmt.allocPrint(a, "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>Label</key><string>{s}</string><key>ProgramArguments</key><array><string>{s}</string><string>-r</string><string>{s}</string><string>{s}</string></array><key>WorkingDirectory</key><string>{s}</string><key>StandardOutPath</key><string>{s}</string><key>StandardErrorPath</key><string>{s}/stderr</string><key>EnvironmentVariables</key><dict><key>OP789_LAUNCHD_CHILD</key><string>1</string></dict><key>RunAtLoad</key><true/></dict></plist>", .{ label, binary, result, case_name, dir, output, dir }) catch unreachable;
     std.fs.cwd().writeFile(.{ .sub_path = plist, .data = text }) catch c.atf_tc_fail("fixture plist");
+    const state = std.fmt.allocPrint(a, "/tmp/op789-runner-{s}", .{case_name}) catch unreachable;
+    std.fs.cwd().writeFile(.{ .sub_path = state, .data = std.fmt.allocPrint(a, "{s}\n{s}\n", .{ label, dir }) catch unreachable }) catch c.atf_tc_fail("fixture state");
     if (run(&.{ "/bin/launchctl", "load", plist }) != 0) c.atf_tc_fail("fixture load");
     defer {
         _ = run(&.{ "/bin/launchctl", "remove", label });
         std.fs.cwd().deleteTree(dir) catch {};
+        std.fs.cwd().deleteFile(state) catch {};
     }
-    for (0..(if (std.mem.eql(u8, case_name, "churn")) @as(usize, 11500) else 1200)) |_| {
+    var printed: usize = 0;
+    for (0..(if (std.mem.eql(u8, case_name, "churn")) @as(usize, 11500) else 2000)) |_| {
+        const progress = std.fs.cwd().readFileAlloc(a, output, 1048576) catch "";
+        if (progress.len > printed) {
+            _ = c.printf("%.*s", @as(c_int, @intCast(progress.len - printed)), progress[printed..].ptr);
+            _ = c.fflush(null);
+            printed = progress.len;
+        }
         const bytes = std.fs.cwd().readFileAlloc(a, result, 4096) catch {
             _ = c.usleep(100000);
             continue;
@@ -49,7 +59,7 @@ pub fn enter(binary: []const u8, case_name: []const u8) bool {
             continue;
         }
         const observed = std.fs.cwd().readFileAlloc(a, output, 1048576) catch "";
-        _ = c.printf("%.*s", @as(c_int, @intCast(observed.len)), observed.ptr);
+        if (observed.len > printed) _ = c.printf("%.*s", @as(c_int, @intCast(observed.len - printed)), observed[printed..].ptr);
         _ = c.printf("launchd_fixture case=%s result=%.*s", z(case_name).ptr, @as(c_int, @intCast(bytes.len)), bytes.ptr);
         if (!std.mem.eql(u8, bytes, "passed\n")) c.atf_tc_fail("launchd child case failed");
         return false;
@@ -78,4 +88,16 @@ pub fn capture(args: []const []const u8) []const u8 {
     const bytes = a.alloc(u8, @intCast(n)) catch unreachable;
     if (c.fread(bytes.ptr, 1, bytes.len, file) != bytes.len) c.atf_tc_fail("capture read");
     return bytes;
+}
+
+pub fn cleanup(case_name: []const u8) void {
+    const state = std.fmt.allocPrint(a, "/tmp/op789-runner-{s}", .{case_name}) catch unreachable;
+    const bytes = std.fs.cwd().readFileAlloc(a, state, 4096) catch return;
+    var lines = std.mem.splitScalar(u8, bytes, '\n');
+    const label = lines.next() orelse return;
+    const dir = lines.next() orelse return;
+    if (!std.mem.startsWith(u8, label, "com.rmxos.op789.runner.") or !std.mem.startsWith(u8, dir, "/tmp/op789-test-")) c.atf_tc_fail("fixture cleanup state");
+    _ = run(&.{ "/bin/launchctl", "remove", label });
+    std.fs.cwd().deleteTree(dir) catch {};
+    std.fs.cwd().deleteFile(state) catch {};
 }

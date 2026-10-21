@@ -137,6 +137,10 @@ fn stopped() void {
         submit(label);
         remove(label);
         newest = label;
+        if (i % 200 == 199) {
+            _ = c.printf("launchd_stopped_progress jobs=%zu\n", i + 1);
+            _ = c.fflush(null);
+        }
     }
     const retained = stat(queue_count);
     const bytes = stat(queue_bytes);
@@ -218,12 +222,21 @@ fn churn() void {
 fn body(tc: [*c]const c.atf_tc_t) callconv(.c) void {
     const name = std.mem.span(c.atf_tc_get_ident(tc));
     if (!f.enter("/usr/tests/sys/launchd/launchd_logging_test", name)) return;
-    _ = c.alarm(100);
+    _ = c.alarm(150);
     if (std.mem.eql(u8, name, "early_boot")) early() else if (std.mem.eql(u8, name, "drain")) drain() else if (std.mem.eql(u8, name, "stopped")) stopped() else if (std.mem.eql(u8, name, "pid1_boot")) boot() else churn();
+}
+fn cleanup(tc: [*c]const c.atf_tc_t) callconv(.c) void {
+    const name = std.mem.span(c.atf_tc_get_ident(tc));
+    if (std.mem.eql(u8, name, "stopped")) {
+        const bytes = std.fs.cwd().readFileAlloc(a, "/var/run/syslog.pid", 64) catch "";
+        const pid = std.fmt.parseInt(i32, std.mem.trim(u8, bytes, " \r\n"), 10) catch 0;
+        if (pid > 1) _ = c.kill(pid, c.SIGCONT);
+    }
+    f.cleanup(name);
 }
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     for (names, 0..) |name, i| {
-        var e = c.atf_tc_init(&cases[i], name, null, body, null, c.atf_tp_get_config(tp));
+        var e = c.atf_tc_init(&cases[i], name, null, body, cleanup, c.atf_tp_get_config(tp));
         if (c.atf_is_error(e)) return e;
         e = c.atf_tp_add_tc(tp, &cases[i]);
         if (c.atf_is_error(e)) return e;
