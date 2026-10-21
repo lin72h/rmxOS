@@ -167,6 +167,17 @@ fn assertConsole() void {
     const observed = run(&.{ "/bin/stty", "-f", "/dev/console", "-a" });
     need(std.mem.indexOf(u8, observed, "-clocal") == null and std.mem.indexOf(u8, observed, "clocal") != null, "stty reports clocal");
 }
+fn bootReady(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const f = c.fopen("/var/run/asld.boot-service.log", "r");
+    need(f != null, "compatibility service preserves its boot readiness result");
+    defer _ = c.fclose(f);
+    var text: [65536]u8 = undefined;
+    const n = c.fread(&text, 1, text.len, f);
+    need(n < text.len and c.ferror(f) == 0, "read complete boot readiness log");
+    const ok = @import("boot_ready_check.zig").ready(text[0..n]);
+    if (!ok) _ = c.printf("BOOT_READINESS %.*s\n", @as(c_int, @intCast(n)), &text);
+    need(ok, "asld served before dependent rc services with no readiness warning");
+}
 fn oneOwner(_: [*c]const c.atf_tc_t) callconv(.c) void {
     awaitOwner("asld");
     const list = run(&.{ "/bin/ps", "-axo", "comm=" });
@@ -376,10 +387,10 @@ fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(tc, "require.user", "%s", "root");
     _ = c.alarm(85);
 }
-var cases: [8]c.atf_tc_t = undefined;
+var cases: [9]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "one_owner", "routes", "native", "kernel", "rotation", "counters", "retention", "compat_service" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ oneOwner, routes, native, kernel, rotation, counters, retention, compatibilityService };
+    const names = [_][*:0]const u8{ "boot_ready", "one_owner", "routes", "native", "kernel", "rotation", "counters", "retention", "compat_service" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ bootReady, oneOwner, routes, native, kernel, rotation, counters, retention, compatibilityService };
     for (&cases, names, bodies) |*tc, name, body| {
         var err = c.atf_tc_init(tc, name, head, body, cleanup, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;

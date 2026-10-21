@@ -23,12 +23,14 @@ asld_wait()
 		owner=$(check_pidfile "$pidfile" "$command")
 		if [ -S /var/run/log ] && [ -n "$owner" ]; then
 			(umask 077; echo "$owner" > /var/run/asld.service-ready) || return 1
+			echo "asld: compatibility service ready pid=$owner socket=/var/run/log" >> /var/run/asld.boot-service.log || return 1
 			echo "asld: compatibility service ready pid=$owner socket=/var/run/log"
 			return 0
 		fi
 		sleep 1
 		attempt=$((attempt + 1))
 	done
+	echo "asld socket not ready after 30 seconds; logging dependency unavailable" >> /var/run/asld.boot-service.log
 	warn "asld socket not ready after 30 seconds; logging dependency unavailable"
 	return 1
 }
