@@ -15,6 +15,7 @@ const c = @cImport({
     @cInclude("sys/wait.h");
     @cInclude("termios.h");
 });
+extern fn asl_startup_report([*:0]const u8, [*:0]const u8, c_int) c_int;
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 var cleaning = false;
 var captured: [262144]u8 = undefined;
@@ -330,6 +331,9 @@ fn compatibilityService(_: [*c]const c.atf_tc_t) callconv(.c) void {
     log("user.notice", "op767", &after);
     awaitFile("/var/log/messages", z(&after), 1);
     need(fileCount("/var/log/op767-service-messages", z(&after)) == 0, "service reload reopens the destination");
+    const startup = unique("startup_failure_fixture");
+    need(asl_startup_report(&startup, "filesystem readiness timeout fixture", c.ETIMEDOUT) == 0, "startup failure reaches nonblocking console and boot log");
+    need(fileCount("/var/log/messages", z(&startup)) == 1, "startup failure recorded once in boot log");
 }
 fn retention(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const jobs = run(&.{ "/bin/launchctl", "list" });

@@ -56,6 +56,7 @@
 #endif
 #include "daemon.h"
 #include "filesystems.h"
+#include "startup_error.h"
 
 #define SERVICE_NAME "com.apple.system.logger"
 #define SERVER_STATUS_ERROR -1
@@ -354,14 +355,14 @@ launch_config()
 void
 config_debug(int enable, const char *path)
 {
-	OSSpinLockLock(&global.lock);
+	asld_lock_lock(&global.lock);
 
 	global.debug = enable;
 	free(global.debug_file);
 	global.debug_file = NULL;
 	if (path != NULL) global.debug_file = strdup(path);
 
-	OSSpinLockUnlock(&global.lock);
+	asld_lock_unlock(&global.lock);
 }
 
 void
@@ -521,6 +522,8 @@ main(int argc, const char *argv[])
 #endif
 
 	memset(&global, 0, sizeof(struct global_s));
+	int lock_error = asld_lock_init(&global.lock);
+	if (lock_error != 0) { asl_startup_report("asld", "configuration mutex initialization", lock_error); exit(1); }
 
 	global.db_lock = (pthread_mutex_t *)calloc(1, sizeof(pthread_mutex_t));
 	pthread_mutex_init(global.db_lock, NULL);
@@ -684,7 +687,7 @@ main(int argc, const char *argv[])
 	for (i = 1; i < argc; i++)
 		if (!strcmp(argv[i], "-wait-for-filesystems")) wait_filesystems = 1;
 	if (wait_filesystems && asl_wait_for_filesystems() != 0) {
-		fprintf(stderr, "asld: filesystem setup not ready: %s\n", strerror(errno));
+		asl_startup_report("asld", "filesystem setup not ready", errno);
 		exit(1);
 	}
 	if (!global.private_dir) writepid(&first_syslogd_start);

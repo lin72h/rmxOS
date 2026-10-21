@@ -31,6 +31,7 @@
 #include <asl.h>
 #include <asl_msg.h>
 #include "telemetry.h"
+#include "asld_lock.h"
 #include <asl_core.h>
 #include <asl_private.h>
 #include <asl_store.h>
@@ -111,7 +112,7 @@ typedef struct
 struct global_s
 {
 	char *private_dir, *store_path, *bsd_config, *socket_path, *kernel_path;
-	OSSpinLock lock;
+	asld_lock_t lock;
 	int client_count;
 	int disaster_occurred;
 	mach_port_t listen_set;

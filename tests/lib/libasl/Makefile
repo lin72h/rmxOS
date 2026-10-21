@@ -23,8 +23,10 @@ asld_telemetry_test: ${.CURDIR}/asld_telemetry.zig
 	${ZIG} build-exe ${.CURDIR}/asld_telemetry.zig ${SYSROOT}/usr/lib/libasl.so.1 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/usr/lib/liblaunch.so.5 ${SYSROOT}/lib/libthr.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}
 
 SCRIPTS+= system_logging_test
-system_logging_test: ${.CURDIR}/system_logging.zig
-	${ZIG} build-exe ${.CURDIR}/system_logging.zig ${SYSROOT}/usr/lib/libasl.so.1 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/usr/lib/liblaunch.so.5 ${SYSROOT}/lib/libthr.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}
+startup_error.o: ${SRCTOP}/usr.sbin/asl/startup_error.c ${SRCTOP}/usr.sbin/asl/startup_error.h
+	${CC} ${CFLAGS} ${INPUT_CFLAGS} -c ${SRCTOP}/usr.sbin/asl/startup_error.c -o ${.TARGET}
+system_logging_test: ${.CURDIR}/system_logging.zig startup_error.o
+	${ZIG} build-exe ${.CURDIR}/system_logging.zig startup_error.o ${SYSROOT}/usr/lib/libasl.so.1 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/usr/lib/liblaunch.so.5 ${SYSROOT}/lib/libthr.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}
 SCRIPTS+= op767_logger.ko
 op767_logger.o: ${.CURDIR}/logger_message.zig
 	${ZIG} build-obj ${.CURDIR}/logger_message.zig -target x86_64-freestanding -O ReleaseFast -mcmodel=kernel -mno-red-zone -fno-stack-check -fno-stack-protector -fno-PIC -femit-bin=${.TARGET}

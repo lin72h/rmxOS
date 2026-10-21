@@ -207,6 +207,19 @@ fn statusAfter(comptime ready: fn (Facts) bool) Facts {
     need(last.status > 0 and ready(last), "bounded status and record condition");
     return last;
 }
+fn configuredStart(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    prepare();
+    writeFile("asl.conf", "= dup_delay 0\n? * store\n");
+    start("10000000", "500");
+    send("<14>payload configured startup");
+    const f = statusAfter(struct {
+        fn done(f: Facts) bool {
+            return f.data == 1;
+        }
+    }.done);
+    need(f.data == 1 and f.dropped == 0, "configured startup stores one record after repeated global locking");
+    stop();
+}
 fn workQueue(_: [*c]const c.atf_tc_t) callconv(.c) void {
     prepare();
     start("1", "500");
@@ -501,10 +514,10 @@ fn testHead(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(tc, "timeout", "%s", "30");
     _ = c.atf_tc_set_md_var(tc, "require.user", "%s", "root");
 }
-var cases: [10]c.atf_tc_t = undefined;
+var cases: [11]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "work_queue", "kernel_quota", "native_malformed", "early_time", "legacy_header", "bom", "manager_summary", "manager_archive", "grammar_include", "grammar_installed" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &workQueue, &kernelQuota, &nativeMalformed, &earlyTime, &legacyHeader, &bom, &managerSummary, &managerArchive, &grammarInclude, &grammarInstalled };
+    const names = [_][*:0]const u8{ "configured_start", "work_queue", "kernel_quota", "native_malformed", "early_time", "legacy_header", "bom", "manager_summary", "manager_archive", "grammar_include", "grammar_installed" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &configuredStart, &workQueue, &kernelQuota, &nativeMalformed, &earlyTime, &legacyHeader, &bom, &managerSummary, &managerArchive, &grammarInclude, &grammarInstalled };
     for (&cases, names, bodies) |*tc, name, body| {
         var err = c.atf_tc_init(tc, name, &testHead, body, &cleanup, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;

@@ -47,6 +47,7 @@
 #include <asl_store.h>
 #include "asl_common.h"
 #include "../asl/filesystems.h"
+#include "../asl/startup_error.h"
 
 #define DEFAULT_MAX_SIZE 150000000
 #define IOBUFSIZE 4096
@@ -1689,7 +1690,7 @@ main(int argc, char *argv[])
 	{
 		if (!strcmp(argv[i], "-once")) run_once = 1;
 		if (!strcmp(argv[i], "-wait-for-filesystems") && asl_wait_for_filesystems() != 0) {
-			fprintf(stderr, "aslmanager: filesystem setup not ready: %s\n", strerror(errno));
+			asl_startup_report("aslmanager", "filesystem setup not ready", errno);
 			return 1;
 		}
 	}

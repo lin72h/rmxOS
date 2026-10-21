@@ -66,7 +66,7 @@ asl_ipc.h asl_ipcServer.c: ${.CURDIR}/../../lib/libasl/asl_ipc.defs
 
 OBJLIB= ${OBJTOP}/lib
 
-SRCS= telemetry.c asl_ipcServer.c asl_action.c bsd_in.c bsd_out.c daemon.c syslog_input.c input_io.c dbserver.c klog_in.c remote.c syslogd.c udp_in.c
+SRCS= startup_error.c telemetry.c asl_ipcServer.c asl_action.c bsd_in.c bsd_out.c daemon.c syslog_input.c input_io.c dbserver.c klog_in.c remote.c syslogd.c udp_in.c
 LIBADD=	asl notify launch xpc dispatch osxsupport mach thr sys bsm auditd \
 	BlocksRuntime nv sbuf util
 

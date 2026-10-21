@@ -69,7 +69,7 @@ extern int asl_action_control_set_param(const char *s);
 static char myname[MAXHOSTNAMELEN + 1] = {0};
 static int name_change_token = -1;
 
-static OSSpinLock count_lock = 0;
+static asld_lock_t count_lock = ASLD_LOCK_INITIALIZER;
 static int aslmanager_triggered = 0;
 
 
@@ -187,27 +187,27 @@ whatsmyhostname()
 void
 asl_client_count_increment()
 {
-	OSSpinLockLock(&count_lock);
+	asld_lock_lock(&count_lock);
 
 #if !TARGET_OS_EMBEDDED
 	if (global.client_count == 0) vproc_trans = vproc_transaction_begin(NULL);
 #endif
 	global.client_count++;
 
-	OSSpinLockUnlock(&count_lock);
+	asld_lock_unlock(&count_lock);
 }
 
 void
 asl_client_count_decrement()
 {
-	OSSpinLockLock(&count_lock);
+	asld_lock_lock(&count_lock);
 
 	if (global.client_count > 0) global.client_count--;
 #if !TARGET_OS_EMBEDDED
 	if (global.client_count == 0) vproc_transaction_end(NULL, vproc_trans);
 #endif
 
-	OSSpinLockUnlock(&count_lock);
+	asld_lock_unlock(&count_lock);
 }
 
 /*
@@ -513,7 +513,7 @@ init_globals(void)
 {
 	asl_out_rule_t *r;
 
-	OSSpinLockLock(&global.lock);
+	asld_lock_lock(&global.lock);
 
 	global.pid = getpid();
 	global.debug = 0;
@@ -537,7 +537,7 @@ init_globals(void)
 	global.max_work_queue_size = DEFAULT_WORK_QUEUE_SIZE_MAX;
 
 	global.asl_out_module = asl_out_module_init();
-	OSSpinLockUnlock(&global.lock);
+	asld_lock_unlock(&global.lock);
 
 	if (global.asl_out_module != NULL)
 	{
@@ -614,50 +614,50 @@ control_set_param(const char *s, bool eval)
 	if (!strcasecmp(l[0], "mark_time"))
 	{
 		/* = mark_time seconds */
-		OSSpinLockLock(&global.lock);
+		asld_lock_lock(&global.lock);
 		if (eval) global.mark_time = atoll(l[1]);
 		else global.mark_time = 0;
-		OSSpinLockUnlock(&global.lock);
+		asld_lock_unlock(&global.lock);
 	}
 	else if (!strcasecmp(l[0], "dup_delay"))
 	{
 		/* = bsd_max_dup_time seconds */
-		OSSpinLockLock(&global.lock);
+		asld_lock_lock(&global.lock);
 		if (eval) global.bsd_max_dup_time = atoll(l[1]);
 		else global.bsd_max_dup_time = DEFAULT_BSD_MAX_DUP_SEC;
-		OSSpinLockUnlock(&global.lock);
+		asld_lock_unlock(&global.lock);
 	}
 	else if (!strcasecmp(l[0], "remote_delay"))
 	{
 		/* = remote_delay microseconds */
-		OSSpinLockLock(&global.lock);
+		asld_lock_lock(&global.lock);
 		if (eval) global.remote_delay_time = atol(l[1]);
 		else global.remote_delay_time = DEFAULT_REMOTE_DELAY;
-		OSSpinLockUnlock(&global.lock);
+		asld_lock_unlock(&global.lock);
 	}
 	else if (!strcasecmp(l[0], "utmp_ttl"))
 	{
 		/* = utmp_ttl seconds */
-		OSSpinLockLock(&global.lock);
+		asld_lock_lock(&global.lock);
 		if (eval) global.utmp_ttl = (time_t)atoll(l[1]);
 		else global.utmp_ttl = DEFAULT_UTMP_TTL_SEC;
-		OSSpinLockUnlock(&global.lock);
+		asld_lock_unlock(&global.lock);
 	}
 	else if (!strcasecmp(l[0], "mps_limit"))
 	{
 		/* = mps_limit number */
-		OSSpinLockLock(&global.lock);
+		asld_lock_lock(&global.lock);
 		if (eval) global.mps_limit = (uint32_t)atol(l[1]);
 		else global.mps_limit = DEFAULT_MPS_LIMIT;
-		OSSpinLockUnlock(&global.lock);
+		asld_lock_unlock(&global.lock);
 	}
 	else if (!strcasecmp(l[0], "max_work_queue_size"))
 	{
 		/* = max_work_queue_size number */
-		OSSpinLockLock(&global.lock);
+		asld_lock_lock(&global.lock);
 		if (eval) global.max_work_queue_size = (int64_t)atoll(l[1]);
 		else global.max_work_queue_size = DEFAULT_WORK_QUEUE_SIZE_MAX;
-		OSSpinLockUnlock(&global.lock);
+		asld_lock_unlock(&global.lock);
 	}
 	else if (!strcasecmp(l[0], "max_file_size"))
 	{

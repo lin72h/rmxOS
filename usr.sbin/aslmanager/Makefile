@@ -11,6 +11,7 @@ MAN= aslmanager.8
 .PATH: .
 .PATH: ${.CURDIR}
 .PATH: ${.CURDIR}/support
+.PATH: ${.CURDIR}/../asl
 .PATH: ${.CURDIR}/uuid
 .PATH: ${.CURDIR}/init
 
@@ -41,7 +42,7 @@ CFLAGS+= -Wno-error=incompatible-pointer-types-discards-qualifiers
 CFLAGS+= -Wno-error=incompatible-pointer-types
 CFLAGS+= -Wno-error=uninitialized
 
-SRCS= aslmanager.c
+SRCS= aslmanager.c startup_error.c
 LIBADD=	asl notify launch xpc dispatch osxsupport mach thr sys bsm auditd \
 	BlocksRuntime nv sbuf util z
 
