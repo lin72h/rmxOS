@@ -181,6 +181,14 @@ fn oneOwner(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(c.lstat("/var/run/log", &st) == 0 and st.st_mode & c.S_IFMT == c.S_IFSOCK and st.st_mode & 0o777 == 0o666, "BSD datagram socket mode 0666");
     const inode = st.st_ino;
     const ready = command(&.{ "/etc/rc.d/syslogd", "onestart" });
+    if (ready.status != 0) {
+        _ = c.printf("ONE_OWNER_RC status=%d output=%.*s\n", ready.status, @as(c_int, @intCast(ready.text.len)), ready.text.ptr);
+        var owner: [32:0]u8 = @splat(0);
+        _ = c.snprintf(&owner, owner.len, "%d", pidfile());
+        const observed = command(&.{ "/bin/ps", "-p", &owner, "-o", "pid,args" });
+        _ = c.printf("ONE_OWNER_PS status=%d output=%.*s\n", observed.status, @as(c_int, @intCast(observed.text.len)), observed.text.ptr);
+        _ = c.fflush(null);
+    }
     need(ready.status == 0, "compatibility service accepts the running asld owner");
     need(c.lstat("/var/run/log", &st) == 0 and st.st_ino == inode and ownerIs("asld"), "compatibility readiness preserves the live socket and owner");
     var target: [256]u8 = undefined;
