@@ -53,3 +53,18 @@ const char *rmx_native_log_library(void) {
  if (dladdr(fn,&info)==0) return "";
  return info.dli_fname;
 }
+void mig_allocate(vm_address_t *address, vm_size_t size) { *address = (vm_address_t)calloc(1, size); }
+void rmx_queue_pack(uint64_t *out) {
+ vm_offset_t bytes = 0; mach_msg_type_number_t length = 0;
+ out[0] = _launchd_logq_cnt; out[1] = 0;
+ if (_launchd_log_pack(&bytes, &length) == 0) {
+  struct logmsg_s *lm = (void *)bytes;
+  const char *text = (char *)lm + lm->msg_offset;
+  unsigned long long dropped = 0;
+  if (sscanf(text, "launchd log queue dropped %llu records", &dropped) == 1) out[1] = dropped;
+  free((void *)bytes);
+ }
+ out[2] = _launchd_logq_cnt;
+ out[3] = launchd_log_dropped();
+}
+int rmx_record_valid(void *record, size_t length) { return launchd_log_record_valid(record, length); }

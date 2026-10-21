@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause
 const std = @import("std");
+const fixture = @import("job_fixture.zig");
 const c = @cImport({
     @cInclude("atf-c.h");
     @cInclude("launch.h");
@@ -51,6 +52,8 @@ fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "require.user", "%s", "root");
 }
 fn body(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    if (!fixture.enter("/usr/tests/sys/launchd/launchd_getjob_test", "named_job")) return;
+    defer cleanup(null);
     const api = Api.load() orelse c.atf_tc_fail("staged liblaunch load/binding failed");
     defer _ = c.dlclose(api.handle);
     const symbol = c.dlsym(api.handle, "bootstrap_port") orelse c.atf_tc_fail("bootstrap_port missing");

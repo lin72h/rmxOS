@@ -65,6 +65,9 @@ _logmsg_drop(void)
 	if (_launchd_logq_dropped != UINT64_MAX) _launchd_logq_dropped++;
 }
 
+size_t launchd_log_count(void) { return _launchd_logq_cnt; }
+size_t launchd_log_bytes(void) { return _launchd_logq_sz; }
+
 uint64_t
 launchd_log_dropped(void)
 {
@@ -87,7 +90,8 @@ _logmsg_enqueue(struct logmsg_s *lm)
 static bool
 _launchd_use_system_log(void)
 {
-	return pid1_magic && !launchd_asl_drainer_running();
+	/* asld is the sole logger; retain early/restart records for its drain. */
+	return false;
 }
 
 static void
@@ -159,12 +163,15 @@ _logmsg_add(struct launchd_syslog_attr *attr, int err_num, const char *msg)
 	}
 
 	if (unlikely((lm = calloc(1, lm_sz)) == NULL)) {
+		_logmsg_drop();
 		return false;
 	}
 
 	data_off = lm->data;
 
 	lm->when = runtime_get_wall_time();
+	lm->sender_uid = attr->from_uid;
+	lm->sender_gid = getgid();
 	lm->from_pid = attr->from_pid;
 	lm->about_pid = attr->about_pid;
 	lm->err_num = err_num;
@@ -326,15 +333,34 @@ _launchd_log_pack(vm_offset_t *outval, mach_msg_type_number_t *outvalCnt)
 	struct logmsg_s *lm;
 	uint8_t *offset;
 
-	*outvalCnt = _launchd_logq_sz;
-
-	mig_allocate(outval, *outvalCnt);
-
-	if (unlikely(*outval == 0)) {
-		return 1;
+	uint64_t dropped = launchd_log_dropped();
+	char report[96];
+	size_t report_size = 0;
+	if (dropped) {
+		snprintf(report, sizeof(report), "launchd log queue dropped %ju records", (uintmax_t)dropped);
+		report_size = ROUND_TO_64BIT_WORD_SIZE(sizeof(struct logmsg_s) + strlen(report) +
+		    2 * strlen("com.apple.launchd") + strlen("System") + 4);
 	}
-
+	*outvalCnt = _launchd_logq_sz + report_size;
+	mig_allocate(outval, *outvalCnt);
+	if (unlikely(*outval == 0)) return KERN_RESOURCE_SHORTAGE;
 	offset = (uint8_t *)*outval;
+	if (dropped) {
+		lm = (struct logmsg_s *)offset;
+		memset(lm, 0, report_size);
+		lm->obj_sz = report_size;
+		lm->when = runtime_get_wall_time();
+		lm->from_pid = getpid();
+		lm->about_pid = getpid();
+		lm->pri = LOG_WARNING;
+		char *p = lm->data;
+		lm->msg_offset = p - (char *)lm; p += sprintf(p, "%s", report) + 1;
+		lm->from_name_offset = p - (char *)lm; p += sprintf(p, "com.apple.launchd") + 1;
+		lm->about_name_offset = p - (char *)lm; p += sprintf(p, "com.apple.launchd") + 1;
+		lm->session_name_offset = p - (char *)lm; strcpy(p, "System");
+		offset += report_size;
+		_launchd_logq_dropped = 0;
+	}
 	while ((lm = STAILQ_FIRST(&_launchd_logq))) {
 		lm->from_name_offset = lm->from_name - (char *)lm;
 		lm->about_name_offset = lm->about_name - (char *)lm;
@@ -362,7 +388,7 @@ _launchd_log_uncork_pending_drain(void)
 		return;
 	}
 
-	if (_launchd_logq_cnt == 0) {
+	if (_launchd_logq_cnt == 0 && launchd_log_dropped() == 0) {
 		return;
 	}
 
@@ -372,12 +398,19 @@ _launchd_log_uncork_pending_drain(void)
 
 	tmp_port = launchd_drain_reply_port;
 	launchd_drain_reply_port = MACH_PORT_NULL;
-
-	if (unlikely(errno = job_mig_log_drain_reply(tmp_port, 0, outval, outvalCnt))) {
-		if (errno != MACH_SEND_INVALID_DEST) {
-			(void)os_assumes_zero(errno);
+	if ((errno = job_mig_log_drain_reply(tmp_port, 0, outval, outvalCnt)) != 0) {
+		/* Every undelivered record must be represented in the next report. */
+		for (size_t n = 0; n < outvalCnt; ) {
+			struct logmsg_s *lost = (void *)(outval + n);
+			uint64_t count;
+			if (sscanf((char *)lost + lost->msg_offset,
+			    "launchd log queue dropped %ju records", &count) == 1) {
+				_launchd_logq_dropped = UINT64_MAX - _launchd_logq_dropped < count ?
+				    UINT64_MAX : _launchd_logq_dropped + count;
+			} else _logmsg_drop();
+			n += lost->obj_sz;
 		}
-		(void)os_assumes_zero(launchd_mport_deallocate(tmp_port));
+		(void)launchd_mport_deallocate(tmp_port);
 	}
 
 	mig_deallocate(outval, outvalCnt);
@@ -427,7 +460,11 @@ launchd_log_forward(uid_t forward_uid, gid_t forward_gid, vm_offset_t inval, mac
 		return 0;
 	}
 
-	for (lm_walk = (struct logmsg_s *)inval; (data_left > 0) && (lm_walk->obj_sz <= data_left); lm_walk = (struct logmsg_s *)((uint64_t *)lm_walk + lm_walk->obj_sz/8)) {
+	for (lm_walk = (struct logmsg_s *)inval; data_left > 0; lm_walk = (struct logmsg_s *)((uint64_t *)lm_walk + lm_walk->obj_sz/8)) {
+		if (!launchd_log_record_valid(lm_walk, data_left)) {
+			_logmsg_drop();
+			break;
+		}
 		/* malloc(3) returns non-NULL when you ask for zero bytes. If our object
 		 * is zero bytes, something is wrong.
 		 */
@@ -448,6 +485,7 @@ launchd_log_forward(uid_t forward_uid, gid_t forward_gid, vm_offset_t inval, mac
 		}
 
 		if (!(lm = malloc(lm_walk->obj_sz))) {
+			_logmsg_drop();
 			launchd_syslog(LOG_WARNING, "Failed to allocate %zu bytes for log message with %u bytes left in forwarded data. Ignoring remaining messages.", lm_walk->obj_sz, data_left);
 			break;
 		}
@@ -480,16 +518,13 @@ launchd_log_forward(uid_t forward_uid, gid_t forward_gid, vm_offset_t inval, mac
 kern_return_t
 launchd_log_drain(mach_port_t srp, vm_offset_t *outval, mach_msg_type_number_t *outvalCnt)
 {
-	(void)os_assumes_zero(launchd_drain_reply_port);
-
-	if ((_launchd_logq_cnt == 0) || launchd_shutting_down) {
-		launchd_drain_reply_port = srp;
-		(void)os_assumes_zero(launchd_mport_notify_req(launchd_drain_reply_port, MACH_NOTIFY_DEAD_NAME));
-
-		return MIG_NO_REPLY;
-	}
-
-	return _launchd_log_pack(outval, outvalCnt);
+	*outval = 0;
+	*outvalCnt = 0;
+	if (launchd_drain_reply_port != MACH_PORT_NULL) return KERN_RESOURCE_SHORTAGE;
+	launchd_drain_reply_port = srp;
+	(void)os_assumes_zero(launchd_mport_notify_req(srp, MACH_NOTIFY_DEAD_NAME));
+	_launchd_log_uncork_pending_drain();
+	return MIG_NO_REPLY;
 }
 
 void

@@ -769,44 +769,33 @@ _vprocmgr_log_drain(vproc_t vp __attribute__((unused)), pthread_mutex_t *mutex, 
 		return _vprocmgr_log_drain;
 	}
 
+	/* A malformed batch must not produce partial callbacks or loop forever. */
 	tmp_cnt = outdata_cnt;
-
-	if (mutex) {
-		pthread_mutex_lock(mutex);
-		for (lm = (struct logmsg_s *)outdata; tmp_cnt > 0; lm = (void *)((uint64_t *)lm + lm->obj_sz/8)) {
-			lm->from_name = (char *)lm + lm->from_name_offset;
-			lm->about_name = (char *)lm + lm->about_name_offset;
-			lm->msg = (char *)lm + lm->msg_offset;
-			lm->session_name = (char *)lm + lm->session_name_offset;
-
-			tv.tv_sec = lm->when / USEC_PER_SEC;
-			tv.tv_usec = lm->when % USEC_PER_SEC;
-
-			func(&tv, lm->from_pid, lm->about_pid, lm->sender_uid, lm->sender_gid, lm->pri,
-				 lm->from_name, lm->about_name, lm->session_name, lm->msg);
-
-			tmp_cnt -= lm->obj_sz;
+	for (vm_offset_t cursor = outdata; tmp_cnt > 0; ) {
+		lm = (struct logmsg_s *)cursor;
+		if (!outdata || !launchd_log_record_valid(lm, tmp_cnt)) {
+			if (outdata) mig_deallocate(outdata, outdata_cnt);
+			return _vprocmgr_log_drain;
 		}
-		pthread_mutex_unlock(mutex);
-	} else {
-		/* the compiler can't tell that mutex isn't modified
-		* in the function so we duplicate :(
-		*/
-		for (lm = (struct logmsg_s *)outdata; tmp_cnt > 0; lm = (void *)((uint64_t *)lm + lm->obj_sz/8)) {
-			lm->from_name = (char *)lm + lm->from_name_offset;
-			lm->about_name = (char *)lm + lm->about_name_offset;
-			lm->msg = (char *)lm + lm->msg_offset;
-			lm->session_name = (char *)lm + lm->session_name_offset;
-
-			tv.tv_sec = lm->when / USEC_PER_SEC;
-			tv.tv_usec = lm->when % USEC_PER_SEC;
-
-			func(&tv, lm->from_pid, lm->about_pid, lm->sender_uid, lm->sender_gid, lm->pri,
-				 lm->from_name, lm->about_name, lm->session_name, lm->msg);
-
-			tmp_cnt -= lm->obj_sz;
-		}
+		tmp_cnt -= lm->obj_sz;
+		cursor += lm->obj_sz;
 	}
+	if (mutex) pthread_mutex_lock(mutex);
+	tmp_cnt = outdata_cnt;
+	for (vm_offset_t cursor = outdata; tmp_cnt > 0; ) {
+		lm = (struct logmsg_s *)cursor;
+		lm->from_name = (char *)lm + lm->from_name_offset;
+		lm->about_name = (char *)lm + lm->about_name_offset;
+		lm->msg = (char *)lm + lm->msg_offset;
+		lm->session_name = (char *)lm + lm->session_name_offset;
+		tv.tv_sec = lm->when / USEC_PER_SEC;
+		tv.tv_usec = lm->when % USEC_PER_SEC;
+		func(&tv, lm->from_pid, lm->about_pid, lm->sender_uid, lm->sender_gid, lm->pri,
+		    lm->from_name, lm->about_name, lm->session_name, lm->msg);
+		tmp_cnt -= lm->obj_sz;
+		cursor += lm->obj_sz;
+	}
+	if (mutex) pthread_mutex_unlock(mutex);
 
 	if (outdata) {
 		mig_deallocate(outdata, outdata_cnt);

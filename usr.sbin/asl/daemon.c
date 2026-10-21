@@ -916,7 +916,7 @@ launchd_callback(struct timeval *when, pid_t from_pid, pid_t about_pid, uid_t se
 */
 
 	m = asl_msg_new(ASL_TYPE_MSG);
-	if (m == NULL) return;
+	if (m == NULL) { ASLD_COUNT(store_failed); return; }
 
 	/* Level */
 	if (priority < ASL_LEVEL_EMERG) priority = ASL_LEVEL_EMERG;
@@ -1000,6 +1000,18 @@ launchd_callback(struct timeval *when, pid_t from_pid, pid_t about_pid, uid_t se
 		asl_msg_set_key_val(m, ASL_KEY_MSG, msg);
 	}
 
+	/* Only PID 1's own report can account queue loss, never a job's text. */
+	uintmax_t dropped = 0;
+	int consumed = 0;
+	if (from_pid == 1 && sender_uid == 0 && from_name && msg &&
+	    !strcmp(from_name, "com.apple.launchd") &&
+	    sscanf(msg, "launchd log queue dropped %ju records%n", &dropped, &consumed) == 1 &&
+	    consumed > 0 && msg[consumed] == 0) {
+		__atomic_fetch_add(&asld_counters.launchd_dropped, dropped, __ATOMIC_RELAXED);
+		snprintf(str, sizeof(str), "%ju", dropped);
+		asl_msg_set_key_val(m, "com.rmxos.launchd.record", "drops");
+		asl_msg_set_key_val(m, "launchd_dropped", str);
+	}
 	process_message(m, SOURCE_LAUNCHD);
 }
 

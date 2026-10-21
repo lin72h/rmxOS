@@ -4,7 +4,7 @@
 #define ASLD_COUNTERS(X) \
  X(dropped_wq) X(dropped_kern_quota) X(dropped_parse) X(bsd_in_truncated) \
  X(store_failed) X(store_fallback_memory) X(file_action_failed) \
- X(native_malformed) X(dup_suppressed) X(config_rejected)
+ X(native_malformed) X(dup_suppressed) X(config_rejected) X(launchd_dropped)
 struct asld_counters {
 #define ASLD_FIELD(n) uint64_t n;
  ASLD_COUNTERS(ASLD_FIELD)

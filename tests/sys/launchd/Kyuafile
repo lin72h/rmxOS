@@ -1,3 +1,5 @@
 syntax(2)
 test_suite("FreeBSD")
 atf_test_program{name="launchd_getjob_test"}
+atf_test_program{name="launchd_logging_test"}
+atf_test_program{name="log_units_test"}

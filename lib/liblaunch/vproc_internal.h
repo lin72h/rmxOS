@@ -1,3 +1,5 @@
+#include <string.h>
+#include <stdbool.h>
 /*
  * Copyright (c) 2006-2007 Apple Inc. All rights reserved.
  *
@@ -102,6 +104,21 @@ struct logmsg_s {
 	char data[0];
 };
 
+
+/* Validate the wire offsets before replacing any of them with local pointers. */
+static inline bool
+launchd_log_record_valid(const struct logmsg_s *lm, size_t remaining)
+{
+ if (remaining < sizeof(*lm) || lm->obj_sz < sizeof(*lm) ||
+     lm->obj_sz > remaining || (lm->obj_sz & 7)) return false;
+ const uint64_t offsets[] = {lm->from_name_offset, lm->about_name_offset,
+     lm->session_name_offset, lm->msg_offset};
+ for (unsigned i = 0; i < 4; i++) {
+  if (offsets[i] < sizeof(*lm) || offsets[i] >= lm->obj_sz ||
+      memchr((const char *)lm + offsets[i], 0, lm->obj_sz - offsets[i]) == NULL) return false;
+ }
+ return true;
+}
 
 vproc_err_t _vprocmgr_log_forward(mach_port_t mp, void *data, size_t len);
 

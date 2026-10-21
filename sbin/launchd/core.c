@@ -8453,6 +8453,9 @@ job_mig_swap_integer(job_t j, vproc_gsk_t inkey, vproc_gsk_t outkey, int64_t inv
 	job_log(j, LOG_DEBUG, "%s key: %u", action, inkey ? inkey : outkey);
 
 	switch (outkey) {
+	case VPROC_GSK_LOG_QUEUE_COUNT: *outval = launchd_log_count(); break;
+	case VPROC_GSK_LOG_QUEUE_BYTES: *outval = launchd_log_bytes(); break;
+	case VPROC_GSK_LOG_QUEUE_DROPPED: *outval = launchd_log_dropped(); break;
 	case VPROC_GSK_ABANDON_PROCESS_GROUP:
 		*outval = j->abandon_pg;
 		break;

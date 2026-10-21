@@ -60,6 +60,8 @@ void
 launchd_vsyslog(struct launchd_syslog_attr *attr, const char *message, va_list args);
 
 uint64_t launchd_log_dropped(void);
+size_t launchd_log_count(void);
+size_t launchd_log_bytes(void);
 
 void
 launchd_log_push(void);
