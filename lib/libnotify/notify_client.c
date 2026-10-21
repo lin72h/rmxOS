@@ -270,7 +270,9 @@ _notify_lib_init(uint32_t event)
 		kstatus = bootstrap_look_up2(bootstrap_port, NOTIFY_SERVICE_NAME, &globals->notify_server_port, 0, BOOTSTRAP_PRIVILEGED_SERVER);
 	});
 
-	if (kstatus != KERN_SUCCESS) return NOTIFY_STATUS_FAILED;
+	/* A failed once-only lookup leaves no server on later calls either. */
+	if (kstatus != KERN_SUCCESS || globals->notify_server_port == MACH_PORT_NULL)
+		return NOTIFY_STATUS_FAILED;
 
 	pthread_mutex_lock(&globals->notify_lock);
 
@@ -1324,6 +1326,9 @@ notify_register_dispatch(const char *name, int *out_token, dispatch_queue_t queu
 
 	/* client is using dispatch: enable local demux and regeneration */
 	notify_set_options(NOTIFY_OPT_DEMUX | NOTIFY_OPT_REGEN);
+	status = _notify_lib_init(EVENT_INIT);
+	if (status != NOTIFY_STATUS_OK) return status;
+	if (globals->notify_common_port == MACH_PORT_NULL) return NOTIFY_STATUS_FAILED;
 
 	status = notify_register_mach_port(name, &globals->notify_common_port, NOTIFY_REUSE, out_token);
 	if (status != NOTIFY_STATUS_OK) return status;
@@ -1594,6 +1599,17 @@ notify_register_mach_port(const char *name, mach_port_name_t *notify_port, int f
 	if (name == NULL) return NOTIFY_STATUS_INVALID_NAME;
 	if (notify_port == NULL) return NOTIFY_STATUS_INVALID_PORT;
 
+	/* Resolve the service before allocating or inserting any client right.
+	 * Self notifications need no server and retain their independent path. */
+	if (strncmp(name, SELF_PREFIX, SELF_PREFIX_LEN) != 0 &&
+	    globals->notify_server_port == MACH_PORT_NULL)
+	{
+		status = _notify_lib_init(EVENT_INIT);
+		if (status != NOTIFY_STATUS_OK) return status;
+	}
+	if ((flags & NOTIFY_REUSE) && !MACH_PORT_VALID(*notify_port))
+		return NOTIFY_STATUS_INVALID_PORT;
+
 	mine = 0;
 	namelen = (strlen(name) + 1);
 
@@ -1647,21 +1663,6 @@ notify_register_mach_port(const char *name, mach_port_name_t *notify_port, int f
 		notify_retain_mach_port(*notify_port, mine);
 
 		return NOTIFY_STATUS_OK;
-	}
-
-	if (globals->notify_server_port == MACH_PORT_NULL)
-	{
-		status = _notify_lib_init(EVENT_INIT);
-		if (status != 0)
-		{
-			if (mine == 1)
-			{
-				mach_port_mod_refs(task, *notify_port, MACH_PORT_RIGHT_RECEIVE, -1);
-			}
-
-			mach_port_deallocate(task, *notify_port);
-			return NOTIFY_STATUS_FAILED;
-		}
 	}
 
 	if ((globals->client_opts & NOTIFY_OPT_DEMUX) && (*notify_port != globals->notify_common_port))
