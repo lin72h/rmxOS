@@ -67,7 +67,6 @@ SUBDIR=	\
 	rip \
 	runtime \
 	smbutils \
-	syslogd \
 	tcpd \
 	toolchain \
 	ufs \

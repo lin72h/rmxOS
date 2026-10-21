@@ -107,7 +107,7 @@
         ..
         sysctl.kld.d    tags=package=rc
         ..
-        syslog.d        tags=package=syslogd
+        syslog.d        tags=package=utilities
         ..
         zfs                     tags=package=zfs
             compatibility.d     tags=package=zfs
