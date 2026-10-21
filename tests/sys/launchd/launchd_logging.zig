@@ -168,10 +168,18 @@ fn stopped() void {
     const drop_records = awaitRecord("com.rmxos.launchd.record", "drops", report);
     need(occurrences(drop_records, "[com.rmxos.launchd.record drops]") == reports_before + 1, "one new loss report per stopped interval");
     waitEmpty();
+    const status_count = occurrences(store("com.rmxos.asld.record", "status"), "[com.rmxos.asld.record status]");
     need(c.kill(restarted, c.SIGUSR1) == 0, "request asld status");
-    const total = text("[launchd_dropped {d}]", .{lost});
-    const status = awaitRecord("PID", text("{d}", .{restarted}), total);
-    need(std.mem.indexOf(u8, status, "[com.rmxos.asld.record status]") != null, "new asld status reports launchd losses");
+    var fresh = false;
+    for (0..300) |_| {
+        const status = store("com.rmxos.asld.record", "status");
+        if (occurrences(status, "[com.rmxos.asld.record status]") > status_count and lastCounter(status, "launchd_dropped") == lost) {
+            fresh = true;
+            break;
+        }
+        _ = c.usleep(100000);
+    }
+    need(fresh, "fresh asld status reports exact launchd losses");
     const rss_after = rss();
     _ = c.printf("launchd_rss before_kib=%ju peak_kib=%ju after_kib=%ju reported_drops=%ju\n", rss_before, rss_peak, rss_after, lost);
     need(rss_after <= rss_before + 8192, "RSS stays bounded after draining");
