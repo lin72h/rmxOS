@@ -49,7 +49,7 @@ SRCS=	asl.c asl_ipcUser.c asl_core.c asl_file.c asl_msg.c asl_object.c \
 
 LIBADD=	BlocksRuntime dispatch launch mach notify util
 
-MAN=	asl.3 syslog.3
+MAN=	asl.3
 
 asl_ipcUser.h asl_ipcUser.c: asl_ipc.defs
 	${MIG} ${MIG_FLAGS} -header asl_ipcUser.h -user asl_ipcUser.c ${.CURDIR}/asl_ipc.defs

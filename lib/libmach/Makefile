@@ -71,7 +71,5 @@ SRCS=					\
 CLEANFILES+= machine *~ mach_port.h task.h host_priv.h mach_host.h
 CLEANFILES+= cscope.* vm_map.h *User.c
 
-INCS+= mach_vm.h vm_map.h
-INCSDIR= ${INCLUDEDIR}/mach
 
 .include <bsd.lib.mk>

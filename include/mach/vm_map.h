@@ -121,14 +121,14 @@ kern_return_t vm_inherit
 	mach_vm_map_t target_task;
 	vm_address_t address;
 	vm_size_t size;
-	vm_inherit_t new_inheritance;
+	integer_t new_inheritance;
 { return vm_inherit(target_task, address, size, new_inheritance); }
 #else
 (
 	mach_vm_map_t target_task,
 	vm_address_t address,
 	vm_size_t size,
-	vm_inherit_t new_inheritance
+	integer_t new_inheritance
 );
 #endif	/* defined(LINTLIBRARY) */
 
@@ -653,9 +653,6 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		vm_address_t address;
 		vm_region_flavor_t flavor;
@@ -670,9 +667,6 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		vm_address_t address;
 		vm_size_t size;
@@ -688,13 +682,10 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		vm_address_t address;
 		vm_size_t size;
-		vm_inherit_t new_inheritance;
+		integer_t new_inheritance;
 	} __Request__vm_inherit_t;
 #ifdef  __MigPackStructs
 #pragma pack()
@@ -705,9 +696,6 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		vm_address_t address;
 		vm_size_t size;
@@ -721,9 +709,6 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		vm_read_entry_t data_list;
 		natural_t count;
@@ -754,9 +739,6 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		vm_address_t source_address;
 		vm_size_t size;
@@ -771,9 +753,6 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		vm_address_t address;
 		vm_size_t size;
@@ -788,9 +767,6 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		vm_address_t address;
 		vm_size_t size;
@@ -805,9 +781,6 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		vm_address_t address;
 		vm_size_t size;
@@ -822,9 +795,6 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		vm_address_t address;
 		vm_size_t size;
@@ -862,9 +832,6 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		boolean_t must_wire;
 	} __Request__task_wire_t;
@@ -895,9 +862,6 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		vm_offset_t offset;
 	} __Request__vm_map_page_query_t;
@@ -910,9 +874,6 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		vm_address_t address;
 	} __Request__mach_vm_region_info_t;
@@ -925,9 +886,6 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 	} __Request__vm_mapped_pages_info_t;
 #ifdef  __MigPackStructs
 #pragma pack()
@@ -938,9 +896,6 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		vm_address_t address;
 		natural_t nesting_depth;
@@ -955,9 +910,6 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		vm_address_t address;
 		natural_t nesting_depth;
@@ -972,9 +924,6 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		vm_address_t address;
 	} __Request__mach_vm_region_info_64_t;
@@ -987,9 +936,6 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		vm_address_t address;
 		vm_region_flavor_t flavor;
@@ -1022,9 +968,6 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		/* start of the kernel processed data */
-		mach_msg_body_t msgh_body;
-		/* end of the kernel processed data */
 		NDR_record_t NDR;
 		vm_address_t address;
 		vm_purgable_t control;
