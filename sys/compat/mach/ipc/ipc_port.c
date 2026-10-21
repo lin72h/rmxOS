@@ -1391,7 +1391,9 @@ ipc_port_dealloc_special(
 {
 	ip_lock(port);
 	assert(ip_active(port));
-	assert(port->ip_receiver_name != MACH_PORT_NAME_NULL);
+	/* File projections store a descriptor here; descriptor zero is valid. */
+	assert(port->ip_receiver_name != MACH_PORT_NAME_NULL ||
+	    (port->ip_flags & IP_CONTEXT_FILE) != 0);
 	assert(port->ip_receiver == space);
 
 	/*

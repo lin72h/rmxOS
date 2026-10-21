@@ -13,7 +13,7 @@ const c = @cImport({
     @cInclude("stdio.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-const names = [_][*:0]const u8{ "reply_send", "terminate", "file_insert", "file_receive", "named_dead" };
+const names = [_][*:0]const u8{ "reply_send", "terminate", "file_insert", "file_insert_zero", "file_receive", "named_dead" };
 var cases: [names.len]c.atf_tc_t = undefined;
 fn fact(name: [*:0]const u8, expected: i64, observed: i64) void {
     _ = c.printf("round2 check=%s expected=%lld observed=%lld\n", name, @as(c_longlong, expected), @as(c_longlong, observed));
@@ -105,6 +105,34 @@ fn fileInsert() void {
     fact("pipe_no_retained_writer", 0, c.read(pipe[0], &byte, 1));
     _ = c.close(pipe[0]);
 }
+// The file projection is transient: no port allocation or file hold may survive.
+fn allocatedPorts() u64 {
+    var n: u64 = 0;
+    var len: usize = @sizeOf(u64);
+    fact("port_zone_snapshot", 0, c.sysctlbyname("vm.uma.ipc_ports.stats.current", &n, &len, null, 0));
+    if (len != @sizeOf(u64)) c.atf_tc_fail("invalid port-zone counter size");
+    return n;
+}
+fn fileInsertZero() void {
+    const task = c.mach_task_self();
+    var pipe: [2]c_int = undefined;
+    fact("pipe_setup", 0, c.pipe(&pipe));
+    // Install the writer at descriptor zero, including a native duplicate hold.
+    fact("writer_at_zero", 0, c.dup2(pipe[1], 0));
+    const file_before = fileRefs(0);
+    const ports_before = allocatedPorts();
+    for (0..128) |_| {
+        fact("zero_invalid_name", c.KERN_INVALID_VALUE, c.mach_port_insert_right(task, 0, 0, c.MACH_MSG_TYPE_COPY_SEND));
+        fact("zero_named_unsupported", c.KERN_NOT_SUPPORTED, c.mach_port_insert_right(task, 4096, 0, c.MACH_MSG_TYPE_COPY_SEND));
+    }
+    fact("projection_ports_released", @intCast(ports_before), @intCast(allocatedPorts()));
+    fact("zero_file_references_unchanged", file_before, fileRefs(0));
+    fact("zero_writer_close", 0, c.close(0));
+    fact("other_writer_close", 0, c.close(pipe[1]));
+    var byte: u8 = 0;
+    fact("zero_no_retained_writer", 0, c.read(pipe[0], &byte, 1));
+    _ = c.close(pipe[0]);
+}
 fn portRefs(port: u32) u32 {
     fact("port_selector", 0, c.sysctlbyname("mach.current_task_port_name", null, null, @constCast(&port), @sizeOf(u32)));
     var buf: [512]u8 = undefined;
@@ -152,7 +180,7 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
         var ordinary: u32 = 0;
         fact("ordinary_dead_allocate", 0, c.mach_port_allocate(task, c.MACH_PORT_RIGHT_DEAD_NAME, &ordinary));
         fact("ordinary_dead_cleanup", 0, c.close(@intCast(ordinary)));
-    } else if (std.mem.eql(u8, name, "file_insert")) fileInsert() else if (std.mem.eql(u8, name, "file_receive")) fileReceive() else replySend();
+    } else if (std.mem.eql(u8, name, "file_insert")) fileInsert() else if (std.mem.eql(u8, name, "file_insert_zero")) fileInsertZero() else if (std.mem.eql(u8, name, "file_receive")) fileReceive() else replySend();
 }
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     for (names, 0..) |name, i| {
