@@ -7,7 +7,7 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/usr/libexec/getty</string>
-		<string>std.115200</string>
+		<string>3wire.115200</string>
 		<string>console</string>
 	</array>
 	<key>RunAtLoad</key>
