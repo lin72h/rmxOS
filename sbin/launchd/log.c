@@ -392,6 +392,7 @@ _launchd_log_uncork_pending_drain(void)
 		return;
 	}
 
+	uint64_t pending_drops = launchd_log_dropped();
 	if (_launchd_log_pack(&outval, &outvalCnt) != 0) {
 		return;
 	}
@@ -402,11 +403,9 @@ _launchd_log_uncork_pending_drain(void)
 		/* Every undelivered record must be represented in the next report. */
 		for (size_t n = 0; n < outvalCnt; ) {
 			struct logmsg_s *lost = (void *)(outval + n);
-			uint64_t count;
-			if (sscanf((char *)lost + lost->msg_offset,
-			    "launchd log queue dropped %ju records", &count) == 1) {
-				_launchd_logq_dropped = UINT64_MAX - _launchd_logq_dropped < count ?
-				    UINT64_MAX : _launchd_logq_dropped + count;
+			if (n == 0 && pending_drops != 0) {
+				_launchd_logq_dropped = UINT64_MAX - _launchd_logq_dropped < pending_drops ?
+				    UINT64_MAX : _launchd_logq_dropped + pending_drops;
 			} else _logmsg_drop();
 			n += lost->obj_sz;
 		}
@@ -450,6 +449,28 @@ launchd_log_push(void)
 	}
 }
 
+/* Count the damaged frame and every frame after it. If the size itself is
+ * corrupt, count that undecodable span once and resume at the next aligned,
+ * fully valid record. Destroyed framing cannot reveal additional boundaries.
+ */
+static void
+_logmsg_drop_forwarded_tail(const uint8_t *bytes, size_t left)
+{
+	while (left != 0) {
+		_logmsg_drop();
+		const struct logmsg_s *lm = (const void *)bytes;
+		size_t size = left >= sizeof(*lm) ? lm->obj_sz : 0;
+		if (size < sizeof(*lm) || size > left || size % 8 != 0) {
+			for (size = 8; size < left; size += 8) {
+				if (launchd_log_record_valid((const void *)(bytes + size), left - size)) break;
+			}
+			if (size >= left) return;
+		}
+		bytes += size;
+		left -= size;
+	}
+}
+
 kern_return_t
 launchd_log_forward(uid_t forward_uid, gid_t forward_gid, vm_offset_t inval, mach_msg_type_number_t invalCnt)
 {
@@ -462,19 +483,7 @@ launchd_log_forward(uid_t forward_uid, gid_t forward_gid, vm_offset_t inval, mac
 
 	for (lm_walk = (struct logmsg_s *)inval; data_left > 0; lm_walk = (struct logmsg_s *)((uint64_t *)lm_walk + lm_walk->obj_sz/8)) {
 		if (!launchd_log_record_valid(lm_walk, data_left)) {
-			_logmsg_drop();
-			break;
-		}
-		/* malloc(3) returns non-NULL when you ask for zero bytes. If our object
-		 * is zero bytes, something is wrong.
-		 */
-		if (lm_walk->obj_sz == 0) {
-			launchd_syslog(LOG_WARNING, "Encountered a log message of size 0 with %u bytes left in forwarded data. Ignoring remaining messages.", data_left);
-			break;
-		}
-
-		if (lm_walk->obj_sz < sizeof(struct logmsg_s)) {
-			launchd_syslog(LOG_WARNING, "Received bytes %zu are less than expected bytes %lu.", lm_walk->obj_sz, sizeof(struct logmsg_s));
+			_logmsg_drop_forwarded_tail((const void *)lm_walk, data_left);
 			break;
 		}
 
@@ -485,8 +494,7 @@ launchd_log_forward(uid_t forward_uid, gid_t forward_gid, vm_offset_t inval, mac
 		}
 
 		if (!(lm = malloc(lm_walk->obj_sz))) {
-			_logmsg_drop();
-			launchd_syslog(LOG_WARNING, "Failed to allocate %zu bytes for log message with %u bytes left in forwarded data. Ignoring remaining messages.", lm_walk->obj_sz, data_left);
+			_logmsg_drop_forwarded_tail((const void *)lm_walk, data_left);
 			break;
 		}
 

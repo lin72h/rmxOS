@@ -1003,8 +1003,9 @@ launchd_callback(struct timeval *when, pid_t from_pid, pid_t about_pid, uid_t se
 	/* Only PID 1's own report can account queue loss, never a job's text. */
 	uintmax_t dropped = 0;
 	int consumed = 0;
-	if (from_pid == 1 && sender_uid == 0 && from_name && msg &&
+	if (from_pid == 1 && about_pid == 1 && sender_uid == 0 && from_name && about_name && msg &&
 	    !strcmp(from_name, "com.apple.launchd") &&
+	    !strcmp(about_name, "com.apple.launchd") &&
 	    sscanf(msg, "launchd log queue dropped %ju records%n", &dropped, &consumed) == 1 &&
 	    consumed > 0 && msg[consumed] == 0) {
 		__atomic_fetch_add(&asld_counters.launchd_dropped, dropped, __ATOMIC_RELAXED);

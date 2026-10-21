@@ -1,5 +1,14 @@
 /* ABI projection for Zig tests of the actual log.c queue. */
+#include <stdlib.h>
+static int test_malloc_remaining = -1;
+static void *test_malloc(size_t size) {
+ if (test_malloc_remaining == 0) return NULL;
+ if (test_malloc_remaining > 0) test_malloc_remaining--;
+ return malloc(size);
+}
+#define malloc test_malloc
 #include "../log.c"
+FILE *launchd_console;
 int64_t runtime_get_wall_time(void) { return 0; }
 void rmx_queue_clear(void) {
  struct logmsg_s *lm;
@@ -68,3 +77,28 @@ void rmx_queue_pack(uint64_t *out) {
  out[3] = launchd_log_dropped();
 }
 int rmx_record_valid(void *record, size_t length) { return launchd_log_record_valid(record, length); }
+void mig_deallocate(vm_address_t address, vm_size_t size) { (void)size; free((void *)address); }
+kern_return_t job_mig_log_drain_reply(mach_port_t port, kern_return_t rc, vm_offset_t bytes, mach_msg_type_number_t size) {
+ (void)port; (void)rc; (void)bytes; (void)size; return KERN_FAILURE;
+}
+kern_return_t launchd_mport_deallocate(mach_port_t port) { (void)port; return 0; }
+void rmx_bad_forward(unsigned mode) {
+ vm_offset_t bytes = 0; mach_msg_type_number_t length = 0;
+ rmx_queue_add(2, 20);
+ _launchd_log_pack(&bytes, &length);
+ struct logmsg_s *first = (void *)bytes;
+ if (mode == 0) first->msg_offset = first->obj_sz;
+ if (mode == 1) first->obj_sz = 0;
+ if (mode == 2) first->obj_sz = 8;
+ if (mode == 3) test_malloc_remaining = 0;
+ if (mode == 4) test_malloc_remaining = 1;
+ launchd_log_forward(0, 0, bytes, length);
+ test_malloc_remaining = -1;
+}
+void rmx_failed_report_send(unsigned pending) {
+ struct launchd_syslog_attr attr = {.from_name="com.apple.launchd", .from_pid=1, .about_name="job", .about_pid=123, .session_name="System", .priority=LOG_NOTICE};
+ _launchd_logq_dropped = pending;
+ _logmsg_add(&attr, 0, "launchd log queue dropped 7 records");
+ launchd_drain_reply_port = 42;
+ _launchd_log_uncork_pending_drain();
+}

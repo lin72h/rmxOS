@@ -1,4 +1,32 @@
 const std = @import("std");
+extern fn rmx_bad_forward(c_uint) void;
+extern fn rmx_failed_report_send(c_uint) void;
+test "invalid forward counts both discarded records" {
+    for (0..3) |mode| {
+        rmx_queue_clear();
+        defer rmx_queue_clear();
+        rmx_bad_forward(@intCast(mode));
+        try std.testing.expectEqual(@as(u64, 2), facts()[2]);
+        try std.testing.expectEqual(@as(u64, 0), facts()[0]);
+    }
+}
+test "failed send counts job text once and restores only the leading report" {
+    for ([_]c_uint{ 0, 5 }) |pending| {
+        rmx_queue_clear();
+        defer rmx_queue_clear();
+        rmx_failed_report_send(pending);
+        try std.testing.expectEqual(@as(u64, pending + 1), facts()[2]);
+    }
+}
+test "allocation failure counts the entire remaining forward tail" {
+    for ([_]c_uint{ 3, 4 }, 0..) |mode, kept| {
+        rmx_queue_clear();
+        defer rmx_queue_clear();
+        rmx_bad_forward(mode);
+        try std.testing.expectEqual(@as(u64, 2 - kept), facts()[2]);
+        try std.testing.expectEqual(@as(u64, kept), facts()[0]);
+    }
+}
 extern fn rmx_queue_clear() void;
 extern fn rmx_queue_add(c_uint, c_uint) void;
 extern fn rmx_queue_facts(*[3]u64) void;

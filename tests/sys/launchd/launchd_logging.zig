@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: BSD-2-Clause
 const std = @import("std");
 const f = @import("job_fixture.zig");
+const retained_records = @import("stopped_records.zig");
+extern fn _vproc_log(c_int, [*:0]const u8, ...) void;
 const c = @cImport({
     @cInclude("atf-c.h");
     @cInclude("unistd.h");
@@ -20,7 +22,7 @@ const queue_count: c_uint = 27;
 const queue_bytes: c_uint = 28;
 const queue_dropped: c_uint = 29;
 const a = std.heap.page_allocator;
-const names = [_][*:0]const u8{ "drain", "early_boot", "stopped", "pid1_boot", "churn" };
+const names = [_][*:0]const u8{ "drain", "early_boot", "stopped", "pid1_boot", "churn", "report_identity" };
 var cases: [names.len]c.atf_tc_t = undefined;
 fn need(ok: bool, msg: [*:0]const u8) void {
     if (!ok) c.atf_tc_fail("%s", msg);
@@ -121,6 +123,31 @@ fn rss() u64 {
     const bytes = f.capture(&.{ "/bin/ps", "-p", "1", "-o", "rss=" });
     return std.fmt.parseInt(u64, std.mem.trim(u8, bytes, " \r\n"), 10) catch c.atf_tc_fail("PID1 RSS");
 }
+fn statusCounter(pid: i32) u64 {
+    const before = occurrences(store("com.rmxos.asld.record", "status"), "[com.rmxos.asld.record status]");
+    need(c.kill(pid, c.SIGUSR1) == 0, "request asld status");
+    for (0..300) |_| {
+        const bytes = store("com.rmxos.asld.record", "status");
+        if (occurrences(bytes, "[com.rmxos.asld.record status]") == before + 1) return lastCounter(bytes, "launchd_dropped");
+        _ = c.usleep(100000);
+    }
+    c.atf_tc_fail("fresh asld status absent");
+}
+fn reportIdentity() void {
+    waitEmpty();
+    const raw = f.capture(&.{ "/bin/cat", "/var/run/syslog.pid" });
+    const pid = std.fmt.parseInt(i32, std.mem.trim(u8, raw, " \r\n"), 10) catch c.atf_tc_fail("asld pid");
+    const before = statusCounter(pid);
+    const reports = occurrences(store("com.rmxos.launchd.record", "drops"), "[com.rmxos.launchd.record drops]");
+    const message = "launchd log queue dropped 7 records";
+    _vproc_log(3, "%s", @as([*:0]const u8, message));
+    _ = awaitRecord("RefPID", text("{d}", .{c.getpid()}), message);
+    waitEmpty();
+    const after = statusCounter(pid);
+    _ = c.printf("launchd_report_identity before=%ju after=%ju\n", before, after);
+    need(after == before, "job report text must not count drops");
+    need(occurrences(store("com.rmxos.launchd.record", "drops"), "[com.rmxos.launchd.record drops]") == reports, "job report text must not create loss report");
+}
 fn stopped() void {
     waitEmpty();
     const rss_before = rss();
@@ -133,10 +160,12 @@ fn stopped() void {
         _ = c.usleep(100000);
     }
     need(c.kill(pid, 0) != 0, "old asld process exited before queue workload");
+    const prior_records = stat(queue_count) + stat(queue_dropped);
     const limits = f.stoppedLimits();
     const count = limits.jobs;
     _ = c.printf("launchd_stopped_budget jobs=%u queue_records=%u job_ms=%u worker_s=%u parent_s=%u atf_s=%u runner_s=%u\n", count, limits.queue_records, limits.job_ms, limits.worker_seconds, limits.parent_seconds, limits.atf_seconds, limits.runner_seconds);
     _ = c.fflush(null);
+    const prefix = text("com.rmxos.op789.full.{d}.", .{c.getpid()});
     var newest: []const u8 = "";
     for (0..count) |i| {
         const label = text("com.rmxos.op789.full.{d}.{d}", .{ c.getpid(), i });
@@ -151,6 +180,7 @@ fn stopped() void {
     const retained = stat(queue_count);
     const bytes = stat(queue_bytes);
     const lost = stat(queue_dropped);
+    need(retained + lost == count + prior_records and lost >= prior_records, "workload records and prior stop records all accounted before restart");
     _ = c.printf("launchd_stopped produced_jobs=%u queued=%ju bytes=%ju dropped=%ju\n", count, retained, bytes, lost);
     need(count > limits.queue_records and retained <= limits.queue_records and bytes <= 256 * 1024 and lost > 0, "stopped queue bounded and all losses counted");
     const rss_peak = rss();
@@ -171,6 +201,10 @@ fn stopped() void {
     const drop_records = awaitRecord("com.rmxos.launchd.record", "drops", report);
     need(occurrences(drop_records, "[com.rmxos.launchd.record drops]") == reports_before + 1, "one new loss report per stopped interval");
     waitEmpty();
+    const own_records = f.capture(&.{ "/usr/bin/aslutil", "-d", "/var/log/asl", "-F", "raw", "-k", "RefProc", "Aeq", prefix });
+    const stored = retained_records.check(own_records, prefix, count, lost - prior_records) catch c.atf_tc_fail("every retained job exit stored exactly once; stored plus own drops equals jobs");
+    need(stored == retained, "every retained record belongs to this workload");
+    _ = c.printf("launchd_stopped_accounting jobs=%u stored=%ju own_drops=%ju prior_records=%ju\n", count, stored, lost - prior_records, prior_records);
     const status_count = occurrences(store("com.rmxos.asld.record", "status"), "[com.rmxos.asld.record status]");
     need(c.kill(restarted, c.SIGUSR1) == 0, "request asld status");
     var fresh = false;
@@ -247,7 +281,7 @@ fn body(tc: [*c]const c.atf_tc_t) callconv(.c) void {
     const name = std.mem.span(c.atf_tc_get_ident(tc));
     if (!f.enter("/usr/tests/sys/launchd/launchd_logging_test", name)) return;
     _ = c.alarm(if (std.mem.eql(u8, name, "stopped")) f.stoppedLimits().worker_seconds else 150);
-    if (std.mem.eql(u8, name, "early_boot")) early() else if (std.mem.eql(u8, name, "drain")) drain() else if (std.mem.eql(u8, name, "stopped")) stopped() else if (std.mem.eql(u8, name, "pid1_boot")) boot() else churn();
+    if (std.mem.eql(u8, name, "early_boot")) early() else if (std.mem.eql(u8, name, "drain")) drain() else if (std.mem.eql(u8, name, "stopped")) stopped() else if (std.mem.eql(u8, name, "pid1_boot")) boot() else if (std.mem.eql(u8, name, "report_identity")) reportIdentity() else churn();
 }
 fn cleanup(tc: [*c]const c.atf_tc_t) callconv(.c) void {
     const name = std.mem.span(c.atf_tc_get_ident(tc));
