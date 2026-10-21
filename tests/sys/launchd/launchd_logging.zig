@@ -124,12 +124,15 @@ fn rss() u64 {
 fn stopped() void {
     waitEmpty();
     const rss_before = rss();
-    const dropped_before = lastCounter(store("com.rmxos.asld.record", "status"), "launchd_dropped");
     const reports_before = occurrences(store("com.rmxos.launchd.record", "drops"), "[com.rmxos.launchd.record drops]");
     const pid_text = f.capture(&.{ "/bin/cat", "/var/run/syslog.pid" });
     const pid = std.fmt.parseInt(i32, std.mem.trim(u8, pid_text, " \n\r"), 10) catch c.atf_tc_fail("asld pidfile");
-    need(c.kill(pid, c.SIGSTOP) == 0, "stop asld process within its supervised job");
-    defer _ = c.kill(pid, c.SIGCONT);
+    need(f.run(&.{ "/bin/launchctl", "unload", "/etc/launchd.d/com.apple.syslogd.plist" }) == 0, "stop asld candidate job");
+    for (0..100) |_| {
+        if (c.kill(pid, 0) != 0) break;
+        _ = c.usleep(100000);
+    }
+    need(c.kill(pid, 0) != 0, "old asld process exited before queue workload");
     const count: u32 = 1200;
     var newest: []const u8 = "";
     for (0..count) |i| {
@@ -149,16 +152,26 @@ fn stopped() void {
     need(retained <= 1000 and bytes <= 256 * 1024 and lost > 0, "stopped queue bounded and all losses counted");
     const rss_peak = rss();
     need(rss_peak <= rss_before + 8192, "stopped logger RSS remains within queue/allocation bound");
-    need(c.kill(pid, c.SIGCONT) == 0, "restart stopped asld job");
+    need(f.run(&.{ "/bin/launchctl", "load", "/etc/launchd.d/com.apple.syslogd.plist" }) == 0, "start asld candidate job");
+    var restarted: i32 = 0;
+    for (0..100) |_| {
+        const raw = std.fs.cwd().readFileAlloc(a, "/var/run/syslog.pid", 64) catch "";
+        restarted = std.fmt.parseInt(i32, std.mem.trim(u8, raw, " \r\n"), 10) catch 0;
+        if (restarted > 1 and restarted != pid and c.kill(restarted, 0) == 0) break;
+        _ = c.usleep(100000);
+    }
+    need(restarted > 1 and restarted != pid and c.kill(restarted, 0) == 0, "asld resumed with a new process");
+    _ = c.printf("launchd_drainer_restart old_pid=%d new_pid=%d\n", pid, restarted);
     const newest_record = awaitRecord("RefProc", newest, "[Message Exited with code: 73]");
     need(occurrences(newest_record, "[Message Exited with code: 73]") == 1, "newest record delivered once");
     const report = text("[launchd_dropped {d}]", .{lost});
     const drop_records = awaitRecord("com.rmxos.launchd.record", "drops", report);
     need(occurrences(drop_records, "[com.rmxos.launchd.record drops]") == reports_before + 1, "one new loss report per stopped interval");
     waitEmpty();
-    need(c.kill(pid, c.SIGUSR1) == 0, "request asld status");
-    const total = text("[launchd_dropped {d}]", .{dropped_before + lost});
-    _ = awaitRecord("com.rmxos.asld.record", "status", total);
+    need(c.kill(restarted, c.SIGUSR1) == 0, "request asld status");
+    const total = text("[launchd_dropped {d}]", .{lost});
+    const status = awaitRecord("PID", text("{d}", .{restarted}), total);
+    need(std.mem.indexOf(u8, status, "[com.rmxos.asld.record status]") != null, "new asld status reports launchd losses");
     const rss_after = rss();
     _ = c.printf("launchd_rss before_kib=%ju peak_kib=%ju after_kib=%ju reported_drops=%ju\n", rss_before, rss_peak, rss_after, lost);
     need(rss_after <= rss_before + 8192, "RSS stays bounded after draining");
@@ -231,6 +244,7 @@ fn cleanup(tc: [*c]const c.atf_tc_t) callconv(.c) void {
         const bytes = std.fs.cwd().readFileAlloc(a, "/var/run/syslog.pid", 64) catch "";
         const pid = std.fmt.parseInt(i32, std.mem.trim(u8, bytes, " \r\n"), 10) catch 0;
         if (pid > 1) _ = c.kill(pid, c.SIGCONT);
+        _ = f.run(&.{ "/bin/launchctl", "load", "/etc/launchd.d/com.apple.syslogd.plist" });
     }
     f.cleanup(name);
 }
