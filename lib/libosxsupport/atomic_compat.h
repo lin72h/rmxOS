@@ -25,18 +25,68 @@
  *
  */
 
+#ifndef RMX_ATOMIC_COMPAT_H
+#define RMX_ATOMIC_COMPAT_H
 #include <sys/types.h>
-#include <machine/atomic.h>
- 
-typedef int OSSpinLock;
+#include <stdint.h>
+#include <stdbool.h>
 
-#define OSAtomicIncrement32Barrier(v) atomic_fetchadd_int((volatile int *)v, 1)
-#define OSAtomicDecrement32Barrier(v) atomic_fetchadd_int((volatile int *)v, -1)
-#define OSAtomicTestAndSetBarrier(i, v) atomic_testandset_int((volatile int *)v, i)
-#define OSAtomicAdd64(i, v) atomic_add_64((volatile int *)v, i)
-#define OSAtomicIncrement32(v) atomic_fetchadd_32((volatile int *)v, 1)
-#define OSAtomicDecrement32(v) atomic_fetchadd_32((volatile int *)v, -1)
-#define OSAtomicCompareAndSwapLongBarrier(o, i, v) atomic_cmpset_long(v, o, i)
-#define OSAtomicCompareAndSwap32Barrier(o, i, v) atomic_cmpset_32(v, o, i)
-#define OSSpinLockLock(l) while (atomic_testandset_int((volatile int *)l, 1) == 1)
-#define OSSpinLockUnlock(l) atomic_clear_int((volatile int *)l, 1)
+typedef int32_t OSSpinLock;
+
+static inline int32_t
+rmx_osatomic_inc32(volatile int32_t *value, int order)
+{
+	return __atomic_add_fetch(value, 1, order);
+}
+static inline int32_t
+rmx_osatomic_dec32(volatile int32_t *value, int order)
+{
+	return __atomic_sub_fetch(value, 1, order);
+}
+static inline int64_t
+rmx_osatomic_add64(int64_t amount, volatile int64_t *value)
+{
+	return __atomic_add_fetch(value, amount, __ATOMIC_RELAXED);
+}
+static inline bool
+rmx_osatomic_test_and_set(uint32_t bit, volatile void *address)
+{
+	volatile uint8_t *byte = (volatile uint8_t *)address + (bit >> 3);
+	uint8_t mask = (uint8_t)(0x80u >> (bit & 7));
+	return (__atomic_fetch_or(byte, mask, __ATOMIC_SEQ_CST) & mask) != 0;
+}
+static inline bool
+rmx_osatomic_cas32(int32_t old, int32_t replacement, volatile int32_t *value)
+{
+	return __atomic_compare_exchange_n(value, &old, replacement, false,
+	    __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+}
+static inline bool
+rmx_osatomic_caslong(long old, long replacement, volatile long *value)
+{
+	return __atomic_compare_exchange_n(value, &old, replacement, false,
+	    __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+}
+static inline void
+rmx_osspin_lock(volatile OSSpinLock *lock)
+{
+	while (__atomic_exchange_n(lock, 1, __ATOMIC_ACQUIRE) != 0)
+		while (__atomic_load_n(lock, __ATOMIC_RELAXED) != 0)
+			__asm__ volatile("pause");
+}
+static inline void
+rmx_osspin_unlock(volatile OSSpinLock *lock)
+{
+	__atomic_store_n(lock, 0, __ATOMIC_RELEASE);
+}
+#define OSAtomicIncrement32Barrier(v) rmx_osatomic_inc32((v), __ATOMIC_SEQ_CST)
+#define OSAtomicDecrement32Barrier(v) rmx_osatomic_dec32((v), __ATOMIC_SEQ_CST)
+#define OSAtomicTestAndSetBarrier(i, v) rmx_osatomic_test_and_set((i), (v))
+#define OSAtomicAdd64(i, v) rmx_osatomic_add64((i), (v))
+#define OSAtomicIncrement32(v) rmx_osatomic_inc32((v), __ATOMIC_RELAXED)
+#define OSAtomicDecrement32(v) rmx_osatomic_dec32((v), __ATOMIC_RELAXED)
+#define OSAtomicCompareAndSwapLongBarrier(o, i, v) rmx_osatomic_caslong((o), (i), (v))
+#define OSAtomicCompareAndSwap32Barrier(o, i, v) rmx_osatomic_cas32((o), (i), (v))
+#define OSSpinLockLock(l) rmx_osspin_lock(l)
+#define OSSpinLockUnlock(l) rmx_osspin_unlock(l)
+#endif

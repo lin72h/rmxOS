@@ -14,8 +14,8 @@ fn event(_: ?*anyopaque, kind: c_int, _: ?*anyopaque) callconv(.c) c_int {
     }
     return 0;
 }
-export var op767_module: Module = .{ .name = "op767_logger", .event = event, .private = null };
-export var op767_metadata: Metadata = .{ .kind = 2, .data = &op767_module, .name = "op767_logger" };
+var op767_module: Module = .{ .name = "op767_logger", .event = event, .private = null };
+var op767_metadata: Metadata = .{ .kind = 2, .data = &op767_module, .name = "op767_logger" };
 export var op767_metadata_ptr: *Metadata linksection("set_modmetadata_set") = &op767_metadata;
-export var op767_sysinit: Sysinit = .{ .subsystem = 0x3100000, .order = 0x1000000, .func = module_register_init, .data = &op767_module };
+var op767_sysinit: Sysinit = .{ .subsystem = 0x3100000, .order = 0x1000000, .func = module_register_init, .data = &op767_module };
 export var op767_sysinit_ptr: *Sysinit linksection("set_sysinit_set") = &op767_sysinit;

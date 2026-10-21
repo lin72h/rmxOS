@@ -33,4 +33,10 @@ op767_logger.o: ${.CURDIR}/logger_message.zig
 op767_logger.ko: op767_logger.o
 	${LD} -r -d -warn-common -o ${.TARGET} op767_logger.o
 
+SCRIPTS+= atomic_contract_test
+atomic_bridge.o: ${.CURDIR}/atomic_bridge.c ${SRCTOP}/lib/libosxsupport/atomic_compat.h
+	${CC} ${CFLAGS} ${INPUT_CFLAGS} -c ${.CURDIR}/atomic_bridge.c -o ${.TARGET}
+atomic_contract_test: ${.CURDIR}/atomic_contract.zig atomic_bridge.o
+	${ZIG} build-exe ${.CURDIR}/atomic_contract.zig atomic_bridge.o ${SYSROOT}/usr/lib/libnotify.so.5 ${SYSROOT}/usr/lib/libasl.so.1 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/usr/lib/liblaunch.so.5 ${SYSROOT}/lib/libthr.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}
+
 .include <bsd.test.mk>
