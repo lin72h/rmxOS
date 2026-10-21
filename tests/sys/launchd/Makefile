@@ -20,9 +20,12 @@ launchd_logging_test: ${.CURDIR}/launchd_logging.zig ${.CURDIR}/job_fixture.zig
 SCRIPTS+= log_units_test log_queue_unit log_binding_unit liblog_binding_provider.so
 LOGDIR= ${SRCTOP}/sbin/launchd
 LOG_CFLAGS= -fblocks -DPRIVATE -D__APPLE__ -D__MigTypeCheck -ffunction-sections -fdata-sections
-LOG_CFLAGS+= -I${LOGDIR} -I${OBJTOP}/sbin/launchd -I${SRCTOP}/include/apple -I${SRCTOP}/include -I${SRCTOP}/sys
+LOG_CFLAGS+= -I. -I${LOGDIR} -I${SRCTOP}/include/apple -I${SRCTOP}/include -I${SRCTOP}/sys
 LOG_CFLAGS+= -I${SRCTOP}/lib/liblaunch -I${SRCTOP}/lib/libxpc -I${SRCTOP}/lib/libdispatch -I${SRCTOP}/lib/libosxsupport -I${SRCTOP}/lib/libmach
-log_queue_adapter.o: ${LOGDIR}/tests/log_queue_adapter.c ${LOGDIR}/log.c ${LOGDIR}/log.h
+job_reply.h: ${LOGDIR}/job_reply.defs
+	sh ${SRCTOP}/usr.bin/migcom/mig.sh -migcom ${SYSROOT}/usr/bin/migcom ${LOG_CFLAGS} -header job_reply.h -user /dev/null -server /dev/null ${LOGDIR}/job_reply.defs
+CLEANFILES+= job_reply.h
+log_queue_adapter.o: job_reply.h ${LOGDIR}/tests/log_queue_adapter.c ${LOGDIR}/log.c ${LOGDIR}/log.h
 	${CC} ${LOG_CFLAGS} -c ${LOGDIR}/tests/log_queue_adapter.c -o ${.TARGET}
 log_queue_unit: ${LOGDIR}/tests/log_queue.zig log_queue_adapter.o
 	${ZIG} test ${LOGDIR}/tests/log_queue.zig log_queue_adapter.o --test-no-exec --gc-sections -lc -femit-bin=${.TARGET}
