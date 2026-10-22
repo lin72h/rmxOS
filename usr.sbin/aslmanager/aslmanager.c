@@ -1565,7 +1565,12 @@ cli_main(int argc, char *argv[])
 			if ((asl_store_dst == NULL) && (r->action == ACTION_OUT_DEST) && (!strcmp(r->dst->path, PATH_ASL_STORE)))
 				asl_store_dst = r->dst;
 		}
+	}
 
+	if (asl_store_dst == NULL) asl_store_dst = &store;
+
+	if (mod != NULL)
+	{
 		for (r = mod->ruleset; r != NULL; r = r->next)
 		{
 			if (r->action == ACTION_SET_PARAM)
