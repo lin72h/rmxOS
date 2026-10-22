@@ -1,4 +1,51 @@
 const std = @import("std");
+extern fn rmx_drain_request(c_int, c_uint) c_int;
+extern fn rmx_drain_exit(c_int) void;
+extern fn rmx_drain_held() c_uint;
+extern fn rmx_drain_sent() c_uint;
+test "process exit counts held records and captured drops exactly once" {
+    rmx_queue_clear();
+    defer rmx_queue_clear();
+    rmx_queue_add(1010, 20);
+    try std.testing.expectEqual(@as(c_int, -305), rmx_drain_request(100, 42));
+    try std.testing.expectEqual(@as(u64, 0), facts()[0]);
+    rmx_drain_exit(101);
+    try std.testing.expectEqual(@as(u64, 0), facts()[2]);
+    rmx_drain_exit(100);
+    try std.testing.expectEqual(@as(u64, 1010), facts()[2]);
+    rmx_drain_exit(100);
+    try std.testing.expectEqual(@as(u64, 1010), facts()[2]);
+}
+test "same process with a different reply name releases held batch uncounted" {
+    rmx_queue_clear();
+    defer rmx_queue_clear();
+    rmx_queue_add(10, 20);
+    const before = rmx_drain_sent();
+    try std.testing.expectEqual(@as(c_int, -305), rmx_drain_request(100, 42));
+    try std.testing.expectEqual(@as(c_uint, 10), rmx_drain_held());
+    rmx_queue_add(5, 20);
+    try std.testing.expectEqual(@as(c_int, -305), rmx_drain_request(100, 43));
+    try std.testing.expectEqual(@as(c_uint, 5), rmx_drain_held());
+    try std.testing.expectEqual(before + 15, rmx_drain_sent());
+    try std.testing.expectEqual(@as(u64, 0), facts()[2]);
+    rmx_drain_exit(100);
+    try std.testing.expectEqual(@as(u64, 5), facts()[2]);
+}
+test "another process with a reused reply name cannot take held batch" {
+    rmx_queue_clear();
+    defer rmx_queue_clear();
+    rmx_queue_add(10, 20);
+    try std.testing.expectEqual(@as(c_int, -305), rmx_drain_request(100, 42));
+    const sent = rmx_drain_sent();
+    rmx_queue_add(5, 20);
+    try std.testing.expectEqual(@as(c_int, 6), rmx_drain_request(101, 42));
+    try std.testing.expectEqual(sent, rmx_drain_sent());
+    try std.testing.expectEqual(@as(c_uint, 10), rmx_drain_held());
+    try std.testing.expectEqual(@as(u64, 5), facts()[0]);
+    rmx_drain_exit(100);
+    try std.testing.expectEqual(@as(u64, 10), facts()[2]);
+    try std.testing.expectEqual(@as(c_int, -305), rmx_drain_request(101, 42));
+}
 extern fn rmx_bad_forward(c_uint) void;
 extern fn rmx_failed_report_send(c_uint) void;
 test "invalid forward counts both discarded records" {

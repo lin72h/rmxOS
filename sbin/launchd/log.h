@@ -70,6 +70,9 @@ kern_return_t
 launchd_log_forward(uid_t forward_uid, gid_t forward_gid, vm_offset_t inval, mach_msg_type_number_t invalCnt);
 
 kern_return_t
-launchd_log_drain(mach_port_t srp, vm_offset_t *outval, mach_msg_type_number_t *outvalCnt);
+launchd_log_drain(pid_t pid, mach_port_t srp, vm_offset_t *outval, mach_msg_type_number_t *outvalCnt);
+
+int launchd_log_watch_process(pid_t pid);
+void launchd_log_process_exit(pid_t pid);
 
 #endif /* __LAUNCHD_LOG_H__ */

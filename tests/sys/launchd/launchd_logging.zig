@@ -12,6 +12,8 @@ const c = @cImport({
     @cInclude("sys/stat.h");
     @cInclude("fcntl.h");
     @cInclude("time.h");
+    @cInclude("sys/time.h");
+    @cInclude("sys/wait.h");
     @cInclude("launch.h");
     @cInclude("vproc.h");
 });
@@ -22,7 +24,7 @@ const queue_count: c_uint = 27;
 const queue_bytes: c_uint = 28;
 const queue_dropped: c_uint = 29;
 const a = std.heap.page_allocator;
-const names = [_][*:0]const u8{ "drain", "early_boot", "stopped", "pid1_boot", "churn", "report_identity" };
+const names = [_][*:0]const u8{ "drain", "early_boot", "stopped", "pid1_boot", "churn", "report_identity", "mid_batch_exit" };
 var cases: [names.len]c.atf_tc_t = undefined;
 fn need(ok: bool, msg: [*:0]const u8) void {
     if (!ok) c.atf_tc_fail("%s", msg);
@@ -147,6 +149,71 @@ fn reportIdentity() void {
     _ = c.printf("launchd_report_identity before=%ju after=%ju\n", before, after);
     need(after == before, "job report text must not count drops");
     need(occurrences(store("com.rmxos.launchd.record", "drops"), "[com.rmxos.launchd.record drops]") == reports, "job report text must not create loss report");
+}
+extern fn _vprocmgr_log_drain(?*anyopaque, ?*anyopaque, *const fn (*c.struct_timeval, c.pid_t, c.pid_t, c.uid_t, c.gid_t, c_int, [*:0]const u8, [*:0]const u8, [*:0]const u8, [*:0]const u8) callconv(.c) void) ?*anyopaque;
+var exit_prefix: []const u8 = "";
+var exit_callbacks: u8 = 0;
+var exit_pipe: c_int = -1;
+fn exitCallback(_: *c.struct_timeval, _: c.pid_t, _: c.pid_t, _: c.uid_t, _: c.gid_t, _: c_int, _: [*:0]const u8, _: [*:0]const u8, _: [*:0]const u8, message: [*:0]const u8) callconv(.c) void {
+    if (!std.mem.startsWith(u8, std.mem.span(message), exit_prefix)) return;
+    exit_callbacks += 1;
+    // Deliberately observe callbacks without storing their records. Counting
+    // the whole held batch is conservative even if a real drainer stored a prefix.
+    if (exit_callbacks == 3) {
+        if (c.write(exit_pipe, &exit_callbacks, 1) != 1) c._exit(92);
+        c._exit(0);
+    }
+}
+fn midBatchExit() void {
+    waitEmpty();
+    // Give the sequential asld loop time to acknowledge its last sent batch.
+    _ = c.sleep(2);
+    const raw = f.capture(&.{ "/bin/cat", "/var/run/syslog.pid" });
+    const pid = std.fmt.parseInt(i32, std.mem.trim(u8, raw, " \r\n"), 10) catch c.atf_tc_fail("asld pid");
+    need(f.run(&.{ "/bin/launchctl", "unload", "/etc/launchd.d/com.apple.syslogd.plist" }) == 0, "stop asld for helper");
+    for (0..100) |_| {
+        if (c.kill(pid, 0) != 0) break;
+        _ = c.usleep(100000);
+    }
+    need(c.kill(pid, 0) != 0, "asld exited before helper workload");
+    // Stop/reap records and any conservative prior batch are not ours.
+    const prior = stat(queue_count) + stat(queue_dropped);
+    const produced: u64 = 16;
+    exit_prefix = text("op871.midbatch.{d}.", .{c.getpid()});
+    for (0..produced) |i| _vproc_log(3, "%s%zu", f.z(exit_prefix).ptr, i);
+    need(stat(queue_count) + stat(queue_dropped) == prior + produced, "all helper workload enqueued");
+    var pipes: [2]c_int = undefined;
+    need(c.pipe(&pipes) == 0, "helper callback pipe");
+    const helper = c.fork();
+    need(helper >= 0, "fork root drainer");
+    if (helper == 0) {
+        _ = c.close(pipes[0]);
+        exit_pipe = pipes[1];
+        exit_callbacks = 0;
+        _ = _vprocmgr_log_drain(null, null, exitCallback);
+        c._exit(91);
+    }
+    _ = c.close(pipes[1]);
+    defer _ = c.close(pipes[0]);
+    var callbacks: u8 = 0;
+    need(c.read(pipes[0], &callbacks, 1) == 1 and callbacks == 3, "helper exited in its third callback");
+    var status: c_int = 0;
+    need(c.waitpid(helper, &status, 0) == helper and status == 0, "mid-batch helper exit status");
+    var lost: u64 = 0;
+    for (0..100) |_| {
+        lost = stat(queue_dropped);
+        if (lost == prior + produced) break;
+        _ = c.usleep(100000);
+    }
+    need(stat(queue_count) == 0 and lost == prior + produced, "process exit counted the entire held batch");
+    need(f.run(&.{ "/bin/launchctl", "load", "/etc/launchd.d/com.apple.syslogd.plist" }) == 0, "restart asld after helper");
+    _ = awaitRecord("com.rmxos.launchd.record", "drops", text("[launchd_dropped {d}]", .{lost}));
+    waitEmpty();
+    const stored = f.capture(&.{ "/usr/bin/aslutil", "-d", "/var/log/asl", "-F", "raw", "-k", "Message", "Aeq", exit_prefix });
+    const stored_count = occurrences(stored, "[Message ");
+    _ = c.printf("launchd_mid_batch_exit produced=%ju callbacks=%u stored=%zu counted=%ju prior=%ju helper_pid=%d\n", produced, @as(c_uint, callbacks), stored_count, lost - prior, prior, helper);
+    need(stored_count + lost - prior == produced, "stored plus counted drops equals produced");
+    need(stored_count == 0, "held batch was never resent");
 }
 fn stopped() void {
     waitEmpty();
@@ -281,11 +348,11 @@ fn body(tc: [*c]const c.atf_tc_t) callconv(.c) void {
     const name = std.mem.span(c.atf_tc_get_ident(tc));
     if (!f.enter("/usr/tests/sys/launchd/launchd_logging_test", name)) return;
     _ = c.alarm(if (std.mem.eql(u8, name, "stopped")) f.stoppedLimits().worker_seconds else 150);
-    if (std.mem.eql(u8, name, "early_boot")) early() else if (std.mem.eql(u8, name, "drain")) drain() else if (std.mem.eql(u8, name, "stopped")) stopped() else if (std.mem.eql(u8, name, "pid1_boot")) boot() else if (std.mem.eql(u8, name, "report_identity")) reportIdentity() else churn();
+    if (std.mem.eql(u8, name, "early_boot")) early() else if (std.mem.eql(u8, name, "drain")) drain() else if (std.mem.eql(u8, name, "stopped")) stopped() else if (std.mem.eql(u8, name, "pid1_boot")) boot() else if (std.mem.eql(u8, name, "report_identity")) reportIdentity() else if (std.mem.eql(u8, name, "mid_batch_exit")) midBatchExit() else churn();
 }
 fn cleanup(tc: [*c]const c.atf_tc_t) callconv(.c) void {
     const name = std.mem.span(c.atf_tc_get_ident(tc));
-    if (std.mem.eql(u8, name, "stopped")) {
+    if (std.mem.eql(u8, name, "stopped") or std.mem.eql(u8, name, "mid_batch_exit")) {
         const bytes = std.fs.cwd().readFileAlloc(a, "/var/run/syslog.pid", 64) catch "";
         const pid = std.fmt.parseInt(i32, std.mem.trim(u8, bytes, " \r\n"), 10) catch 0;
         if (pid > 1) _ = c.kill(pid, c.SIGCONT);

@@ -11,6 +11,12 @@ static void *test_malloc(size_t size) {
 FILE *launchd_console;
 int64_t runtime_get_wall_time(void) { return 0; }
 void rmx_queue_clear(void) {
+
+#ifdef LAUNCHD_LOG_PROCESS_SETTLEMENT
+ _launchd_log_settle_sent(false);
+ _launchd_drain_pid = 0;
+#endif
+ launchd_drain_reply_port = MACH_PORT_NULL;
  struct logmsg_s *lm;
  while ((lm = STAILQ_FIRST(&_launchd_logq))) _logmsg_remove(lm);
 #ifdef LAUNCHD_LOGQ_MAX_COUNT
@@ -78,9 +84,43 @@ void rmx_queue_pack(uint64_t *out) {
 }
 int rmx_record_valid(void *record, size_t length) { return launchd_log_record_valid(record, length); }
 void mig_deallocate(vm_address_t address, vm_size_t size) { (void)size; free((void *)address); }
+static bool test_send_success;
+static unsigned test_sent_records;
 kern_return_t job_mig_log_drain_reply(mach_port_t port, kern_return_t rc, vm_offset_t bytes, mach_msg_type_number_t size) {
- (void)port; (void)rc; (void)bytes; (void)size; return KERN_FAILURE;
+ (void)port; (void)rc;
+ if (!test_send_success) return KERN_FAILURE;
+ for (size_t n = 0; n < size; ) { test_sent_records++; n += ((struct logmsg_s *)(bytes + n))->obj_sz; }
+ return KERN_SUCCESS;
 }
+int launchd_log_watch_process(pid_t pid) { (void)pid; return 0; }
+kern_return_t launchd_mport_notify_req(mach_port_t port, mach_msg_id_t notification) { (void)port; (void)notification; return 0; }
+int rmx_drain_request(int pid, unsigned port) {
+ vm_offset_t bytes; mach_msg_type_number_t size;
+ test_send_success = true;
+#ifdef LAUNCHD_LOG_PROCESS_SETTLEMENT
+ int result = launchd_log_drain(pid, port, &bytes, &size);
+#else
+ (void)pid;
+ int result = launchd_log_drain(port, &bytes, &size);
+#endif
+ test_send_success = false;
+ return result;
+}
+void rmx_drain_exit(int pid) {
+#ifdef LAUNCHD_LOG_PROCESS_SETTLEMENT
+ launchd_log_process_exit(pid);
+#else
+ (void)pid;
+#endif
+}
+unsigned rmx_drain_held(void) {
+#ifdef LAUNCHD_LOG_PROCESS_SETTLEMENT
+ return _launchd_drain_sent_records;
+#else
+ return 0;
+#endif
+}
+unsigned rmx_drain_sent(void) { return test_sent_records; }
 kern_return_t launchd_mport_deallocate(mach_port_t port) { (void)port; return 0; }
 void rmx_bad_forward(unsigned mode) {
  vm_offset_t bytes = 0; mach_msg_type_number_t length = 0;

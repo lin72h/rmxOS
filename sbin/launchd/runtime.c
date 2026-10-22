@@ -764,6 +764,52 @@ waitpid_loop(void *arg __attribute__((unused)))
 	return NULL;
 }
 
+/* A separate queue preserves the job manager's EVFILT_PROC subscription and
+ * udata for supervised drainers, and also covers root callers that fork. */
+static int log_process_kq = -1;
+static pid_t log_process_pid;
+static void
+log_process_callback(void *context __attribute__((unused)), struct kevent *event __attribute__((unused)))
+{
+	struct timespec zero = { 0, 0 };
+	struct kevent exit;
+	while (kevent(log_process_kq, NULL, 0, &exit, 1, &zero) == 1) {
+		if (exit.filter == EVFILT_PROC && (exit.fflags & NOTE_EXIT)) {
+			launchd_log_process_exit((pid_t)exit.ident);
+			log_process_pid = 0;
+		}
+	}
+}
+static kq_callback log_process_kq_callback = log_process_callback;
+
+int
+launchd_log_watch_process(pid_t pid)
+{
+	struct kevent change;
+	if (log_process_kq == -1) {
+		log_process_kq = kqueue();
+		if (log_process_kq == -1) return -1;
+		(void)fcntl(log_process_kq, F_SETFD, FD_CLOEXEC);
+		if (kevent_mod(log_process_kq, EVFILT_READ, EV_ADD, 0, 0, &log_process_kq_callback) == -1) {
+			close(log_process_kq);
+			log_process_kq = -1;
+			return -1;
+		}
+	}
+	/* Consume an old exit before a recycled PID can acknowledge its batch. */
+	log_process_callback(NULL, NULL);
+	if (log_process_pid == pid) return 0;
+	if (log_process_pid) {
+		EV_SET(&change, log_process_pid, EVFILT_PROC, EV_DELETE, 0, 0, NULL);
+		(void)kevent(log_process_kq, &change, 1, NULL, 0, NULL);
+		log_process_pid = 0;
+	}
+	EV_SET(&change, pid, EVFILT_PROC, EV_ADD | EV_ONESHOT, NOTE_EXIT, 0, NULL);
+	if (kevent(log_process_kq, &change, 1, NULL, 0, NULL) == -1) return -1;
+	log_process_pid = pid;
+	return 0;
+}
+
 kern_return_t
 x_handle_kqueue(mach_port_t junk __attribute__((unused)), integer_t fd)
 {
@@ -1130,11 +1176,6 @@ do_mach_notify_dead_name(mach_port_t notify __attribute__((unused)), mach_port_n
 	/* This message is sent to us when one of our send rights no longer has a
 	 * receiver somewhere else on the system.
 	 */
-	if (name == launchd_drain_reply_port) {
-		(void)os_assumes_zero(launchd_mport_deallocate(name));
-		launchd_drain_reply_port = MACH_PORT_NULL;
-	}
-
 	if (root_jobmgr) {
 		root_jobmgr = jobmgr_delete_anything_with_port(root_jobmgr, name);
 	}

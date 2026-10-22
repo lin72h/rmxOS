@@ -34,6 +34,7 @@ _launchd_get_native_syslog(void)
 }
 
 #define LAUNCHD_LOGQ_MAX_COUNT 1000
+#define LAUNCHD_LOG_PROCESS_SETTLEMENT 1
 #define LAUNCHD_LOGQ_MAX_BYTES (256 * 1024)
 
 #define ROUND_TO_64BIT_WORD_SIZE(x)	((x + 7) & ~7)
@@ -57,7 +58,39 @@ static STAILQ_HEAD(, logmsg_s) _launchd_logq = STAILQ_HEAD_INITIALIZER(_launchd_
 static size_t _launchd_logq_sz;
 static size_t _launchd_logq_cnt;
 static uint64_t _launchd_logq_dropped;
+static pid_t _launchd_drain_pid;
+static vm_offset_t _launchd_drain_sent;
+static mach_msg_type_number_t _launchd_drain_sent_size;
+static uint64_t _launchd_drain_sent_records, _launchd_drain_sent_dropped;
 static void _logmsg_remove(struct logmsg_s *lm);
+
+static void
+_launchd_log_settle_sent(bool dropped)
+{
+	if (!_launchd_drain_sent) return;
+	if (dropped) {
+		uint64_t counts[] = { _launchd_drain_sent_records, _launchd_drain_sent_dropped };
+		for (size_t i = 0; i < 2; i++)
+			_launchd_logq_dropped = UINT64_MAX - _launchd_logq_dropped < counts[i] ?
+			    UINT64_MAX : _launchd_logq_dropped + counts[i];
+	}
+	mig_deallocate(_launchd_drain_sent, _launchd_drain_sent_size);
+	_launchd_drain_sent = 0;
+	_launchd_drain_sent_size = 0;
+	_launchd_drain_sent_records = _launchd_drain_sent_dropped = 0;
+}
+
+void
+launchd_log_process_exit(pid_t pid)
+{
+	if (pid != _launchd_drain_pid) return;
+	_launchd_log_settle_sent(true);
+	if (launchd_drain_reply_port) {
+		(void)launchd_mport_deallocate(launchd_drain_reply_port);
+		launchd_drain_reply_port = MACH_PORT_NULL;
+	}
+	_launchd_drain_pid = 0;
+}
 
 static void
 _logmsg_drop(void)
@@ -393,6 +426,7 @@ _launchd_log_uncork_pending_drain(void)
 	}
 
 	uint64_t pending_drops = launchd_log_dropped();
+	uint64_t pending_records = _launchd_logq_cnt;
 	if (_launchd_log_pack(&outval, &outvalCnt) != 0) {
 		return;
 	}
@@ -410,6 +444,13 @@ _launchd_log_uncork_pending_drain(void)
 			n += lost->obj_sz;
 		}
 		(void)launchd_mport_deallocate(tmp_port);
+	} else {
+		/* The next request from this process acknowledges its callbacks. */
+		_launchd_drain_sent = outval;
+		_launchd_drain_sent_size = outvalCnt;
+		_launchd_drain_sent_records = pending_records;
+		_launchd_drain_sent_dropped = pending_drops;
+		return;
 	}
 
 	mig_deallocate(outval, outvalCnt);
@@ -524,13 +565,16 @@ launchd_log_forward(uid_t forward_uid, gid_t forward_gid, vm_offset_t inval, mac
 }
 
 kern_return_t
-launchd_log_drain(mach_port_t srp, vm_offset_t *outval, mach_msg_type_number_t *outvalCnt)
+launchd_log_drain(pid_t pid, mach_port_t srp, vm_offset_t *outval, mach_msg_type_number_t *outvalCnt)
 {
 	*outval = 0;
 	*outvalCnt = 0;
 	if (launchd_drain_reply_port != MACH_PORT_NULL) return KERN_RESOURCE_SHORTAGE;
+	if (_launchd_drain_sent && pid != _launchd_drain_pid) return KERN_RESOURCE_SHORTAGE;
+	if (pid <= 0 || launchd_log_watch_process(pid) != 0) return KERN_RESOURCE_SHORTAGE;
+	_launchd_log_settle_sent(false);
+	_launchd_drain_pid = pid;
 	launchd_drain_reply_port = srp;
-	(void)os_assumes_zero(launchd_mport_notify_req(srp, MACH_NOTIFY_DEAD_NAME));
 	_launchd_log_uncork_pending_drain();
 	return MIG_NO_REPLY;
 }

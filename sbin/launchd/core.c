@@ -8292,7 +8292,7 @@ job_mig_log_drain(job_t j, mach_port_t srp, vm_offset_t *outval, mach_msg_type_n
 		return BOOTSTRAP_NOT_PRIVILEGED;
 	}
 
-	return launchd_log_drain(srp, outval, outvalCnt);
+	return launchd_log_drain(ldc->pid, srp, outval, outvalCnt);
 }
 
 kern_return_t
