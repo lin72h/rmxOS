@@ -1454,6 +1454,68 @@ checkpoint(const char *name)
 	return 0;
 }
 
+/* Checked delivery of the system-store retention summary. */
+static uint32_t
+send_summary_checked(asl_msg_t *message)
+{
+	static const char key[] = "com.rmxos.aslmanager.run";
+	unsigned char random[16];
+	char run[sizeof(random) * 2 + 1];
+	asl_msg_t *query;
+	asl_msg_list_t *queries;
+	struct timespec deadline, now;
+	uint32_t status = ASL_STATUS_WRITE_FAILED;
+
+	/* A prior run's summary must never acknowledge this send. */
+	arc4random_buf(random, sizeof(random));
+	for (size_t i = 0; i < sizeof(random); i++)
+		snprintf(run + i * 2, 3, "%02x", random[i]);
+	if (asl_msg_set_key_val(message, key, run) != 0) return ASL_STATUS_NO_MEMORY;
+	query = asl_msg_new(ASL_TYPE_QUERY);
+	if (query == NULL) return ASL_STATUS_NO_MEMORY;
+	if (asl_msg_set_key_val_op(query, key, run, ASL_QUERY_OP_EQUAL) != 0) {
+		asl_msg_release(query);
+		return ASL_STATUS_NO_MEMORY;
+	}
+	queries = asl_msg_list_new();
+	if (queries == NULL) {
+		asl_msg_release(query);
+		return ASL_STATUS_NO_MEMORY;
+	}
+	asl_msg_list_append(queries, query);
+	asl_msg_release(query);
+	if (asl_msg_list_count(queries) != 1 || clock_gettime(CLOCK_MONOTONIC, &deadline) != 0) {
+		asl_msg_list_release(queries);
+		return ASL_STATUS_WRITE_FAILED;
+	}
+	deadline.tv_sec += 5;
+	if (asl_send(NULL, (asl_object_t)message) == 0) {
+		do {
+			asl_store_t *store = NULL;
+			/* Read only: asld remains the sole system-store writer. Reopen
+			 * so files created while the queued send is processed are seen. */
+			if (asl_store_open_read(PATH_ASL_STORE, &store) == ASL_STATUS_OK) {
+				uint64_t last = 0;
+				asl_msg_list_t *result = asl_store_match(store, queries, &last, 0, 2, 100000, 1);
+				uint32_t count = asl_msg_list_count(result);
+				asl_msg_list_release(result);
+				asl_store_close(store);
+				if (count == 1) {
+					status = ASL_STATUS_OK;
+					break;
+				}
+				if (count > 1) break;
+			}
+			if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) break;
+			if (now.tv_sec > deadline.tv_sec ||
+			    (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec)) break;
+			usleep(100000);
+		} while (1);
+	}
+	asl_msg_list_release(queries);
+	return status;
+}
+
 int
 cli_main(int argc, char *argv[])
 {
@@ -1624,7 +1686,7 @@ cli_main(int argc, char *argv[])
     /* The running logger is the sole system-store writer. In particular,
      * do not race its cached file offsets and StoreData ID with a second
      * writer when StartInterval runs retention. */
-    rc = asl_send(NULL, (asl_object_t)message) == 0 ? ASL_STATUS_OK : ASL_STATUS_WRITE_FAILED;
+    rc = send_summary_checked(message);
    } else {
     rc = summary_path ? asl_store_open_write(summary_path, &store) : ASL_STATUS_INVALID_STORE;
     if (rc == ASL_STATUS_OK) rc = asl_store_save(store, message);

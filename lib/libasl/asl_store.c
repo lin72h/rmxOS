@@ -1069,7 +1069,7 @@ _jump_next(asl_object_private_t *obj)
 	}
 
 	s->curr = last;
-	out = asl_msg_list_get_index(list, 0);
+	out = asl_msg_retain(asl_msg_list_get_index(list, 0));
 	asl_msg_list_release(list);
 
 	return (asl_object_private_t *)out;
@@ -1097,7 +1097,7 @@ _jump_prev(asl_object_private_t *obj)
 	}
 
 	s->curr = last;
-	out = asl_msg_list_get_index(list, 0);
+	out = asl_msg_retain(asl_msg_list_get_index(list, 0));
 	asl_msg_list_release(list);
 
 	return (asl_object_private_t *)out;

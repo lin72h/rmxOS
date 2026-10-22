@@ -382,15 +382,21 @@ fn cleanup(_: [*c]const c.atf_tc_t) callconv(.c) void {
         _ = c.unlink("/tmp/op767-interval.plist");
     }
 }
+fn retentionUnavailable(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const result = command(&.{ "/usr/bin/env", "ASL_DISABLE=1", "/usr/sbin/aslmanager", "-once", "-s", "/var/log/asl", "-asldb" });
+    _ = c.printf("aslmanager_unavailable wait_status=%d output=%.*s\n", result.status, @as(c_int, @intCast(result.text.len)), result.text.ptr);
+    need(result.status == 256, "undelivered summary exits one");
+    need(count(result.text, "aslmanager: summary write failed") == 1, "undelivered summary reports failure once");
+}
 fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(tc, "timeout", "%s", "90");
     _ = c.atf_tc_set_md_var(tc, "require.user", "%s", "root");
     _ = c.alarm(85);
 }
-var cases: [9]c.atf_tc_t = undefined;
+var cases: [10]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "boot_ready", "one_owner", "routes", "native", "kernel", "rotation", "counters", "retention", "compat_service" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ bootReady, oneOwner, routes, native, kernel, rotation, counters, retention, compatibilityService };
+    const names = [_][*:0]const u8{ "boot_ready", "one_owner", "routes", "native", "kernel", "rotation", "counters", "retention", "compat_service", "retention_unavailable" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ bootReady, oneOwner, routes, native, kernel, rotation, counters, retention, compatibilityService, retentionUnavailable };
     for (&cases, names, bodies) |*tc, name, body| {
         var err = c.atf_tc_init(tc, name, head, body, cleanup, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;

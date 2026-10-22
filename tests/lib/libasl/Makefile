@@ -17,7 +17,7 @@ syslog_input.o: ${SRCTOP}/usr.sbin/asl/syslog_input.c
 	${CC} ${CFLAGS} ${INPUT_CFLAGS} -c ${SRCTOP}/usr.sbin/asl/syslog_input.c -o ${.TARGET}
 coordination.o: ${.CURDIR}/coordination.c ${SRCTOP}/usr.sbin/asl/asl_input.h
 	${CC} ${CFLAGS} ${INPUT_CFLAGS} -c ${.CURDIR}/coordination.c -o ${.TARGET}
-asl_input_store_test: ${.CURDIR}/asl_input_store.zig input_io.o syslog_input.o coordination.o
+asl_input_store_test: ${.CURDIR}/asl_input_store.zig ${.CURDIR}/store_iteration.zig input_io.o syslog_input.o coordination.o
 	${ZIG} build-exe ${.CURDIR}/asl_input_store.zig input_io.o syslog_input.o coordination.o ${SYSROOT}/usr/lib/libasl.so.1 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/lib/libthr.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}
 asld_telemetry_test: ${.CURDIR}/asld_telemetry.zig
 	${ZIG} build-exe ${.CURDIR}/asld_telemetry.zig ${SYSROOT}/usr/lib/libasl.so.1 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/usr/lib/liblaunch.so.5 ${SYSROOT}/lib/libthr.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}

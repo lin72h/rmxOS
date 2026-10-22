@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause
 const std = @import("std");
+const iteration = @import("store_iteration.zig");
 const c = @cImport({
     @cInclude("atf-c.h");
     @cInclude("sys/types.h");
@@ -394,10 +395,16 @@ fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(tc, "timeout", "%s", "30");
     _ = c.atf_tc_set_md_var(tc, "require.user", "%s", "root");
 }
-var cases: [5]c.atf_tc_t = undefined;
+fn storeNext(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    iteration.run(false) catch |err| c.atf_tc_fail("store next: %s", @errorName(err).ptr);
+}
+fn storePrev(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    iteration.run(true) catch |err| c.atf_tc_fail("store prev: %s", @errorName(err).ptr);
+}
+var cases: [7]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "socket_sizes", "rfc5424", "kernel_splits", "kernel_burst", "store_full" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &socketSizes, &rfc5424, &kernelSplits, &kernelBurst, &fullStore };
+    const names = [_][*:0]const u8{ "socket_sizes", "rfc5424", "kernel_splits", "kernel_burst", "store_full", "store_next", "store_prev" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &socketSizes, &rfc5424, &kernelSplits, &kernelBurst, &fullStore, &storeNext, &storePrev };
     for (&cases, names, bodies, 0..) |*tc, name, body, i| {
         var err = c.atf_tc_init(tc, name, &head, body, if (i == 4) &cleanupFull else if (i == 0) &restoreDgram else null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
