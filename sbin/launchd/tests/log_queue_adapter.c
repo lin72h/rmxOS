@@ -124,7 +124,7 @@ unsigned rmx_drain_sent(void) { return test_sent_records; }
 kern_return_t launchd_mport_deallocate(mach_port_t port) { (void)port; return 0; }
 void rmx_bad_forward(unsigned mode) {
  vm_offset_t bytes = 0; mach_msg_type_number_t length = 0;
- rmx_queue_add(2, 20);
+ rmx_queue_add(mode == 5 ? 3 : 2, 20);
  _launchd_log_pack(&bytes, &length);
  struct logmsg_s *first = (void *)bytes;
  if (mode == 0) first->msg_offset = first->obj_sz;
@@ -132,6 +132,7 @@ void rmx_bad_forward(unsigned mode) {
  if (mode == 2) first->obj_sz = 8;
  if (mode == 3) test_malloc_remaining = 0;
  if (mode == 4) test_malloc_remaining = 1;
+ if (mode == 5) { first->msg_offset = 0; first->obj_sz *= 2; }
  launchd_log_forward(0, 0, bytes, length);
  test_malloc_remaining = -1;
 }

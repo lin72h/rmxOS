@@ -180,3 +180,11 @@ test "drain wire records reject truncated zero unaligned and bad string offsets"
     r.data = @splat('x');
     try std.testing.expectEqual(@as(c_int, 0), rmx_record_valid(&r, 96));
 }
+
+test "invalid forward with an oversized aligned frame counts all three records" {
+    rmx_queue_clear();
+    defer rmx_queue_clear();
+    rmx_bad_forward(5);
+    try std.testing.expectEqual(@as(u64, 0), facts()[0]);
+    try std.testing.expectEqual(@as(u64, 3), facts()[2]);
+}

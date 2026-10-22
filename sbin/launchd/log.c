@@ -490,8 +490,8 @@ launchd_log_push(void)
 	}
 }
 
-/* Count the damaged frame and every frame after it. If the size itself is
- * corrupt, count that undecodable span once and resume at the next aligned,
+/* Count the damaged frame and every frame after it. If a frame is invalid,
+ * count that undecodable span once and resume at the next aligned,
  * fully valid record. Destroyed framing cannot reveal additional boundaries.
  */
 static void
@@ -500,8 +500,10 @@ _logmsg_drop_forwarded_tail(const uint8_t *bytes, size_t left)
 	while (left != 0) {
 		_logmsg_drop();
 		const struct logmsg_s *lm = (const void *)bytes;
-		size_t size = left >= sizeof(*lm) ? lm->obj_sz : 0;
-		if (size < sizeof(*lm) || size > left || size % 8 != 0) {
+		size_t size;
+		if (launchd_log_record_valid(lm, left)) {
+			size = lm->obj_sz;
+		} else {
 			for (size = 8; size < left; size += 8) {
 				if (launchd_log_record_valid((const void *)(bytes + size), left - size)) break;
 			}
