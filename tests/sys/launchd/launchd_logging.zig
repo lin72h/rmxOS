@@ -166,6 +166,7 @@ fn exitCallback(_: *c.struct_timeval, _: c.pid_t, _: c.pid_t, _: c.uid_t, _: c.g
 }
 fn midBatchExit() void {
     waitEmpty();
+    const reports_before = occurrences(store("com.rmxos.launchd.record", "drops"), "[com.rmxos.launchd.record drops]");
     // Give the sequential asld loop time to acknowledge its last sent batch.
     _ = c.sleep(2);
     const raw = f.capture(&.{ "/bin/cat", "/var/run/syslog.pid" });
@@ -205,9 +206,21 @@ fn midBatchExit() void {
         if (lost == prior + produced) break;
         _ = c.usleep(100000);
     }
-    need(stat(queue_count) == 0 and lost == prior + produced, "process exit counted the entire held batch");
+    const queued = stat(queue_count);
+    _ = c.printf("launchd_mid_batch_settlement produced=%ju callbacks=%u queued=%ju dropped=%ju prior=%ju helper_pid=%d\n", produced, @as(c_uint, callbacks), queued, lost, prior, helper);
+    _ = c.fflush(null);
+    need(queued == 0 and lost == prior + produced, "process exit counted the entire held batch");
     need(f.run(&.{ "/bin/launchctl", "load", "/etc/launchd.d/com.apple.syslogd.plist" }) == 0, "restart asld after helper");
-    _ = awaitRecord("com.rmxos.launchd.record", "drops", text("[launchd_dropped {d}]", .{lost}));
+    var reported = false;
+    for (0..100) |_| {
+        const reports = store("com.rmxos.launchd.record", "drops");
+        if (occurrences(reports, "[com.rmxos.launchd.record drops]") == reports_before + 1 and lastCounter(reports, "launchd_dropped") == lost) {
+            reported = true;
+            break;
+        }
+        _ = c.usleep(100000);
+    }
+    need(reported, "one fresh report carries the exact settled count");
     waitEmpty();
     const stored = f.capture(&.{ "/usr/bin/aslutil", "-d", "/var/log/asl", "-F", "raw", "-k", "Message", "Aeq", exit_prefix });
     const stored_count = occurrences(stored, "[Message ");
