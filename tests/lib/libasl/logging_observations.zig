@@ -1,5 +1,15 @@
 const std = @import("std");
 
+pub fn kernelBoot(current_text: usize, stored: usize) bool {
+    _ = current_text; // Rotation may have removed the banner from messages.
+    return stored == 1;
+}
+test "rotation removes current text but preserves the boot record in ASL" {
+    try std.testing.expect(kernelBoot(0, 1));
+    try std.testing.expect(!kernelBoot(1, 0));
+    try std.testing.expect(!kernelBoot(0, 2));
+}
+
 pub const counters = [_][]const u8{ "dropped_wq", "dropped_kern_quota", "dropped_parse", "bsd_in_truncated", "store_failed", "store_fallback_memory", "file_action_failed", "native_malformed", "dup_suppressed", "config_rejected" };
 pub fn validStatus(raw: []const u8) bool {
     if (std.mem.count(u8, raw, "[com.rmxos.asld.record status]") != 1) return false;

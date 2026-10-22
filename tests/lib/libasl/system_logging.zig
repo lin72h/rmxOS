@@ -264,11 +264,13 @@ fn kernel(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const unload = "op767 kernel fixture unloaded";
     const before_load = count(store(load), load);
     const before_unload = count(store(unload), unload);
-    // Later repetitions rotate the boot text out of messages. Check it before
-    // the first fixture load; the store keeps the boot record across rotations.
-    if (before_load == 0 and true) awaitFile("/var/log/messages", boot, 1);
-    // The preliminary fixture boots syslogd, which consumes the boot backlog.
-    _ = awaitStore(boot, 1);
+    // Rotation can precede even the first fixture load. The persistent store
+    // must still contain the boot banner exactly once.
+    const boot_records = awaitStore(boot, 1);
+    const boot_stored = count(boot_records, boot);
+    const boot_current = fileCount("/var/log/messages", boot);
+    _ = c.printf("kernel_boot current_text=%zu stored=%zu expected_stored=1\n", boot_current, boot_stored);
+    need(observations.kernelBoot(boot_current, boot_stored), "boot banner retained exactly once in ASL across text rotations");
     const text_load = fileCount("/var/log/messages", load);
     const text_unload = fileCount("/var/log/messages", unload);
     _ = run(&.{ "/sbin/kldload", "/usr/tests/lib/launchd/op767_logger.ko" });
