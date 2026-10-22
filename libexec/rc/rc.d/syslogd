@@ -17,12 +17,17 @@ extra_commands="reload"
 
 asld_wait()
 {
-	local attempt owner
+	local attempt owner ready_tmp
 	attempt=0
 	while [ "$attempt" -lt 30 ]; do
 		owner=$(check_pidfile "$pidfile" "$command")
 		if [ -S /var/run/log ] && [ -n "$owner" ]; then
-			(umask 077; echo "$owner" > /var/run/asld.service-ready) || return 1
+			ready_tmp=$(mktemp /var/run/asld.service-ready.XXXXXX) || return 1
+			if ! echo "$owner" > "$ready_tmp" ||
+			    ! mv -f "$ready_tmp" /var/run/asld.service-ready; then
+				rm -f "$ready_tmp"
+				return 1
+			fi
 			echo "asld: compatibility service ready pid=$owner socket=/var/run/log" >> /var/run/asld.boot-service.log || return 1
 			echo "asld: compatibility service ready pid=$owner socket=/var/run/log"
 			return 0

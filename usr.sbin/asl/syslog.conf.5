@@ -25,605 +25,181 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd March 8, 2026
+.Dd October 22, 2026
 .Dt SYSLOG.CONF 5
 .Os
 .Sh NAME
 .Nm syslog.conf
-.Nd syslogd system message log configuration file
+.Nd asld compatibility message routing configuration
 .Sh DESCRIPTION
 The
 .Nm
-file is the configuration file for the
+file supplies simple compatibility routes to
+.Xr asld 8 ,
+the ASL system logger.
+Native ASL rules are configured in
+.Xr asl.conf 5 .
+This interface implements a subset of traditional
 .Xr syslogd 8
-program.
-It consists of
-blocks of lines separated by
-.Em program ,
-.Em hostname
-or
-.Em property-based filter
-specifications (separations appear alone on their lines),
-with each line containing two fields: the
-.Em selector
-field which specifies the types of messages and priorities to which the
-line applies, and an
-.Em action
-field which specifies the action to be taken if a message
-.Xr syslogd 8
-receives matches the selection criteria.
-The
-.Em selector
-field is separated from the
-.Em action
-field by one or more tab characters or spaces.
+configuration syntax.
 .Pp
-A special
-.Em include
-keyword can be used to include all files with names ending in '.conf' and not
-beginning with a '.' contained in the directory following the keyword.
-This keyword can only be used in the first level configuration file.
+Each route has a selector and a destination separated by spaces or tabs.
+A selector is a facility, a period, and a severity level.
+The levels, from highest to lowest severity, are
+.Cm emerg , alert , crit , err , warning , notice , info ,
+and
+.Cm debug .
+A route selects that level and all higher severities.
+An equals sign before the level selects only that level:
+.Cm daemon.=debug .
+The aliases
+.Cm panic , error ,
+and
+.Cm warn
+mean
+.Cm emerg , err ,
+and
+.Cm warning ,
+respectively.
+Other comparison operators are not supported.
 .Pp
-Note that if you use spaces as separators, your
-.Nm
-might be incompatible with other Unices or Unix-like systems.
-This functionality was added for ease of configuration
-(e.g.,\& it is possible to cut-and-paste into
-.Nm ) ,
-and to avoid possible mistakes.
-This change however preserves
-backwards compatibility with the old style of
-.Nm
-(i.e., tab characters only).
-.Pp
-The
-.Em selectors
-are encoded as a
-.Em facility ,
-a period
-.Pq Dq \&. ,
-an optional set of comparison flags
-.Pq Oo \&! Oc Op <=> ,
-and a
-.Em level ,
-with no intervening white-space.
-Both the
-.Em facility
-and the
-.Em level
-are case insensitive.
-.Pp
-The
-.Em facility
-describes the part of the system generating the message, and is one of
-the following keywords:
+Facilities are
 .Cm auth , authpriv , console , cron , daemon , ftp , kern , lpr ,
-.Cm mail , mark , news , ntp , security , syslog , user , uucp ,
+.Cm mail , news , ntp , security , syslog , user , uucp , launchd ,
 and
 .Cm local0
 through
 .Cm local7 .
-These keywords (with the exception of mark) correspond to
-similar
-.Dq Dv LOG_
-values specified to the
-.Xr openlog 3
-and
-.Xr syslog 3
-library routines.
-.Pp
+Facility and level names are case insensitive.
+An asterisk as the facility selects all facilities.
+An asterisk as the level selects all severities.
+The level
+.Cm none
+excludes a facility.
 The
-.Em comparison flags
-may be used to specify exactly what is logged.
-The default comparison is
-.Dq =>
-(or, if you prefer,
-.Dq >= ) ,
-which means that messages from the specified
-.Em facility
-list, and of a priority
-level equal to or greater than
-.Em level
-will be logged.
-Comparison flags beginning with
-.Dq Li \&!
-will have their logical sense inverted.
-Thus
-.Dq !=info
-means all levels except info and
-.Dq !notice
-has the same meaning as
-.Dq <notice .
+.Cm mark
+facility and periodic mark messages are not supported.
 .Pp
-The
-.Em level
-describes the severity of the message, and is a keyword from the
-following ordered list (higher to lower):
-.Cm emerg , alert , crit , err , warning , notice , info
-and
-.Cm debug .
-These keywords correspond to
-similar
-.Dq Dv LOG_
-values specified to the
-.Xr syslog 3
-library routine.
-.Pp
-Each block of lines is separated from the previous block by a
-.Em program ,
-.Em hostname
-or
-.Em property-based filter
-specification.
-A block will only log messages corresponding to the most recent
-.Em program ,
-.Em hostname
-and
-.Em property-based filter
-specifications given.
-Thus, with a block which selects
-.Ql ppp
-as the
-.Em program ,
-directly followed by a block that selects messages from the
-.Em hostname
-.Ql dialhost ,
-the second block will only log messages
-from the
-.Xr ppp 8
-program on dialhost.
-.Pp
-A
-.Em program
-specification is a line beginning with
-.Ql #!prog
-or
+Facilities may be separated by commas to share a level.
+Selectors may be separated by semicolons to share a destination.
+For a matching facility, later selectors override earlier selectors,
+including exclusions.
+Each route is evaluated independently.
+.Ss Program filters
+A line beginning with
 .Ql !prog
-(the former is for compatibility with the previous syslogd, if one is sharing
-.Nm
-files, for example)
-and the following blocks will be associated with calls to
-.Xr syslog 3
-from that specific program.
-A
-.Em program
-specification for
-.Ql foo
-will also match any message logged by the kernel with the prefix
-.Ql "foo: " .
-The
-.Ql #!+prog
-or
-.Ql !+prog
-specification works just like the previous one,
-and the
-.Ql #!-prog
-or
-.Ql !-prog
-specification will match any message but the ones from that
-program.
-Multiple programs may be listed, separated by commas:
-.Ql !prog1,prog2
-matches messages from either program, while
+restricts subsequent routes to messages whose ASL Sender is exactly
+.Ql prog .
+Names are case sensitive.
+A comma-separated list, such as
+.Ql !prog1,prog2 ,
+matches either sender.
+The form
 .Ql !-prog1,prog2
-matches all messages but those from
-.Ql prog1
-or
-.Ql prog2 .
+matches senders other than those listed.
+The line
+.Ql !*
+resets the filter.
+The most recent program filter applies until it is replaced or reset.
+It does not inspect prefixes in the message body.
+In particular, kernel messages retain the sender and PID prefix
+.Ql kernel[0]\&:
+in BSD text output, consistent with the ASL store.
+A kernel message containing a program name in its body does not acquire
+that program's Sender.
+.Ss Destinations
+An absolute pathname appends selected messages to that file.
+The special path
+.Pa /dev/console
+writes to the console, except that kernel messages are not repeated there.
+The kernel already writes them to the console.
 .Pp
-A
-.Em hostname
-specification of the form
-.Ql #+hostname
-or
-.Ql +hostname
-means the following blocks will be applied to messages
-received from the specified hostname.
-Alternatively, the
-.Em hostname
-specification
-.Ql #-hostname
-or
-.Ql -hostname
-causes the following blocks to be applied to messages
-from any host but the one specified.
-If the hostname is given as
-.Ql @ ,
-the local hostname will be used.
-As for program specifications, multiple comma-separated
-values may be specified for hostname specifications.
+A destination beginning with
+.Ql @
+forwards selected messages over UDP to the named host.
+An optional colon and port select a destination port;
+the default service is
+.Ql syslog .
+An asterisk destination sends selected messages to all logged-in users.
 .Pp
-A
-.Em property-based filter
-specification is a line beginning with
-.Ql #:
-or
-.Ql \&:
-and the following blocks will be applied only when filter value
-matches given filter propertie's value.
-See
-.Sx PROPERTY-BASED FILTERS
-section for more details.
-.Pp
-A
-.Em program ,
-.Em hostname
-or
-.Em property-based filter
-specification may be reset by giving
-.Ql *
-as an argument.
-.Pp
-See
-.Xr syslog 3
-for further descriptions of both the
-.Em facility
-and
-.Em level
-keywords and their significance.
-It is preferred that selections be made on
-.Em facility
-rather than
-.Em program ,
-since the latter can easily vary in a networked environment.
-In some cases,
-though, an appropriate
-.Em facility
-simply does not exist.
-.Pp
-If a received message matches the specified
-.Em facility
-and is of the specified
-.Em level
-.Em (or a higher level) ,
-and the first word in the message after the date matches the
-.Em program ,
-the action specified in the
-.Em action
-field will be taken.
-.Pp
-Multiple
-.Em selectors
-may be specified for a single
-.Em action
-by separating them with semicolon
-.Pq Dq \&;
-characters.
-It is important to note, however, that each
-.Em selector
-can modify the ones preceding it.
-.Pp
-Multiple
-.Em facilities
-may be specified for a single
-.Em level
-by separating them with comma
-.Pq Dq \&,
-characters.
-.Pp
-An asterisk
-.Pq Dq *
-can be used to specify all
-.Em facilities ,
-all
-.Em levels ,
-or all
-.Em programs .
-.Pp
-The special
-.Em facility
-.Dq mark
-receives a message at priority
-.Dq info
-every 20 minutes
-(see
-.Xr syslogd 8 ) .
-This is not enabled by a
-.Em facility
-field containing an asterisk.
-.Pp
-The special
-.Em level
-.Dq none
-disables a particular
-.Em facility .
-.Pp
-The
-.Em action
-field of each line specifies the action to be taken when the
-.Em selector
-field selects a message.
-There are five forms:
-.Bl -bullet
-.It
-A pathname (beginning with a leading slash).
-Selected messages are appended to the file.
-.Pp
-To ensure that kernel messages are written to disk promptly,
-.Nm
-calls
+The leading
+.Ql -
+pathname prefix is not supported as synchronization control.
+For compatibility it is accepted and stripped, but it does not change
+write or synchronization behavior.
+File routes do not explicitly call
 .Xr fsync 2
-after writing messages from the kernel.
-Other messages are not synced explicitly.
-You may prefix a pathname with the minus sign,
-.Dq - ,
-to forego syncing the specified file after every kernel message.
-Note that you might lose information if the system crashes
-immediately following a write attempt.
-Nevertheless, using the
-.Dq -
-option may improve performance,
-especially if the kernel is logging many messages.
-.It
-A hostname (preceded by an at
-.Pq Dq @
-sign).
-Selected messages are forwarded to the
-.Xr syslogd 8
-program on the named host.
-If a port number is added after a colon
-.Pq Ql :\&
-then that port will be used as the destination port
-rather than the usual syslog port.
-IPv6 addresses can be used
-by surrounding the address portion with
-square brackets
-.Po
-.Ql [\&
-and
-.Ql ]\&
-.Pc .
-.It
-A comma separated list of users.
-Selected messages are written to those users
-if they are logged in.
-.It
-An asterisk.
-Selected messages are written to all logged-in users.
-.It
-A vertical bar
-.Pq Dq \&| ,
-followed by a command to pipe the selected
-messages to.
-The command is passed to
-.Xr sh 1
-for evaluation, so usual shell metacharacters or input/output
-redirection can occur.
-(Note however that redirecting
-.Xr stdio 3
-buffered output from the invoked command can cause additional delays,
-or even lost output data in case a logging subprocess exited with a
-signal.)
-The command itself runs with
-.Em stdout
-and
-.Em stderr
-redirected to
-.Pa /dev/null .
-Upon receipt of a
-.Dv SIGHUP ,
-.Xr syslogd 8
-will close the pipe to the process.
-If the process did not exit
-voluntarily, it will be sent a
-.Dv SIGTERM
-signal after a grace period of up to 60 seconds.
-.Pp
-The command will only be started once data arrives that should be piped
-to it.
-If it exited later, it will be restarted as necessary.
-So if it
-is desired that the subprocess should get exactly one line of input only
-(which can be very resource-consuming if there are a lot of messages
-flowing quickly), this can be achieved by exiting after just one line of
-input.
-If necessary, a script wrapper can be written to this effect.
-.Pp
-Unless the command is a full pipeline, it is probably useful to
-start the command with
-.Em exec
-so that the invoking shell process does not wait for the command to
-complete.
-Warning: the process is started under the UID invoking
-.Xr syslogd 8 ,
-normally the superuser.
-.El
-.Pp
-Blank lines and lines whose first non-blank character is a hash
-.Pq Dq #
-character are ignored.
-If
+after kernel messages.
+.Ss Includes and comments
+The directive
+.Dq include directory
+reads non-hidden files ending in
+.Pa .conf
+from that directory in pathname order.
+Included files start with no program filter.
+Includes may be nested up to 16 levels below the main file.
+Blank lines and lines whose first non-blank character is
 .Ql #
-is placed in the middle of the line, the
-.Ql #
-character and the rest of the line after it is ignored.
-To prevent special meaning, the
-.Ql #
-character may be escaped with
-.Ql \e ;
-in this case preceding
-.Ql \e
-is removed and
-.Ql #
-is treated as an ordinary character.
-.Sh PROPERTY-BASED FILTERS
-.Em program ,
-.Em hostname
-specifications performs exact match filtering against explicit field only.
-.Em Property-based filters
-feature substring and regular expressions (see
-.Xr re_format 7 )
-matching against various message attributes.
-Filter specification starts with
-.Ql #:
-or
-.Ql \&:
-followed by three comma-separated fields
-.Em property , operator , \&"value\&" .
-Value must be double-quoted.
-A double quote and backslash must be escaped by a backslash.
-.Pp
-Following
-.Em properties
-are supported as test value:
-.Pp
-.Bl -bullet -compact
-.It
-.Ql msg
-- body of the message received.
-.It
-.Ql programname
-- program name sent the message
-.It
-.Ql hostname
-- hostname of message's originator
-.It
-.Ql source
-- an alias for hostname
-.El
-.Pp
-Operator specifies a comparison function between
-.Em propertie's
- value against filter's value.
-Possible operators:
-.Pp
-.Bl -bullet -compact
-.It
-.Ql contains
-- true if filter value is found as a substring of
-.Em property
-.It
-.Ql isequal
-- true if filter value is equal to
-.Em property
-.It
-.Ql startswith
-- true if property starts with filter value
-.It
-.Ql regex
-- true if property matches basic regular expression defined in filter value
-.It
-.Ql ereregex
-- true if property matches extended regular expression defined in filter value
-.El
-.Pp
-Operator may be prefixed by
-.Pp
-.Bl -bullet -compact
-.It
-.Ql \&!
-- to invert compare logic
-.It
-.Ql icase_
-- to make comparison function case insensitive
-.El
-.Sh IMPLEMENTATION NOTES
+are ignored.
+A comment may follow the destination when separated by whitespace.
+.Ss Unsupported syntax
+The legacy
+.Ql #!prog
+form is a comment, not a program filter.
 The
-.Dq kern
-facility is usually reserved for messages
-generated by the local kernel.
-Other messages logged with facility
-.Dq kern
-are usually translated to facility
-.Dq user .
-This translation can be disabled;
-see
-.Xr syslogd 8
-for details.
+.Ql !+prog
+form is not supported; use
+.Ql !prog .
+Hostname filters, including
+.Ql #+hostname ,
+.Ql +hostname ,
+and their exclusion forms, are not supported.
+Forms beginning with
+.Ql #
+are comments and do not restrict subsequent routes.
+Property-based filters, regular expressions, shell pipe destinations,
+and lists of individual users are not supported.
+Malformed selectors are diagnosed and are not installed as routes.
 .Sh FILES
 .Bl -tag -width /etc/syslog.conf -compact
 .It Pa /etc/syslog.conf
-.Xr syslogd 8
-configuration file
+Compatibility routes for
+.Xr asld 8 .
 .El
 .Sh EXAMPLES
-A configuration file might appear as follows:
+The following routes illustrate thresholds, exclusions, exact levels,
+facility lists, and program filters:
 .Bd -literal
-# Log all kernel messages, authentication messages of
-# level notice or higher, and anything of level err or
-# higher to the console.
-# Do not log private authentication messages!
-*.err;kern.*;auth.notice;authpriv.none;mail.crit	/dev/console
+# Errors and higher, except private authentication.
+*.err;authpriv.none              /var/log/errors
 
-# Log anything (except mail) of level info or higher.
-# Do not log private authentication messages!
-*.info;mail.none;authpriv.none		/var/log/messages
+# All kernel messages, retaining kernel[0]: in text output.
+kern.*                          /var/log/kernel
 
-# Log daemon messages at debug level only
-daemon.=debug						/var/log/daemon.debug
+# Only daemon debug messages.
+daemon.=debug                   /var/log/daemon.debug
 
-# The authpriv file has restricted access.
-authpriv.*						/var/log/secure
+# Mail and news errors and higher.
+mail,news.err                   /var/log/spoolerr
 
-# Log all the mail messages in one place.
-mail.*							/var/log/maillog
-
-# Everybody gets emergency messages, plus log them on another
-# machine.
-*.emerg							*
-*.emerg							@arpa.berkeley.edu
-
-# Root and Eric get alert and higher messages.
-*.alert							root,eric
-
-# Save mail and news errors of level err and higher in a
-# special file.
-uucp,news.crit						/var/log/spoolerr
-
-# Pipe all authentication messages to a filter.
-auth.*					|exec /usr/local/sbin/authfilter
-
-# Log all security messages to a separate file.
-security.*						/var/log/security
-
-# Log all writes to /dev/console to a separate file.
-console.*						/var/log/console.log
-
-# Save ftpd transactions along with mail and news
+# Messages whose Sender is ftpd.
 !ftpd
-*.*							/var/log/spoolerr
+*.*                             /var/log/ftpd
 
-# Log ipfw messages without syncing after every message.
-!ipfw
-*.*							-/var/log/ipfw
+# Messages whose Sender is bird or bird6.
+!bird,bird6
+local0.info                     /var/log/bird
 
-# Log ipfw messages with "Deny" in the message body.
-:msg, contains, ".*Deny.*"
-*.*							/var/log/ipfw.deny
+# Messages from every sender except noisy.
+!-noisy
+user.notice                     /var/log/quiet
 
-# Reset program name filtering
+# Reset the Sender filter.
 !*
-
-# Log messages from bird or bird6 into one file
-:programname, regex, "^bird6?$"
-*.*							/var/log/bird-all.log
-
-# Log messages from servers in racks 10-19 in multiple locations, case insensitive
-:hostname, icase_ereregex, "^server-(dcA|podB|cdn)-rack1[0-9]{2}\\..*"
-*.*							/var/log/racks10..19.log
+authpriv.*                      /var/log/secure
 .Ed
 .Sh SEE ALSO
 .Xr syslog 3 ,
+.Xr asl.conf 5 ,
+.Xr asld 8 ,
 .Xr syslogd 8
-.Sh BUGS
-The effects of multiple
-.Em selectors
-are sometimes not intuitive.
-For example
-.Dq mail.crit,*.err
-will select
-.Dq mail
-facility messages at the level of
-.Dq err
-or higher, not at the level of
-.Dq crit
-or higher.
-.Pp
-In networked environments, note that not all operating systems
-implement the same set of facilities.
-The facilities
-authpriv, cron, ftp, and ntp that are known to this implementation
-might be absent on the target system.
-Even worse, DEC UNIX uses
-facility number 10 (which is authpriv in this implementation) to
-log events for their AdvFS file system.
