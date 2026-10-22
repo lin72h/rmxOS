@@ -1496,7 +1496,9 @@ send_summary_checked(asl_msg_t *message)
 			 * so files created while the queued send is processed are seen. */
 			if (asl_store_open_read(PATH_ASL_STORE, &store) == ASL_STATUS_OK) {
 				uint64_t last = 0;
-				asl_msg_list_t *result = asl_store_match(store, queries, &last, 0, 2, 100000, 1);
+				/* The summary was just appended. Start at the newest record
+				 * so every bounded poll can reach it in a large store. */
+				asl_msg_list_t *result = asl_store_match(store, queries, &last, SIZE_MAX, 2, 100000, -1);
 				uint32_t count = asl_msg_list_count(result);
 				asl_msg_list_release(result);
 				asl_store_close(store);
