@@ -297,8 +297,7 @@ fn rotation(_: [*c]const c.atf_tc_t) callconv(.c) void {
     awaitOwner("asld");
     rotateAndLog();
 }
-fn counters(_: [*c]const c.atf_tc_t) callconv(.c) void {
-    awaitOwner("asld");
+fn freshStatus() []const u8 {
     const status_args = &.{ "/usr/bin/aslutil", "-d", "/var/log/asl", "-F", "raw", "-k", "com.rmxos.asld.record", "status" };
     const before = count(run(status_args), "[com.rmxos.asld.record status]");
     need(c.kill(pidfile(), c.SIGUSR1) == 0, "request system logger status");
@@ -306,14 +305,22 @@ fn counters(_: [*c]const c.atf_tc_t) callconv(.c) void {
         const raw = run(status_args);
         if (count(raw, "[com.rmxos.asld.record status]") > before) {
             const fresh = observations.newestStatus(raw) orelse unreachable;
-            need(observations.validStatus(fresh), "fresh status has every numeric counter, including accumulated losses");
-            _ = c.printf("asld_fresh_status %.*s\n", @as(c_int, @intCast(fresh.len)), fresh.ptr);
-            return;
+            return std.heap.page_allocator.dupe(u8, fresh) catch c.atf_tc_fail("status snapshot allocation");
         }
         if (i % 5 == 4) _ = c.kill(pidfile(), c.SIGUSR1);
         _ = c.usleep(20000);
     }
     need(false, "status written through store");
+    unreachable;
+}
+fn counters(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    awaitOwner("asld");
+    const pid = pidfile();
+    const baseline = freshStatus();
+    const fresh = freshStatus();
+    need(pidfile() == pid, "status snapshots belong to the same logger process");
+    _ = c.printf("asld_baseline_status %.*s\nasld_fresh_status %.*s\n", @as(c_int, @intCast(baseline.len)), baseline.ptr, @as(c_int, @intCast(fresh.len)), fresh.ptr);
+    need(observations.statusMatches(fresh, baseline), "idle snapshot changes no counter: exact baseline values and zero deltas");
 }
 fn compatibilityService(_: [*c]const c.atf_tc_t) callconv(.c) void {
     awaitOwner("asld");

@@ -35,12 +35,18 @@ test "duplicate retained exit cannot replace missing exit" {
     try std.testing.expectError(error.Duplicate, check("[RefProc job.3] [Message Exited with code: 73]\n[RefProc job.3] [Message Exited with code: 73]\n", "job.", 4, 2));
 }
 
-pub fn interval(produced: u64, prior: u64, queued: u64, dropped: u64) bool {
-    return queued + dropped >= produced + prior and dropped >= prior;
+pub fn attributed(produced: u64, prior: u64, queued: u64, dropped: u64, own_stored: u64, other_stored: u64, other_dropped: u64) bool {
+    if (dropped < prior or dropped - prior < other_dropped or own_stored > produced) return false;
+    const own_drops = dropped - prior - other_dropped;
+    return own_stored + own_drops == produced and own_stored + other_stored == queued;
+}
+test "an unrelated counted drop cannot cover an uncounted workload loss" {
+    try std.testing.expect(!attributed(4, 0, 3, 2, 2, 1, 1));
+    try std.testing.expect(attributed(4, 0, 4, 2, 3, 1, 1));
 }
 test "unrelated exit during stopped workload is accounted separately" {
-    try std.testing.expect(interval(1200, 4, 1000, 205));
-    try std.testing.expect(!interval(1200, 4, 1000, 203));
+    try std.testing.expect(attributed(1200, 4, 1000, 205, 999, 1, 0));
+    try std.testing.expect(!attributed(1200, 4, 1000, 203, 999, 1, 0));
 }
 
 test "a hole inside the retained suffix is not a counted prefix drop" {

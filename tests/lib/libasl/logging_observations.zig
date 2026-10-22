@@ -21,6 +21,28 @@ pub fn newestStatus(raw: []const u8) ?[]const u8 {
     }
     return result;
 }
+pub fn statusMatches(raw: []const u8, baseline: []const u8) bool {
+    if (!validStatus(raw) or !validStatus(baseline)) return false;
+    // SIGUSR1 only snapshots counters. Historical losses are allowed, but
+    // neither an increment nor a decrease belongs to this idle interval.
+    for (counters) |name| {
+        if (value(raw, name) != value(baseline, name)) return false;
+    }
+    return true;
+}
+fn value(raw: []const u8, name: []const u8) u64 {
+    var pattern: [128]u8 = undefined;
+    const key = std.fmt.bufPrint(&pattern, "[{s} ", .{name}) catch unreachable;
+    const start = std.mem.indexOf(u8, raw, key).? + key.len;
+    const end = std.mem.indexOfScalarPos(u8, raw, start, ']').?;
+    return std.fmt.parseInt(u64, raw[start..end], 10) catch unreachable;
+}
+test "a numeric but changed idle counter fails" {
+    const before = "[com.rmxos.asld.record status] [dropped_wq 7] [dropped_kern_quota 3980] [dropped_parse 0] [bsd_in_truncated 0] [store_failed 0] [store_fallback_memory 0] [file_action_failed 0] [native_malformed 0] [dup_suppressed 1] [config_rejected 0]";
+    const wrong = "[com.rmxos.asld.record status] [dropped_wq 7] [dropped_kern_quota 3980] [dropped_parse 0] [bsd_in_truncated 0] [store_failed 7] [store_fallback_memory 0] [file_action_failed 0] [native_malformed 0] [dup_suppressed 1] [config_rejected 0]";
+    try std.testing.expect(!statusMatches(wrong, before));
+    try std.testing.expect(statusMatches(before, before));
+}
 pub fn directCount(raw: []const u8, token: []const u8) usize {
     var result: usize = 0;
     var lines = std.mem.splitScalar(u8, raw, '\n');

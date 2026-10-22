@@ -229,6 +229,12 @@ fn midBatchExit() void {
     need(stored_count == 0, "held batch was never resent");
 }
 fn stopped() void {
+    // The periodic retention job otherwise adds an unattributable exit at
+    // 900 seconds. Pause it only for this case; the explicit other job below
+    // still exercises a shared queue, with an independently checked record.
+    const manager = "/etc/launchd.d/com.rmxos.aslmanager.once.plist";
+    need(f.run(&.{ "/bin/launchctl", "unload", manager }) == 0, "pause periodic retention during exact accounting");
+    defer need(f.run(&.{ "/bin/launchctl", "load", manager }) == 0, "restore periodic retention job");
     waitEmpty();
     const rss_before = rss();
     const reports_before = occurrences(store("com.rmxos.launchd.record", "drops"), "[com.rmxos.launchd.record drops]");
@@ -243,9 +249,11 @@ fn stopped() void {
     const prior_records = stat(queue_count) + stat(queue_dropped);
     const limits = f.stoppedLimits();
     const count = limits.jobs;
+    need(count - count / 2 < limits.queue_records, "other exit is inside the guaranteed retained suffix");
     _ = c.printf("launchd_stopped_budget jobs=%u queue_records=%u job_ms=%u worker_s=%u parent_s=%u atf_s=%u runner_s=%u\n", count, limits.queue_records, limits.job_ms, limits.worker_seconds, limits.parent_seconds, limits.atf_seconds, limits.runner_seconds);
     _ = c.fflush(null);
     const prefix = text("com.rmxos.op789.full.{d}.", .{c.getpid()});
+    const other = text("com.rmxos.op921.unrelated.{d}", .{c.getpid()});
     var newest: []const u8 = "";
     for (0..count) |i| {
         const label = text("com.rmxos.op789.full.{d}.{d}", .{ c.getpid(), i });
@@ -255,7 +263,6 @@ fn stopped() void {
         if (i == count / 2) {
             // A separately labelled job models an interval job exiting while
             // asld is stopped. Its record is outside this workload's prefix.
-            const other = text("com.rmxos.op921.unrelated.{d}", .{c.getpid()});
             submit(other);
             remove(other);
         }
@@ -268,8 +275,8 @@ fn stopped() void {
     const bytes = stat(queue_bytes);
     const lost = stat(queue_dropped);
     _ = c.printf("launchd_stopped_interval produced=%u prior=%ju queued=%ju dropped=%ju extra=%jd\n", count, prior_records, retained, lost, @as(i64, @intCast(retained + lost)) - @as(i64, @intCast(count + prior_records)));
-    need(retained_records.interval(count, prior_records, retained, lost), "workload and prior records accounted with unrelated exits allowed");
-    need(retained + lost > count + prior_records, "separately labelled exit exercises shared-queue accounting");
+    need(retained + lost == count + prior_records + 1, "exact workload, prior records and one separately labelled exit accounted before restart");
+    need(lost >= prior_records, "older prior records form a counted dropped prefix");
     _ = c.printf("launchd_stopped produced_jobs=%u queued=%ju bytes=%ju dropped=%ju\n", count, retained, bytes, lost);
     need(count > limits.queue_records and retained <= limits.queue_records and bytes <= 256 * 1024 and lost > 0, "stopped queue bounded and all losses counted");
     const rss_peak = rss();
@@ -290,13 +297,15 @@ fn stopped() void {
     const drop_records = awaitRecord("com.rmxos.launchd.record", "drops", report);
     need(occurrences(drop_records, "[com.rmxos.launchd.record drops]") == reports_before + 1, "one new loss report per stopped interval");
     waitEmpty();
+    const other_records = store("RefProc", other);
+    need(occurrences(other_records, "[Message Exited with code: 73]") == 1, "separately labelled exit stored exactly once, with no drop credit");
     const own_records = f.capture(&.{ "/usr/bin/aslutil", "-d", "/var/log/asl", "-F", "raw", "-k", "RefProc", "Aeq", prefix });
     const own_count = occurrences(own_records, "[Message Exited with code: 73]");
     need(own_count <= count and own_count <= retained, "owned retained records fit the stopped queue");
-    const own_drops = count - own_count;
-    need(own_drops <= lost - prior_records, "every missing workload record has a counted drop");
+    const own_drops = lost - prior_records;
+    need(retained_records.attributed(count, prior_records, retained, lost, own_count, 1, 0), "only workload drops pay for missing workload records; other exit independently stored");
     const stored = retained_records.check(own_records, prefix, count, own_drops) catch c.atf_tc_fail("every retained job exit stored exactly once; stored plus own drops equals jobs");
-    need(stored <= retained, "owned records and any unrelated retained records fit the queue");
+    need(stored + 1 == retained, "every queued record is either a workload exit or the checked other exit");
     _ = c.printf("launchd_stopped_accounting jobs=%u stored=%ju own_drops=%ju prior_records=%ju\n", count, stored, own_drops, prior_records);
     const status_count = occurrences(store("com.rmxos.asld.record", "status"), "[com.rmxos.asld.record status]");
     need(c.kill(restarted, c.SIGUSR1) == 0, "request asld status");
@@ -378,6 +387,7 @@ fn body(tc: [*c]const c.atf_tc_t) callconv(.c) void {
 }
 fn cleanup(tc: [*c]const c.atf_tc_t) callconv(.c) void {
     const name = std.mem.span(c.atf_tc_get_ident(tc));
+    if (std.mem.eql(u8, name, "stopped")) _ = f.run(&.{ "/bin/launchctl", "load", "/etc/launchd.d/com.rmxos.aslmanager.once.plist" });
     if (std.mem.eql(u8, name, "stopped") or std.mem.eql(u8, name, "mid_batch_exit")) {
         const bytes = std.fs.cwd().readFileAlloc(a, "/var/run/syslog.pid", 64) catch "";
         const pid = std.fmt.parseInt(i32, std.mem.trim(u8, bytes, " \r\n"), 10) catch 0;

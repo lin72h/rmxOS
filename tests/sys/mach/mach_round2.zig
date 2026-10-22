@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 const std = @import("std");
 const fm = @import("file_message.zig");
+const projection_ports = @import("projection_ports.zig");
 const c = @cImport({
     @cInclude("atf-c.h");
     @cInclude("mach/mach.h");
@@ -124,11 +125,21 @@ fn fileInsertZero() void {
     fact("writer_at_zero", 0, c.dup2(pipe[1], 0));
     const file_before = fileRefs(0);
     const ports_before = taskPorts();
+    var zone_before: u32 = 0;
+    var zone_len: usize = @sizeOf(u32);
+    fact("special_ports_snapshot_before", 0, c.sysctlbyname("vm.uma.ipc_ports.stats.current", &zone_before, &zone_len, null, 0));
+    fact("special_ports_counter_size", @sizeOf(u32), @intCast(zone_len));
     for (0..128) |_| {
         fact("zero_invalid_name", c.KERN_INVALID_VALUE, c.mach_port_insert_right(task, 0, 0, c.MACH_MSG_TYPE_COPY_SEND));
         fact("zero_named_unsupported", c.KERN_NOT_SUPPORTED, c.mach_port_insert_right(task, 4096, 0, c.MACH_MSG_TYPE_COPY_SEND));
         fact("zero_each_projection_releases_file", file_before, fileRefs(0));
     }
+    var zone_after: u32 = 0;
+    zone_len = @sizeOf(u32);
+    fact("special_ports_snapshot_after", 0, c.sysctlbyname("vm.uma.ipc_ports.stats.current", &zone_after, &zone_len, null, 0));
+    fact("special_ports_counter_size", @sizeOf(u32), @intCast(zone_len));
+    _ = c.printf("round2 special_ports before=%ju after=%ju noise=%ju pairs=128\n", @as(u64, zone_before), @as(u64, zone_after), projection_ports.noise);
+    fact("special_ports_growth_bounded", 1, @intFromBool(projection_ports.withinNoise(zone_before, zone_after)));
     fact("projection_task_ports_unchanged", @intCast(ports_before), @intCast(taskPorts()));
     fact("zero_file_references_unchanged", file_before, fileRefs(0));
     fact("zero_writer_close", 0, c.close(0));
