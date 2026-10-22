@@ -143,3 +143,42 @@ void rmx_failed_report_send(unsigned pending) {
  launchd_drain_reply_port = 42;
  _launchd_log_uncork_pending_drain();
 }
+
+/* Read-only instrumentation ABI; assertions and formatting live in Zig. */
+size_t rmx_im_count(void) {
+#ifdef RMX_INSTRUMENT
+ return (size_t)(__stop_rmx_im_sites - __start_rmx_im_sites);
+#else
+ return 0;
+#endif
+}
+const char *rmx_im_text(size_t index, unsigned field) {
+#ifdef RMX_INSTRUMENT
+ if (index < rmx_im_count()) return field ? __start_rmx_im_sites[index].comment : __start_rmx_im_sites[index].file;
+#else
+ (void)index; (void)field;
+#endif
+ return "";
+}
+uint64_t rmx_im_value(size_t index, unsigned field) {
+#ifdef RMX_INSTRUMENT
+ if (index >= rmx_im_count()) return 0;
+ struct rmx_im_site *site = &__start_rmx_im_sites[index];
+ switch (field) {
+ case 0: return __atomic_load_n(&site->hits, __ATOMIC_RELAXED);
+ case 1: return __atomic_load_n(&site->checks, __ATOMIC_RELAXED);
+ case 2: return site->line;
+ case 3: return site->ordinal;
+ case 4: return site->kind;
+ }
+#else
+ (void)index; (void)field;
+#endif
+ return 0;
+}
+int rmx_pack_status(void) {
+ vm_offset_t bytes = 0; mach_msg_type_number_t size = 0;
+ int result = _launchd_log_pack(&bytes, &size);
+ if (result == 0) mig_deallocate(bytes, size);
+ return result;
+}

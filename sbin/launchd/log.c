@@ -7,6 +7,7 @@
 #include "vproc_internal.h"
 #include "log.h"
 #include "core.h"
+#include <sys/rmx_im.h>
 
 /* A normal versioned relocation can still bind libasl's global export.
  * Resolve the version on the libc handle instead of in the global scope. */
@@ -70,9 +71,11 @@ _launchd_log_settle_sent(bool dropped)
 	if (!_launchd_drain_sent) return;
 	if (dropped) {
 		uint64_t counts[] = { _launchd_drain_sent_records, _launchd_drain_sent_dropped };
-		for (size_t i = 0; i < 2; i++)
+		for (size_t i = 0; i < 2; i++) {
+			RMPROBE(UINT64_MAX - _launchd_logq_dropped < counts[i], "log.settle.saturated");
 			_launchd_logq_dropped = UINT64_MAX - _launchd_logq_dropped < counts[i] ?
 			    UINT64_MAX : _launchd_logq_dropped + counts[i];
+		}
 	}
 	mig_deallocate(_launchd_drain_sent, _launchd_drain_sent_size);
 	_launchd_drain_sent = 0;
@@ -111,7 +114,12 @@ static void
 _logmsg_enqueue(struct logmsg_s *lm)
 {
 	while (_launchd_logq_cnt >= LAUNCHD_LOGQ_MAX_COUNT ||
-	    _launchd_logq_sz > LAUNCHD_LOGQ_MAX_BYTES - lm->obj_sz) {
+	    _launchd_logq_sz > LAUNCHD_LOGQ_MAX_BYTES - lm->obj_sz
+#ifdef RMX_INSTRUMENT
+	    || (RMBUGGIFY("log.enqueue.full.force") && _launchd_logq_cnt != 0)
+#endif
+	    ) {
+		RMPROBE(true, "log.enqueue.full.drop");
 		_logmsg_remove(STAILQ_FIRST(&_launchd_logq));
 		_logmsg_drop();
 	}
@@ -190,12 +198,14 @@ _logmsg_add(struct launchd_syslog_attr *attr, int err_num, const char *msg)
 
 	/* Force the unpacking for the log_drain cause unalignment faults. */
 	lm_sz = ROUND_TO_64BIT_WORD_SIZE(lm_sz);
-	if (lm_sz > LAUNCHD_LOGQ_MAX_BYTES) {
+	if (lm_sz > LAUNCHD_LOGQ_MAX_BYTES || RMBUGGIFY("log.add.oversize.force")) {
+		RMPROBE(true, "log.add.oversize.drop");
 		_logmsg_drop();
 		return false;
 	}
 
-	if (unlikely((lm = calloc(1, lm_sz)) == NULL)) {
+	if (unlikely(RMBUGGIFY("log.add.alloc.force") || (lm = calloc(1, lm_sz)) == NULL)) {
+		RMPROBE(true, "log.add.alloc.failed");
 		_logmsg_drop();
 		return false;
 	}
@@ -286,7 +296,7 @@ launchd_vsyslog(struct launchd_syslog_attr *attr, const char *fmt, va_list args)
 	 * we'll lose the first few relevant messages at boot for debug and
 	 * performance logging, but the loss isn't too bad. 
 	 */
-	if (launchd_var_available) {
+	if (launchd_var_available && !RMBUGGIFY("log.vsyslog.prevar.force")) {
 		/* This file is for logging low-level errors where we can't necessarily be
 		 * assured that we can write to the console or use syslog.
 		 */
@@ -332,7 +342,10 @@ launchd_vsyslog(struct launchd_syslog_attr *attr, const char *fmt, va_list args)
 		}
 
 		free(store);
-
+#ifdef RMX_INSTRUMENT
+	} else {
+		RMPROBE(true, "log.vsyslog.prevar");
+#endif
 	}
 
 	vsnprintf(message, sizeof(message), fmt, args);
@@ -375,8 +388,12 @@ _launchd_log_pack(vm_offset_t *outval, mach_msg_type_number_t *outvalCnt)
 		    2 * strlen("com.apple.launchd") + strlen("System") + 4);
 	}
 	*outvalCnt = _launchd_logq_sz + report_size;
-	mig_allocate(outval, *outvalCnt);
-	if (unlikely(*outval == 0)) return KERN_RESOURCE_SHORTAGE;
+	if (RMBUGGIFY("log.pack.allocate.force")) *outval = 0;
+	else mig_allocate(outval, *outvalCnt);
+	if (unlikely(*outval == 0)) {
+		RMPROBE(true, "log.pack.allocate.failed");
+		return KERN_RESOURCE_SHORTAGE;
+	}
 	offset = (uint8_t *)*outval;
 	if (dropped) {
 		lm = (struct logmsg_s *)offset;
@@ -433,9 +450,11 @@ _launchd_log_uncork_pending_drain(void)
 
 	tmp_port = launchd_drain_reply_port;
 	launchd_drain_reply_port = MACH_PORT_NULL;
-	if ((errno = job_mig_log_drain_reply(tmp_port, 0, outval, outvalCnt)) != 0) {
+	if ((errno = RMBUGGIFY("log.reply.failed.force") ? KERN_FAILURE :
+	    job_mig_log_drain_reply(tmp_port, 0, outval, outvalCnt)) != 0) {
 		/* Every undelivered record must be represented in the next report. */
 		for (size_t n = 0; n < outvalCnt; ) {
+			RMPROBE(true, "log.reply.failed.walk");
 			struct logmsg_s *lost = (void *)(outval + n);
 			if (n == 0 && pending_drops != 0) {
 				_launchd_logq_dropped = UINT64_MAX - _launchd_logq_dropped < pending_drops ?
@@ -501,13 +520,17 @@ _logmsg_drop_forwarded_tail(const uint8_t *bytes, size_t left)
 		_logmsg_drop();
 		const struct logmsg_s *lm = (const void *)bytes;
 		size_t size;
-		if (launchd_log_record_valid(lm, left)) {
+		if (launchd_log_record_valid(lm, left) && !RMBUGGIFY("log.forward.rescan.force")) {
 			size = lm->obj_sz;
 		} else {
+			RMPROBE(true, "log.forward.rescan");
 			for (size = 8; size < left; size += 8) {
 				if (launchd_log_record_valid((const void *)(bytes + size), left - size)) break;
 			}
-			if (size >= left) return;
+			if (size >= left) {
+				RMPROBE(true, "log.forward.rescan.give-up");
+				return;
+			}
 		}
 		bytes += size;
 		left -= size;
@@ -531,6 +554,7 @@ launchd_log_forward(uid_t forward_uid, gid_t forward_gid, vm_offset_t inval, mac
 		}
 
 		if (lm_walk->obj_sz > LAUNCHD_LOGQ_MAX_BYTES) {
+			RMPROBE(true, "log.forward.oversize.drop");
 			_logmsg_drop();
 			data_left -= lm_walk->obj_sz;
 			continue;
@@ -571,9 +595,18 @@ launchd_log_drain(pid_t pid, mach_port_t srp, vm_offset_t *outval, mach_msg_type
 {
 	*outval = 0;
 	*outvalCnt = 0;
-	if (launchd_drain_reply_port != MACH_PORT_NULL) return KERN_RESOURCE_SHORTAGE;
-	if (_launchd_drain_sent && pid != _launchd_drain_pid) return KERN_RESOURCE_SHORTAGE;
-	if (pid <= 0 || launchd_log_watch_process(pid) != 0) return KERN_RESOURCE_SHORTAGE;
+	if (launchd_drain_reply_port != MACH_PORT_NULL) {
+		RMPROBE(true, "log.drain.pending.refused");
+		return KERN_RESOURCE_SHORTAGE;
+	}
+	if (_launchd_drain_sent && pid != _launchd_drain_pid) {
+		RMPROBE(true, "log.drain.other-pid.refused");
+		return KERN_RESOURCE_SHORTAGE;
+	}
+	if (pid <= 0 || launchd_log_watch_process(pid) != 0) {
+		RMPROBE(true, "log.drain.watch.refused");
+		return KERN_RESOURCE_SHORTAGE;
+	}
 	_launchd_log_settle_sent(false);
 	_launchd_drain_pid = pid;
 	launchd_drain_reply_port = srp;

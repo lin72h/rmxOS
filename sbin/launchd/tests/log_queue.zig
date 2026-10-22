@@ -188,3 +188,64 @@ test "invalid forward with an oversized aligned frame counts all three records" 
     try std.testing.expectEqual(@as(u64, 0), facts()[0]);
     try std.testing.expectEqual(@as(u64, 3), facts()[2]);
 }
+
+extern fn rmx_im_count() usize;
+extern fn rmx_im_text(usize, c_uint) [*:0]const u8;
+extern fn rmx_im_value(usize, c_uint) u64;
+extern fn rmx_pack_status() c_int;
+extern fn setenv([*:0]const u8, [*:0]const u8, c_int) c_int;
+extern fn unsetenv([*:0]const u8) c_int;
+
+test "forced log allocation failure counts each new record once" {
+    if (rmx_im_count() == 0) return error.SkipZigTest;
+    rmx_queue_clear();
+    defer rmx_queue_clear();
+    rmx_queue_add(1010, 20);
+    const before = facts();
+    try std.testing.expectEqual(@as(c_int, 0), setenv("RMX_IM_FAULTS", "log.add.alloc.force", 1));
+    defer _ = unsetenv("RMX_IM_FAULTS");
+    rmx_queue_add(7, 20);
+    try std.testing.expectEqual(before[0], facts()[0]);
+    try std.testing.expectEqual(before[1], facts()[1]);
+    try std.testing.expectEqual(@as(u64, 17), facts()[2]);
+    try std.testing.expectEqual(@as(c_int, 0), unsetenv("RMX_IM_FAULTS"));
+    var batch: [4]u64 = undefined;
+    rmx_queue_pack(&batch);
+    try std.testing.expectEqual([4]u64{ 1000, 17, 0, 0 }, batch);
+}
+
+test "forced MIG allocation failure retains queue and exact pending drops" {
+    if (rmx_im_count() == 0) return error.SkipZigTest;
+    rmx_queue_clear();
+    defer rmx_queue_clear();
+    rmx_queue_add(1010, 20);
+    const before = facts();
+    try std.testing.expectEqual(@as(c_int, 0), setenv("RMX_IM_FAULTS", "log.pack.allocate.force", 1));
+    defer _ = unsetenv("RMX_IM_FAULTS");
+    for (0..3) |_| {
+        try std.testing.expectEqual(@as(c_int, 6), rmx_pack_status());
+        try std.testing.expectEqual(before, facts());
+    }
+    try std.testing.expectEqual(@as(c_int, 0), unsetenv("RMX_IM_FAULTS"));
+    var batch: [4]u64 = undefined;
+    rmx_queue_pack(&batch);
+    try std.testing.expectEqual([4]u64{ 1000, 10, 0, 0 }, batch);
+}
+
+test "instrumentation table reports every site with never-hit sites first" {
+    const count = rmx_im_count();
+    if (count == 0) return error.SkipZigTest;
+    std.debug.print("RMX_IM_BEGIN sites={d}\n", .{count});
+    for ([_]bool{ true, false }) |zero| {
+        for (0..count) |i| {
+            const hits = rmx_im_value(i, 0);
+            if ((hits == 0) != zero) continue;
+            std.debug.print("RMX_IM_SITE\t{c}\t{d}\t{d}\t{d}\t{d}\t{s}\t{s}\n", .{
+                @as(u8, @intCast(rmx_im_value(i, 4))), hits,               rmx_im_value(i, 1),
+                rmx_im_value(i, 2),                    rmx_im_value(i, 3), std.mem.span(rmx_im_text(i, 0)),
+                std.mem.span(rmx_im_text(i, 1)),
+            });
+        }
+    }
+    std.debug.print("RMX_IM_END sites={d}\n", .{count});
+}
