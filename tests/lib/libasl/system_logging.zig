@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause
 const std = @import("std");
+const observations = @import("logging_observations.zig");
 const c = @cImport({
     @cInclude("atf-c.h");
     @cInclude("asl.h");
@@ -73,11 +74,17 @@ fn count(text: []const u8, token: []const u8) usize {
     return n;
 }
 fn fileCount(path: [*:0]const u8, token: []const u8) usize {
+    return fileCountChannel(path, token, false);
+}
+fn fileCountChannel(path: [*:0]const u8, token: []const u8, direct: bool) usize {
     const file = c.fopen(path, "r") orelse return 0;
     defer _ = c.fclose(file);
     var line: [16384]u8 = undefined;
     var result: usize = 0;
-    while (c.fgets(&line, line.len, file) != null) result += count(std.mem.span(@as([*:0]const u8, @ptrCast(&line))), token);
+    while (c.fgets(&line, line.len, file) != null) {
+        const bytes = std.mem.span(@as([*:0]const u8, @ptrCast(&line)));
+        result += if (direct) observations.directCount(bytes, token) else count(bytes, token);
+    }
     need(c.ferror(file) == 0, "read text log");
     return result;
 }
@@ -295,15 +302,12 @@ fn counters(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const status_args = &.{ "/usr/bin/aslutil", "-d", "/var/log/asl", "-F", "raw", "-k", "com.rmxos.asld.record", "status" };
     const before = count(run(status_args), "[com.rmxos.asld.record status]");
     need(c.kill(pidfile(), c.SIGUSR1) == 0, "request system logger status");
-    const names = [_][]const u8{ "dropped_wq", "dropped_kern_quota", "dropped_parse", "bsd_in_truncated", "store_failed", "store_fallback_memory", "file_action_failed", "native_malformed", "dup_suppressed", "config_rejected" };
     for (0..100) |i| {
         const raw = run(status_args);
         if (count(raw, "[com.rmxos.asld.record status]") > before) {
-            for (names) |name| {
-                var pattern: [128]u8 = undefined;
-                const match = std.fmt.bufPrint(&pattern, "[{s} 0]", .{name}) catch unreachable;
-                need(count(raw, match) == count(raw, "[com.rmxos.asld.record status]"), "all status counters present and zero");
-            }
+            const fresh = observations.newestStatus(raw) orelse unreachable;
+            need(observations.validStatus(fresh), "fresh status has every numeric counter, including accumulated losses");
+            _ = c.printf("asld_fresh_status %.*s\n", @as(c_int, @intCast(fresh.len)), fresh.ptr);
             return;
         }
         if (i % 5 == 4) _ = c.kill(pidfile(), c.SIGUSR1);
@@ -351,8 +355,9 @@ fn compatibilityService(_: [*c]const c.atf_tc_t) callconv(.c) void {
     awaitFile("/var/log/messages", z(&after), 1);
     need(fileCount("/var/log/op767-service-messages", z(&after)) == 0, "service reload reopens the destination");
     const startup = unique("startup_failure_fixture");
+    const startup_before = fileCountChannel("/var/log/messages", z(&startup), true);
     need(asl_startup_report(&startup, "filesystem readiness timeout fixture", c.ETIMEDOUT) == 0, "startup failure reaches nonblocking console and boot log");
-    need(fileCount("/var/log/messages", z(&startup)) == 1, "startup failure recorded once in boot log");
+    need(fileCountChannel("/var/log/messages", z(&startup), true) == startup_before + 1, "one direct startup failure appended to boot log");
 }
 fn retention(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const jobs = run(&.{ "/bin/launchctl", "list" });

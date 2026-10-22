@@ -19,6 +19,9 @@ pub fn check(bytes: []const u8, prefix: []const u8, jobs: usize, drops: u64) !u6
         stored += 1;
     }
     if (drops > jobs or stored != jobs - drops) return error.Accounting;
+    for (seen, 0..) |present, index| {
+        if (present != (index >= drops)) return error.Gap;
+    }
     return stored;
 }
 
@@ -30,4 +33,16 @@ test "newest alone cannot conceal missing retained exits" {
 }
 test "duplicate retained exit cannot replace missing exit" {
     try std.testing.expectError(error.Duplicate, check("[RefProc job.3] [Message Exited with code: 73]\n[RefProc job.3] [Message Exited with code: 73]\n", "job.", 4, 2));
+}
+
+pub fn interval(produced: u64, prior: u64, queued: u64, dropped: u64) bool {
+    return queued + dropped >= produced + prior and dropped >= prior;
+}
+test "unrelated exit during stopped workload is accounted separately" {
+    try std.testing.expect(interval(1200, 4, 1000, 205));
+    try std.testing.expect(!interval(1200, 4, 1000, 203));
+}
+
+test "a hole inside the retained suffix is not a counted prefix drop" {
+    try std.testing.expectError(error.Gap, check("[RefProc job.1] [Message Exited with code: 73]\n[RefProc job.3] [Message Exited with code: 73]\n", "job.", 4, 2));
 }

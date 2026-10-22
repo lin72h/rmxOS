@@ -252,6 +252,13 @@ fn stopped() void {
         submit(label);
         remove(label);
         newest = label;
+        if (i == count / 2) {
+            // A separately labelled job models an interval job exiting while
+            // asld is stopped. Its record is outside this workload's prefix.
+            const other = text("com.rmxos.op921.unrelated.{d}", .{c.getpid()});
+            submit(other);
+            remove(other);
+        }
         if (i % 200 == 199) {
             _ = c.printf("launchd_stopped_progress jobs=%zu\n", i + 1);
             _ = c.fflush(null);
@@ -260,7 +267,9 @@ fn stopped() void {
     const retained = stat(queue_count);
     const bytes = stat(queue_bytes);
     const lost = stat(queue_dropped);
-    need(retained + lost == count + prior_records and lost >= prior_records, "workload records and prior stop records all accounted before restart");
+    _ = c.printf("launchd_stopped_interval produced=%u prior=%ju queued=%ju dropped=%ju extra=%jd\n", count, prior_records, retained, lost, @as(i64, @intCast(retained + lost)) - @as(i64, @intCast(count + prior_records)));
+    need(retained_records.interval(count, prior_records, retained, lost), "workload and prior records accounted with unrelated exits allowed");
+    need(retained + lost > count + prior_records, "separately labelled exit exercises shared-queue accounting");
     _ = c.printf("launchd_stopped produced_jobs=%u queued=%ju bytes=%ju dropped=%ju\n", count, retained, bytes, lost);
     need(count > limits.queue_records and retained <= limits.queue_records and bytes <= 256 * 1024 and lost > 0, "stopped queue bounded and all losses counted");
     const rss_peak = rss();
@@ -282,9 +291,13 @@ fn stopped() void {
     need(occurrences(drop_records, "[com.rmxos.launchd.record drops]") == reports_before + 1, "one new loss report per stopped interval");
     waitEmpty();
     const own_records = f.capture(&.{ "/usr/bin/aslutil", "-d", "/var/log/asl", "-F", "raw", "-k", "RefProc", "Aeq", prefix });
-    const stored = retained_records.check(own_records, prefix, count, lost - prior_records) catch c.atf_tc_fail("every retained job exit stored exactly once; stored plus own drops equals jobs");
-    need(stored == retained, "every retained record belongs to this workload");
-    _ = c.printf("launchd_stopped_accounting jobs=%u stored=%ju own_drops=%ju prior_records=%ju\n", count, stored, lost - prior_records, prior_records);
+    const own_count = occurrences(own_records, "[Message Exited with code: 73]");
+    need(own_count <= count and own_count <= retained, "owned retained records fit the stopped queue");
+    const own_drops = count - own_count;
+    need(own_drops <= lost - prior_records, "every missing workload record has a counted drop");
+    const stored = retained_records.check(own_records, prefix, count, own_drops) catch c.atf_tc_fail("every retained job exit stored exactly once; stored plus own drops equals jobs");
+    need(stored <= retained, "owned records and any unrelated retained records fit the queue");
+    _ = c.printf("launchd_stopped_accounting jobs=%u stored=%ju own_drops=%ju prior_records=%ju\n", count, stored, own_drops, prior_records);
     const status_count = occurrences(store("com.rmxos.asld.record", "status"), "[com.rmxos.asld.record status]");
     need(c.kill(restarted, c.SIGUSR1) == 0, "request asld status");
     var fresh = false;

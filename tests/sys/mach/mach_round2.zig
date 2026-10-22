@@ -106,12 +106,15 @@ fn fileInsert() void {
     _ = c.close(pipe[0]);
 }
 // The file projection is transient: no port allocation or file hold may survive.
-fn allocatedPorts() u32 {
-    var n: u32 = 0;
-    var len: usize = @sizeOf(u32);
-    fact("port_zone_snapshot", 0, c.sysctlbyname("vm.uma.ipc_ports.stats.current", &n, &len, null, 0));
-    if (len != @sizeOf(u32)) c.atf_tc_fail("invalid port-zone counter size");
-    return n;
+fn taskPorts() u32 {
+    var buf: [256]u8 = undefined;
+    var len: usize = buf.len;
+    fact("task_space_snapshot", 0, c.sysctlbyname("mach.current_task_space_stats", &buf, &len, null, 0));
+    var fields = std.mem.tokenizeAny(u8, buf[0..len], " \x00");
+    while (fields.next()) |field| {
+        if (std.mem.startsWith(u8, field, "inuse=")) return std.fmt.parseInt(u32, field[6..], 10) catch c.atf_tc_fail("invalid task port count");
+    }
+    c.atf_tc_fail("task port count missing");
 }
 fn fileInsertZero() void {
     const task = c.mach_task_self();
@@ -120,12 +123,13 @@ fn fileInsertZero() void {
     // Install the writer at descriptor zero, including a native duplicate hold.
     fact("writer_at_zero", 0, c.dup2(pipe[1], 0));
     const file_before = fileRefs(0);
-    const ports_before = allocatedPorts();
+    const ports_before = taskPorts();
     for (0..128) |_| {
         fact("zero_invalid_name", c.KERN_INVALID_VALUE, c.mach_port_insert_right(task, 0, 0, c.MACH_MSG_TYPE_COPY_SEND));
         fact("zero_named_unsupported", c.KERN_NOT_SUPPORTED, c.mach_port_insert_right(task, 4096, 0, c.MACH_MSG_TYPE_COPY_SEND));
+        fact("zero_each_projection_releases_file", file_before, fileRefs(0));
     }
-    fact("projection_ports_released", @intCast(ports_before), @intCast(allocatedPorts()));
+    fact("projection_task_ports_unchanged", @intCast(ports_before), @intCast(taskPorts()));
     fact("zero_file_references_unchanged", file_before, fileRefs(0));
     fact("zero_writer_close", 0, c.close(0));
     fact("other_writer_close", 0, c.close(pipe[1]));
