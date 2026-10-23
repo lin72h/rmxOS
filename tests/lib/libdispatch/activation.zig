@@ -32,8 +32,8 @@ extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c)
 var activate: *const fn (Object) callconv(.c) void = undefined;
 var inactive: *const fn (Object) callconv(.c) Object = undefined;
 fn setup() void {
-    activate = @ptrCast(c.dlsym(null, "dispatch_activate") orelse c.atf_tc_fail("dispatch_activate is missing"));
-    inactive = @ptrCast(c.dlsym(null, "dispatch_queue_attr_make_initially_inactive") orelse c.atf_tc_fail("inactive queue attribute is missing"));
+    activate = @ptrCast(c.dlsym(c.RTLD_DEFAULT, "dispatch_activate") orelse c.atf_tc_fail("dispatch_activate is missing"));
+    inactive = @ptrCast(c.dlsym(c.RTLD_DEFAULT, "dispatch_queue_attr_make_initially_inactive") orelse c.atf_tc_fail("inactive queue attribute is missing"));
 }
 const State = struct {
     count: std.atomic.Value(u32) = .init(0),
