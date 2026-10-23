@@ -20,6 +20,13 @@ uint64_t rmx_manual_sender_dropped(void)
  return asld_counters.sender_dropped;
 }
 
+void *rmx_manual_native_report(const char *record)
+{
+ asl_msg_t *m = asl_msg_from_string(record);
+ if (m) asld_count_sender_drops(m);
+ return m;
+}
+
 unsigned rmx_manual_load(const char *path)
 {
  struct config_rule *r;

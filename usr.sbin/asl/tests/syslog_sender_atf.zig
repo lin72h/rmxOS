@@ -89,6 +89,29 @@ fn flood(_: [*c]const c.atf_tc_t) callconv(.c) void {
         phase("sends", began);
         _ = c.sleep(1);
     }
+    const child = c.fork();
+    need(child >= 0, "fork cached client");
+    if (child == 0) {
+        var name: [64]u8 = undefined;
+        const child_tag = std.fmt.bufPrintZ(&name, "op956-child-{d}", .{c.getpid()}) catch unreachable;
+        c.openlog(child_tag, c.LOG_PID, c.LOG_USER);
+        c.syslog(c.LOG_NOTICE, "child reacquired its logger port");
+        c._exit(0);
+    }
+    var child_status: c_int = 0;
+    need(c.waitpid(child, &child_status, 0) == child and child_status == 0, "child send completed");
+    var child_name: [64]u8 = undefined;
+    const child_tag = std.fmt.bufPrintZ(&child_name, "op956-child-{d}", .{child}) catch unreachable;
+    var child_count: usize = 0;
+    for (0..50) |_| {
+        const found = query("Sender", child_tag, 2);
+        child_count = 0;
+        while (c.asl_next(found) != null) child_count += 1;
+        c.asl_release(found);
+        if (child_count == 1) break;
+        _ = c.usleep(20000);
+    }
+    need(child_count == 1, "fork child record stored exactly once");
     c.syslog(c.LOG_NOTICE, "op956-numbered-10000");
     _ = c.printf("op956_sender sent=10001 send_wall_ns=%lld send_cpu_ns=%lld blocked_estimate_ns=%lld\n", @as(c_longlong, wall), @as(c_longlong, cpu), @as(c_longlong, @max(0, wall - cpu)));
     _ = c.fflush(null);

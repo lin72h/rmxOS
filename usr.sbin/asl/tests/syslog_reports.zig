@@ -1,6 +1,7 @@
 const std = @import("std");
 extern fn rmx_manual_report([*:0]const u8) ?*anyopaque;
 extern fn rmx_manual_sender_dropped() u64;
+extern fn rmx_manual_native_report([*:0]const u8) ?*anyopaque;
 extern fn asl_msg_release(*anyopaque) void;
 extern fn asl_msg_get_val_for_key(*anyopaque, [*:0]const u8) ?[*:0]const u8;
 extern fn asl_file_open_write([*:0]const u8, u32, u32, u32, *?*anyopaque) u32;
@@ -10,6 +11,14 @@ extern fn asl_file_fetch_next(*anyopaque, *?*anyopaque) u32;
 extern fn asl_file_close(*anyopaque) u32;
 extern fn getpid() c_int;
 extern fn unlink([*:0]const u8) c_int;
+
+test "native ASL loss report uses the same telemetry counter" {
+    const before = rmx_manual_sender_dropped();
+    const m = rmx_manual_native_report("[Sender syslog] [Message refused] [com.rmxos.syslog.sender_dropped 11]") orelse return error.Parse;
+    defer asl_msg_release(m);
+    try std.testing.expectEqual(before + 11, rmx_manual_sender_dropped());
+    try std.testing.expectEqualStrings("refused", std.mem.span(asl_msg_get_val_for_key(m, "Message").?));
+}
 
 test "sender report increments telemetry and remains a stored record" {
     try storedReport();
