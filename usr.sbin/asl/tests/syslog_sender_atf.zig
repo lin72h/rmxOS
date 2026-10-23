@@ -104,6 +104,9 @@ fn flood(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const child = c.fork();
     need(child >= 0, "fork cached client");
     if (child == 0) {
+        _ = c.alarm(20);
+        _ = c.close(readiness[0]);
+        _ = c.close(release_pipe[1]);
         var name: [64]u8 = undefined;
         const child_tag = std.fmt.bufPrintZ(&name, "op956-child-{d}", .{c.getpid()}) catch unreachable;
         c.openlog(child_tag, c.LOG_PID, c.LOG_USER);
@@ -244,13 +247,16 @@ fn fallback(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const child = c.fork();
     need(child >= 0, "fallback child");
     if (child == 0) {
+        _ = c.alarm(20);
+        _ = c.close(readiness[0]);
+        _ = c.close(release_pipe[1]);
         var name: [64]u8 = undefined;
         const tag = std.fmt.bufPrintZ(&name, "op982-fallback-{d}", .{c.getpid()}) catch unreachable;
         transport.openlog(tag, c.LOG_PID, c.LOG_USER);
         transport.record(c.LOG_NOTICE, "prime service cache");
         var byte: u8 = 1;
         _ = c.write(readiness[1], &byte, 1);
-        _ = c.read(release_pipe[0], &byte, 1);
+        if (c.read(release_pipe[0], &byte, 1) != 1) c._exit(75);
         const began = now(c.CLOCK_MONOTONIC);
         for (0..100) |i| {
             var line: [64]u8 = undefined;
@@ -259,12 +265,14 @@ fn fallback(_: [*c]const c.atf_tc_t) callconv(.c) void {
         }
         _ = c.printf("op982_unavailable sends=100 elapsed_ns=%lld\n", @as(c_longlong, now(c.CLOCK_MONOTONIC) - began));
         _ = c.write(readiness[1], &byte, 1);
-        _ = c.read(release_pipe[0], &byte, 1);
+        if (c.read(release_pipe[0], &byte, 1) != 1) c._exit(75);
         transport.record(c.LOG_NOTICE, "flush after restart");
         _ = c.printf("op982_after_restart flush_completed=1\n");
         _ = c.fflush(null);
         c._exit(0);
     }
+    _ = c.close(readiness[1]);
+    _ = c.close(release_pipe[0]);
     var byte: u8 = 0;
     need(c.read(readiness[0], &byte, 1) == 1, "child primed cache");
     var old_pid: c_int = 0;
@@ -278,8 +286,8 @@ fn fallback(_: [*c]const c.atf_tc_t) callconv(.c) void {
     }
     need(c.kill(old_pid, 0) != 0, "asld exited");
     _ = c.write(release_pipe[1], &byte, 1);
-    // A held Mach queue may block the child. Restart from the parent so that
-    // observation cannot deadlock waiting for the very service it controls.
+    // Recovery is controlled by the parent; child waits are bounded and EOF
+    // terminates the helper if an assertion exits its parent.
     _ = c.sleep(2);
     need(recovery.restore(), "launchctl restart serves after fallback");
     need(c.read(readiness[0], &byte, 1) == 1, "100 sends completed");
@@ -326,14 +334,14 @@ fn bounded(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const child = c.fork();
     need(child >= 0, "bounded child");
     if (child == 0) {
-        _ = c.alarm(8);
+        _ = c.alarm(20);
         _ = c.close(ready[0]);
         _ = c.close(release[1]);
         c.openlog("op021-bounded", c.LOG_PID, c.LOG_USER);
         c.syslog(c.LOG_NOTICE, "op021 prime");
         var byte: u8 = 0;
         _ = c.write(ready[1], &byte, 1);
-        _ = c.read(release[0], &byte, 1);
+        if (c.read(release[0], &byte, 1) != 1) c._exit(75);
         // Raw protocol sends fill the stopped daemon's queue without changing
         // syslog's application-loss counter. A refused raw fixture is not a log.
         var filled: usize = 0;
@@ -351,7 +359,7 @@ fn bounded(_: [*c]const c.atf_tc_t) callconv(.c) void {
         _ = c.fflush(null);
         if (elapsed >= 2 * std.time.ns_per_s) c._exit(72);
         _ = c.write(ready[1], &byte, 1);
-        _ = c.read(release[0], &byte, 1);
+        if (c.read(release[0], &byte, 1) != 1) c._exit(75);
         const unloaded_began = now(c.CLOCK_MONOTONIC);
         for (0..20) |_| transport.record(c.LOG_NOTICE, "op021 unloaded application");
         const refused_total: u64 = @intCast(transport.totals()[2] - refused_before);
@@ -359,7 +367,7 @@ fn bounded(_: [*c]const c.atf_tc_t) callconv(.c) void {
         _ = c.fflush(null);
         if (now(c.CLOCK_MONOTONIC) - unloaded_began >= 2 * std.time.ns_per_s) c._exit(73);
         _ = c.write(ready[1], &refused_total, @sizeOf(u64));
-        _ = c.read(release[0], &byte, 1);
+        if (c.read(release[0], &byte, 1) != 1) c._exit(75);
         _ = c.sleep(1);
         c.syslog(c.LOG_NOTICE, "op021 bounded flush");
         c.closelog();
