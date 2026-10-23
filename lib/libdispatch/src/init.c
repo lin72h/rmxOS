@@ -193,7 +193,7 @@ struct dispatch_queue_attr_s _dispatch_queue_attr_concurrent = {
 #pragma mark -
 #pragma mark dispatch_queue_attr_t
 
-#define DISPATCH_QUEUE_ATTR_INITIALIZER(qos, prio, overcommit, concurrent) \
+#define DISPATCH_QUEUE_ATTR_INITIALIZER(qos, prio, overcommit, concurrent, inactive) \
 		{ \
 			.do_vtable = DISPATCH_VTABLE(queue_attr), \
 			.do_ref_cnt = DISPATCH_OBJECT_GLOBAL_REFCNT, \
@@ -203,18 +203,23 @@ struct dispatch_queue_attr_s _dispatch_queue_attr_concurrent = {
 			.dqa_relative_priority = (qos) ? (prio) : 0, \
 			.dqa_overcommit = (overcommit), \
 			.dqa_concurrent = (concurrent), \
+			.dqa_inactive = (inactive), \
 		}
 
 #define DISPATCH_QUEUE_ATTR_KIND_INIT(qos, prio) \
 		{ \
 			[DQA_INDEX_NON_OVERCOMMIT][DQA_INDEX_CONCURRENT] = \
-					DISPATCH_QUEUE_ATTR_INITIALIZER(qos, prio, 0, 1), \
+					{ DISPATCH_QUEUE_ATTR_INITIALIZER(qos, prio, 0, 1, 0), \
+					  DISPATCH_QUEUE_ATTR_INITIALIZER(qos, prio, 0, 1, 1) }, \
 			[DQA_INDEX_NON_OVERCOMMIT][DQA_INDEX_SERIAL] = \
-					DISPATCH_QUEUE_ATTR_INITIALIZER(qos, prio, 0, 0), \
+					{ DISPATCH_QUEUE_ATTR_INITIALIZER(qos, prio, 0, 0, 0), \
+					  DISPATCH_QUEUE_ATTR_INITIALIZER(qos, prio, 0, 0, 1) }, \
 			[DQA_INDEX_OVERCOMMIT][DQA_INDEX_CONCURRENT] = \
-					DISPATCH_QUEUE_ATTR_INITIALIZER(qos, prio, 1, 1), \
+					{ DISPATCH_QUEUE_ATTR_INITIALIZER(qos, prio, 1, 1, 0), \
+					  DISPATCH_QUEUE_ATTR_INITIALIZER(qos, prio, 1, 1, 1) }, \
 			[DQA_INDEX_OVERCOMMIT][DQA_INDEX_SERIAL] = \
-					DISPATCH_QUEUE_ATTR_INITIALIZER(qos, prio, 1, 0), \
+					{ DISPATCH_QUEUE_ATTR_INITIALIZER(qos, prio, 1, 0, 0), \
+					  DISPATCH_QUEUE_ATTR_INITIALIZER(qos, prio, 1, 0, 1) }, \
 		}
 
 #define DISPATCH_QUEUE_ATTR_PRIO_INITIALIZER(qos, prio) \
@@ -245,7 +250,7 @@ struct dispatch_queue_attr_s _dispatch_queue_attr_concurrent = {
 				DISPATCH_QUEUE_ATTR_PRIO_INIT(_DISPATCH_QOS_CLASS_##qos)
 
 const struct dispatch_queue_attr_s _dispatch_queue_attrs[]
-		[DISPATCH_QUEUE_ATTR_PRIO_COUNT][2][2] = {
+		[DISPATCH_QUEUE_ATTR_PRIO_COUNT][2][2][2] = {
 	DISPATCH_QUEUE_ATTR_QOS_INITIALIZER(UNSPECIFIED),
 	DISPATCH_QUEUE_ATTR_QOS_INITIALIZER(MAINTENANCE),
 	DISPATCH_QUEUE_ATTR_QOS_INITIALIZER(BACKGROUND),
@@ -666,7 +671,8 @@ dispatch_debug(dispatch_object_t dou, const char *msg, ...)
 	va_end(ap);
 }
 
-#if DISPATCH_DEBUG
+// Keep the historical exported diagnostic entry point in release builds.
+#undef _dispatch_object_debug
 DISPATCH_NOINLINE
 void
 _dispatch_object_debug(dispatch_object_t dou, const char *msg, ...)
@@ -677,7 +683,6 @@ _dispatch_object_debug(dispatch_object_t dou, const char *msg, ...)
 	_dispatch_debugv(dou._do, msg, ap);
 	va_end(ap);
 }
-#endif
 
 #pragma mark -
 #pragma mark dispatch_calloc

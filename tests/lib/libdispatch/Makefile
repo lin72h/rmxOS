@@ -2,10 +2,11 @@ TESTSDIR= ${TESTSBASE}/lib/libdispatch
 KYUAFILE= yes
 SCRIPTS+= dispatch_mach_test
 SCRIPTS+= workqueue_lane_test
+SCRIPTS+= activation_test
 SCRIPTSDIR= ${TESTSDIR}
 ZIG?= zig
 ZIG_SYSROOT?= ${SYSROOT}
-ATF_C_ARCHIVE?= /Users/me/wip-mach/rmx-implementer/build/op395/obj/Users/me/wip-mach/rmx-implementer/build/op395/source/amd64.amd64/lib/atf/libatf-c/libprivateatf-c.a
+ATF_C_ARCHIVE?= ${LIBATF_C}
 DISPATCH_SO?= ${SYSROOT}/usr/lib/libdispatch.so.5
 THR_SO?= ${SYSROOT}/lib/libthr.so.3
 coordination.o: ${.CURDIR}/coordination.c
@@ -13,6 +14,9 @@ coordination.o: ${.CURDIR}/coordination.c
 dispatch_mach_test: ${.CURDIR}/dispatch_mach.zig coordination.o
 	${ZIG} build-exe ${.CURDIR}/dispatch_mach.zig coordination.o ${DISPATCH_SO} ${SYSROOT}/usr/lib/libmach.so.5 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc -lpthread --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -I${SRCTOP}/lib/libdispatch -femit-bin=${.TARGET} -rdynamic
 .include <bsd.test.mk>
+
+activation_test: ${.CURDIR}/activation.zig
+	${ZIG} build-exe ${.CURDIR}/activation.zig ${DISPATCH_SO} ${SYSROOT}/usr/lib/libmach.so.5 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET} -rdynamic
 
 workqueue_lane_test: ${.CURDIR}/workqueue_lane.zig
 	${ZIG} build-exe ${.CURDIR}/workqueue_lane.zig ${THR_SO} ${DISPATCH_SO} ${SYSROOT}/usr/lib/libmach.so.5 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/include -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -femit-bin=${.TARGET}

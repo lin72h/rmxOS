@@ -334,9 +334,10 @@ __BEGIN_DECLS
  * will be coalesced and delivered after the dispatch source is resumed or the
  * event handler block has returned.
  *
- * Dispatch sources are created in a suspended state. After creating the
+ * Dispatch sources are created in an inactive state. After creating the
  * source and setting any desired attributes (i.e. the handler, context, etc.),
- * a call must be made to dispatch_resume() in order to begin event delivery.
+ * a call must be made to dispatch_activate() (or, for compatibility,
+ * dispatch_resume()) in order to begin event delivery.
  *
  * @param type
  * Declares the type of the dispatch source. Must be one of the defined

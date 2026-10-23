@@ -1090,13 +1090,13 @@ _dispatch_queue_attr_index_qos_class_t _dispatch_queue_attr_qos2idx[] = {
 
 static inline dispatch_queue_attr_t
 _dispatch_get_queue_attr(qos_class_t qos, int prio, bool overcommit,
-		bool concurrent)
+		bool concurrent, bool inactive)
 {
 	return (dispatch_queue_attr_t)&_dispatch_queue_attrs
 			[DISPATCH_QUEUE_ATTR_QOS2IDX(qos)]
 			[DISPATCH_QUEUE_ATTR_PRIO2IDX(prio)]
 			[DISPATCH_QUEUE_ATTR_OVERCOMMIT2IDX(overcommit)]
-			[DISPATCH_QUEUE_ATTR_CONCURRENT2IDX(concurrent)];
+			[DISPATCH_QUEUE_ATTR_CONCURRENT2IDX(concurrent)][inactive];
 }
 
 dispatch_queue_attr_t
@@ -1105,12 +1105,12 @@ dispatch_queue_attr_make_with_qos_class(dispatch_queue_attr_t dqa,
 {
 	if (!_dispatch_qos_class_valid(qos_class, relative_priority)) return NULL;
 	if (!slowpath(dqa)) {
-		dqa = _dispatch_get_queue_attr(0, 0, false, false);
+		dqa = _dispatch_get_queue_attr(0, 0, false, false, false);
 	} else if (dqa->do_vtable != DISPATCH_VTABLE(queue_attr)) {
 		DISPATCH_CLIENT_CRASH("Invalid queue attribute");
 	}
 	return _dispatch_get_queue_attr(qos_class, relative_priority,
-			dqa->dqa_overcommit, dqa->dqa_concurrent);
+			dqa->dqa_overcommit, dqa->dqa_concurrent, dqa->dqa_inactive);
 }
 
 dispatch_queue_attr_t
@@ -1118,12 +1118,27 @@ dispatch_queue_attr_make_with_overcommit(dispatch_queue_attr_t dqa,
 		bool overcommit)
 {
 	if (!slowpath(dqa)) {
-		dqa = _dispatch_get_queue_attr(0, 0, false, false);
+		dqa = _dispatch_get_queue_attr(0, 0, false, false, false);
 	} else if (dqa->do_vtable != DISPATCH_VTABLE(queue_attr)) {
 		DISPATCH_CLIENT_CRASH("Invalid queue attribute");
 	}
 	return _dispatch_get_queue_attr(dqa->dqa_qos_class,
-			dqa->dqa_relative_priority, overcommit, dqa->dqa_concurrent);
+			dqa->dqa_relative_priority, overcommit, dqa->dqa_concurrent,
+			dqa->dqa_inactive);
+}
+
+// Attribute composition follows Apple's libdispatch-703.50.37 queue.c.
+dispatch_queue_attr_t
+dispatch_queue_attr_make_initially_inactive(dispatch_queue_attr_t dqa)
+{
+	if (!dqa) {
+		dqa = _dispatch_get_queue_attr(0, 0, false, false, false);
+	} else if (dqa->do_vtable != DISPATCH_VTABLE(queue_attr)) {
+		DISPATCH_CLIENT_CRASH("Invalid queue attribute");
+	}
+	return _dispatch_get_queue_attr(dqa->dqa_qos_class,
+			dqa->dqa_relative_priority, dqa->dqa_overcommit,
+			dqa->dqa_concurrent, true);
 }
 
 #pragma mark -
@@ -1146,9 +1161,10 @@ dispatch_queue_create_with_target(const char *label, dispatch_queue_attr_t dqa,
 	dispatch_once_f(&_dispatch_root_queues_pred, NULL,
 			_dispatch_root_queues_init);
 #endif
-	bool disallow_tq = (slowpath(dqa) && dqa != DISPATCH_QUEUE_CONCURRENT);
+	bool disallow_tq = (slowpath(dqa) && dqa != DISPATCH_QUEUE_CONCURRENT &&
+			!dqa->dqa_inactive);
 	if (!slowpath(dqa)) {
-		dqa = _dispatch_get_queue_attr(0, 0, false, false);
+		dqa = _dispatch_get_queue_attr(0, 0, false, false, false);
 	} else if (dqa->do_vtable != DISPATCH_VTABLE(queue_attr)) {
 		DISPATCH_CLIENT_CRASH("Invalid queue attribute");
 	}
@@ -1208,6 +1224,11 @@ dispatch_queue_create_with_target(const char *label, dispatch_queue_attr_t dqa,
 	}
 	_dispatch_queue_set_override_priority(dq);
 	dq->do_targetq = tq;
+	if (dqa->dqa_inactive) {
+		dq->dq_initially_inactive = true;
+		dq->do_suspend_cnt = DISPATCH_OBJECT_INACTIVE;
+		_dispatch_retain(dq);
+	}
 	_dispatch_object_debug(dq, "%s", __func__);
 	return _dispatch_introspection_queue_create(dq);
 }
@@ -1364,6 +1385,21 @@ dispatch_set_target_queue(dispatch_object_t dou, dispatch_queue_t dq)
 	// TODO: put into the vtable
 	switch(type) {
 	case _DISPATCH_QUEUE_TYPE:
+		if (dou._dq->dq_initially_inactive) {
+			if (!(dispatch_atomic_load2o(dou._do, do_suspend_cnt, relaxed) &
+					DISPATCH_OBJECT_INACTIVE)) {
+				DISPATCH_CLIENT_CRASH("Cannot change target after activation");
+			}
+			// No work can run yet. Set the target before any queued blocks,
+			// rather than appending a target-change barrier behind them.
+			_dispatch_retain(dq);
+			dispatch_queue_t prev_dq = dou._do->do_targetq;
+			_dispatch_queue_priority_inherit_from_target(dou._dq, dq);
+			dou._do->do_targetq = dq;
+			_dispatch_release(prev_dq);
+			return;
+		}
+		/* FALLTHROUGH */
 	case _DISPATCH_SOURCE_TYPE:
 		_dispatch_retain(dq);
 		return _dispatch_barrier_trysync_f(dou._dq, dq,
@@ -1780,16 +1816,14 @@ dispatch_queue_debug(dispatch_queue_t dq, char* buf, size_t bufsiz)
 	return offset;
 }
 
-#if DISPATCH_DEBUG
 void
 dispatch_debug_queue(dispatch_queue_t dq, const char* str) {
 	if (fastpath(dq)) {
-		_dispatch_object_debug(dq, "%s", str);
+		dispatch_debug(dq, "%s", str);
 	} else {
 		_dispatch_log("queue[NULL]: %s", str);
 	}
 }
-#endif
 
 #if DISPATCH_PERF_MON && !DISPATCH_INTROSPECTION
 static OSSpinLock _dispatch_stats_lock;

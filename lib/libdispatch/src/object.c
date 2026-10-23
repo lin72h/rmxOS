@@ -239,6 +239,25 @@ _dispatch_resume_slow(dispatch_object_t dou)
 }
 
 void
+dispatch_activate(dispatch_object_t dou)
+{
+	if (dou._do->do_ref_cnt == DISPATCH_OBJECT_GLOBAL_REFCNT ||
+			(dx_metatype(dou._do) != _DISPATCH_QUEUE_TYPE &&
+			 dx_metatype(dou._do) != _DISPATCH_SOURCE_TYPE)) {
+		return;
+	}
+	unsigned int old, value;
+	do {
+		old = dispatch_atomic_load2o(dou._do, do_suspend_cnt, relaxed);
+		if (!(old & DISPATCH_OBJECT_INACTIVE)) return;
+		value = old & ~DISPATCH_OBJECT_INACTIVE;
+	} while (!dispatch_atomic_cmpxchg2o(dou._do, do_suspend_cnt, old, value,
+			release));
+	// Exactly the thread clearing the bit consumes the initial retain.
+	_dispatch_resume_slow(dou);
+}
+
+void
 dispatch_resume(dispatch_object_t dou)
 {
 	DISPATCH_OBJECT_TFB(_dispatch_objc_resume, dou);
@@ -253,16 +272,28 @@ dispatch_resume(dispatch_object_t dou)
 	// value was a single suspend interval, the object should be resumed.
 	// If the previous value was less than the suspend interval, the object
 	// has been over-resumed.
-	unsigned int suspend_cnt = dispatch_atomic_sub_orig2o(dou._do,
-			 do_suspend_cnt, DISPATCH_OBJECT_SUSPEND_INTERVAL, release);
-	if (fastpath(suspend_cnt > DISPATCH_OBJECT_SUSPEND_INTERVAL)) {
+	unsigned int suspend_cnt, value;
+	do {
+		suspend_cnt = dispatch_atomic_load2o(dou._do, do_suspend_cnt, relaxed);
+		if ((suspend_cnt & ~DISPATCH_OBJECT_INACTIVE) <
+				DISPATCH_OBJECT_SUSPEND_INTERVAL) {
+			// Apple's legacy source API resumes an inactive, unsuspended
+			// source. Queues created inactive must use dispatch_activate.
+			if (!(suspend_cnt & DISPATCH_OBJECT_INACTIVE) ||
+					dx_type(dou._do) != DISPATCH_SOURCE_KEVENT_TYPE) {
+				DISPATCH_CLIENT_CRASH("Over-resume of an object");
+			}
+			value = suspend_cnt & ~DISPATCH_OBJECT_INACTIVE;
+		} else {
+			value = suspend_cnt - DISPATCH_OBJECT_SUSPEND_INTERVAL;
+		}
+	} while (!dispatch_atomic_cmpxchg2o(dou._do, do_suspend_cnt, suspend_cnt,
+			value, release));
+	if (fastpath(value >= DISPATCH_OBJECT_SUSPEND_INTERVAL)) {
 		// Balancing the retain() done in suspend() for rdar://8181908
 		return _dispatch_release(dou._do);
 	}
-	if (fastpath(suspend_cnt == DISPATCH_OBJECT_SUSPEND_INTERVAL)) {
-		return _dispatch_resume_slow(dou);
-	}
-	DISPATCH_CLIENT_CRASH("Over-resume of an object");
+	return _dispatch_resume_slow(dou);
 }
 
 size_t

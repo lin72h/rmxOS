@@ -261,6 +261,22 @@ dispatch_set_finalizer_f(dispatch_object_t object,
 		dispatch_function_t finalizer);
 
 /*!
+ * @function dispatch_activate
+ *
+ * Activates an initially inactive queue or source. Work submitted before
+ * activation remains pending until activation and any explicit suspensions
+ * have been balanced. Calling this on an active object has no effect.
+ * An inactive object must be activated before releasing its last reference.
+ * The target queue of an initially inactive queue cannot change after activation.
+ */
+#if defined(__MAC_10_12) && defined(__IPHONE_10_0)
+__OSX_AVAILABLE_STARTING(__MAC_10_12,__IPHONE_10_0)
+#endif
+DISPATCH_EXPORT DISPATCH_NONNULL_ALL DISPATCH_NOTHROW
+void
+dispatch_activate(dispatch_object_t object);
+
+/*!
  * @function dispatch_suspend
  *
  * @abstract
@@ -288,6 +304,10 @@ dispatch_suspend(dispatch_object_t object);
  *
  * @abstract
  * Resumes the invocation of blocks on a dispatch object.
+ *
+ * Each call balances one explicit suspension. For compatibility, resuming
+ * an inactive source with no explicit suspensions activates it. New code
+ * should use dispatch_activate(). Initially inactive queues require activation.
  *
  * @param object
  * The object to be resumed.

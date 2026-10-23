@@ -2,3 +2,4 @@ syntax(2)
 test_suite("FreeBSD")
 atf_test_program{name="dispatch_mach_test"}
 atf_test_program{name="workqueue_lane_test"}
+atf_test_program{name="activation_test"}

@@ -486,20 +486,17 @@ static inline long _dispatch_assume_zero(long e, long line) {
 	} \
 } while (0)
 
-#if DISPATCH_DEBUG
 #if HAVE_MACH
 DISPATCH_NOINLINE DISPATCH_USED
 void dispatch_debug_machport(mach_port_t name, const char* str);
 #endif
-#endif
 
-#if DISPATCH_DEBUG
 /* This is the private version of the deprecated dispatch_debug() */
 DISPATCH_NONNULL2 DISPATCH_NOTHROW
 __attribute__((__format__(printf,2,3)))
 void
 _dispatch_object_debug(dispatch_object_t object, const char *message, ...);
-#else
+#if !DISPATCH_DEBUG
 #define _dispatch_object_debug(object, message, ...)
 #endif // DISPATCH_DEBUG
 

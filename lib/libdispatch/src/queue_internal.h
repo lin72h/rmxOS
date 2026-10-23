@@ -56,6 +56,7 @@
 	dispatch_queue_t dq_specific_q; \
 	uint16_t dq_width; \
 	uint16_t dq_is_thread_bound:1; \
+	uint16_t dq_initially_inactive:1; \
 	pthread_priority_t dq_priority; \
 	mach_port_t dq_thread; \
 	mach_port_t volatile dq_tqthread; \
@@ -132,12 +133,7 @@ void _dispatch_barrier_async_detached_f(dispatch_queue_t dq, void *ctxt,
 void _dispatch_barrier_trysync_f(dispatch_queue_t dq, void *ctxt,
 		dispatch_function_t func);
 
-#if DISPATCH_DEBUG
 void dispatch_debug_queue(dispatch_queue_t dq, const char* str);
-#else
-static inline void dispatch_debug_queue(dispatch_queue_t dq DISPATCH_UNUSED,
-		const char* str DISPATCH_UNUSED) {}
-#endif
 
 size_t dispatch_queue_debug(dispatch_queue_t dq, char* buf, size_t bufsiz);
 size_t _dispatch_queue_debug_attr(dispatch_queue_t dq, char* buf,
@@ -180,7 +176,7 @@ struct dispatch_queue_attr_s {
 	DISPATCH_STRUCT_HEADER(queue_attr);
 	qos_class_t dqa_qos_class;
 	int dqa_relative_priority;
-	unsigned int dqa_overcommit:1, dqa_concurrent:1;
+	unsigned int dqa_overcommit:1, dqa_concurrent:1, dqa_inactive:1;
 };
 
 enum {
@@ -206,7 +202,7 @@ typedef enum {
 } _dispatch_queue_attr_index_qos_class_t;
 
 extern const struct dispatch_queue_attr_s _dispatch_queue_attrs[]
-		[DISPATCH_QUEUE_ATTR_PRIO_COUNT][2][2];
+		[DISPATCH_QUEUE_ATTR_PRIO_COUNT][2][2][2];
 
 #pragma mark -
 #pragma mark dispatch_continuation_t

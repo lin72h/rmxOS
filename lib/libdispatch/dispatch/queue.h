@@ -424,6 +424,21 @@ dispatch_get_global_queue(long identifier, unsigned long flags);
 DISPATCH_DECL(dispatch_queue_attr);
 
 /*!
+ * @function dispatch_queue_attr_make_initially_inactive
+ *
+ * Combines attr (or NULL for a serial queue) with initial inactivity.
+ * The resulting queue executes no work until dispatch_activate() is called.
+ * Activate the queue before releasing its last reference. Its target queue
+ * may be configured before activation, but cannot change afterwards.
+ */
+#if defined(__MAC_10_12) && defined(__IPHONE_10_0)
+__OSX_AVAILABLE_STARTING(__MAC_10_12,__IPHONE_10_0)
+#endif
+DISPATCH_EXPORT DISPATCH_WARN_RESULT DISPATCH_PURE DISPATCH_NOTHROW
+dispatch_queue_attr_t
+dispatch_queue_attr_make_initially_inactive(dispatch_queue_attr_t attr);
+
+/*!
  * @const DISPATCH_QUEUE_SERIAL
  * @discussion A dispatch queue that invokes blocks serially in FIFO order.
  */

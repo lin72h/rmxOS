@@ -121,6 +121,8 @@
 // "word and bit" must be a power of two to be safely subtracted
 #define DISPATCH_OBJECT_SUSPEND_LOCK		1u
 #define DISPATCH_OBJECT_SUSPEND_INTERVAL	2u
+// An initial activation hold is independent of explicit suspend counts.
+#define DISPATCH_OBJECT_INACTIVE 0x80000000u
 #define DISPATCH_OBJECT_SUSPENDED(x) \
 		((x)->do_suspend_cnt >= DISPATCH_OBJECT_SUSPEND_INTERVAL)
 #ifdef __LP64__

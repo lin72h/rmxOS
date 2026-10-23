@@ -135,8 +135,8 @@ dispatch_source_create(dispatch_source_type_t type,
 	ds->dq_label = "source";
 
 	ds->do_ref_cnt++; // the reference the manager queue holds
-	ds->do_ref_cnt++; // since source is created suspended
-	ds->do_suspend_cnt = DISPATCH_OBJECT_SUSPEND_INTERVAL;
+	ds->do_ref_cnt++; // initial activation hold (also consumed by legacy resume)
+	ds->do_suspend_cnt = DISPATCH_OBJECT_INACTIVE;
 	// The initial target queue is the manager queue, in order to get
 	// the source installed. <rdar://problem/8928171>
 	ds->do_targetq = &_dispatch_mgr_q;
@@ -4713,6 +4713,8 @@ out_bad:
 	close(fd);
 }
 
+#endif // DISPATCH_DEBUG
+
 #if HAVE_MACH
 
 #ifndef MACH_PORT_TYPE_SPREQUEST
@@ -4776,5 +4778,3 @@ dispatch_debug_machport(mach_port_t name, const char* str)
 }
 
 #endif // HAVE_MACH
-
-#endif // DISPATCH_DEBUG
