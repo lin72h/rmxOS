@@ -8,6 +8,26 @@
 struct asld_counters asld_counters;
 static _Thread_local struct asld_delivery *current_delivery;
 
+/* Local datagrams are unauthenticated. This is telemetry only: never use
+ * the supplied count to grant privileges, bypass quotas, or change routing. */
+void
+asld_count_sender_drops(asl_msg_t *m)
+{
+ const char *s = asl_msg_get_val_for_key(m, "RFC5424.SD.12:rmxos-loss@0.count");
+ uint64_t count = 0;
+ if (s == NULL || *s == '\0') return;
+ for (; *s; s++) {
+  if (*s < '0' || *s > '9' || count > (UINT64_MAX - (*s - '0')) / 10) return;
+  count = count * 10 + (*s - '0');
+ }
+ uint64_t old = __atomic_load_n(&asld_counters.sender_dropped, __ATOMIC_RELAXED);
+ uint64_t next;
+ do {
+  next = count > UINT64_MAX - old ? UINT64_MAX : old + count;
+ } while (!__atomic_compare_exchange_n(&asld_counters.sender_dropped, &old,
+     next, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED));
+}
+
 struct asld_delivery *
 asld_delivery_new(unsigned refs)
 {

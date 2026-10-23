@@ -790,6 +790,7 @@ process_message(asl_msg_t *msg, uint32_t source)
 		status = aslmsg_verify(msg, source, &kplevel, &uid);
 		if (status == VERIFY_STATUS_OK)
 		{
+			if (source == SOURCE_BSD_SOCKET) asld_count_sender_drops(msg);
 			if ((source == SOURCE_KERN) && (kplevel >= 0))
 			{
 				if (kplevel > 7) kplevel = 7;

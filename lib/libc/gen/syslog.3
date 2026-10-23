@@ -254,6 +254,30 @@ the mask for all priorities up to and including
 is given by the macro
 .Fn LOG_UPTO toppri ; .
 The default allows all priorities to be logged.
+.Ss Local socket congestion
+When the local logging socket refuses a message with
+.Er ENOBUFS ,
+the process counts the refused message without waiting or retrying.
+Before a later message, at most once per second, it attempts a separate
+RFC 5424 report with structured data
+.Li [rmxos-loss@0 count="N"]
+and text
+.Li "syslog: local socket refused N messages" .
+The local, private SD-ID
+.Li rmxos-loss@0
+identifies this report; the count is cleared only after the report is sent.
+The report uses application name
+.Li syslog
+and the sending process's process ID.
+The socket send buffer is raised to 256 KB when possible to absorb bursts.
+A fork child starts with a zero count.
+Counts saturate at the largest unsigned 64-bit value.
+A process that exits before a later successful report cannot report its losses.
+The local socket cannot authenticate these reports;
+.Xr asld 8
+records their counts as
+.Li sender_dropped
+telemetry and does not use them for authorization or delivery policy.
 .Sh RETURN VALUES
 The routines
 .Fn closelog ,

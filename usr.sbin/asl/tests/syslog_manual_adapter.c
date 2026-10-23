@@ -4,8 +4,21 @@
 #endif
 #include RMX_BSD_OUT_SOURCE
 
-struct asld_counters asld_counters;
+#include "syslog_input.c"
+#include "telemetry.c"
 int internal_log_message(const char *message) { (void)message; return 0; }
+
+void *rmx_manual_report(const char *wire)
+{
+ asl_msg_t *m = asl_rfc5424_parse(wire, strlen(wire));
+ if (m) asld_count_sender_drops(m);
+ return m;
+}
+
+uint64_t rmx_manual_sender_dropped(void)
+{
+ return asld_counters.sender_dropped;
+}
 
 unsigned rmx_manual_load(const char *path)
 {

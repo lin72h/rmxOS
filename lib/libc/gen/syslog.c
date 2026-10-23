@@ -43,6 +43,8 @@
 #include <paths.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <stdint.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -66,6 +68,10 @@ static const char *LogTag = NULL;	/* string to tag the entry with */
 static int	LogTagLength = -1;	/* usable part of LogTag */
 static int	LogFacility = LOG_USER;	/* default facility code */
 static int	LogMask = 0xff;		/* mask of priorities to be logged */
+/* Protected by syslog_mutex; inherited counts belong only to the parent. */
+static uint64_t LogRefused;
+static pid_t LogRefusedPid;
+static struct timespec LogReportTime;
 static pthread_mutex_t	syslog_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define	THREAD_LOCK()							\
@@ -290,6 +296,32 @@ vsyslog1(int pri, const char *fmt, va_list ap)
 	if (!opened)
 		openlog_unlocked(LogTag, LogStat | LOG_NDELAY, 0);
 	connectlog();
+	if (LogRefused != 0) {
+		struct timespec mono;
+		char report[512];
+		int length;
+
+		if (LogRefusedPid != getpid()) {
+			LogRefused = 0;
+			LogReportTime = (struct timespec){0};
+		} else if (clock_gettime(CLOCK_MONOTONIC, &mono) == 0 &&
+		    (LogReportTime.tv_sec == 0 ||
+		    mono.tv_sec - LogReportTime.tv_sec > 1 ||
+		    (mono.tv_sec - LogReportTime.tv_sec == 1 &&
+		    mono.tv_nsec >= LogReportTime.tv_nsec))) {
+			/* A refused report preserves the count; it is not another
+			 * refused application message. Limit attempts as well as sends. */
+			LogReportTime = mono;
+			length = snprintf(report, sizeof(report),
+			    "<%d>1 - %s syslog %d - [rmxos-loss@0 count=\"%" PRIu64 "\"] "
+			    "syslog: local socket refused %" PRIu64 " messages",
+			    LOG_SYSLOG | LOG_WARNING, hostname, (int)LogRefusedPid,
+			    LogRefused, LogRefused);
+			if (length > 0 && length < (int)sizeof(report) &&
+			    send(LogFile, report, length, 0) == length)
+				LogRefused = 0;
+		}
+	}
 
 	/*
 	 * If the send() failed, there are two likely scenarios:
@@ -308,6 +340,16 @@ vsyslog1(int pri, const char *fmt, va_list ap)
 		}
 	} else
 		return;
+	if (errno == ENOBUFS) {
+		pid_t pid = getpid();
+		if (LogRefusedPid != pid) {
+			LogRefusedPid = pid;
+			LogRefused = 0;
+			LogReportTime = (struct timespec){0};
+		}
+		if (LogRefused != UINT64_MAX)
+			LogRefused++;
+	}
 
 	/*
 	 * Output the message to the console; try not to block
@@ -378,8 +420,9 @@ connectlog(void)
 			return;
 		if (_getsockopt(LogFile, SOL_SOCKET, SO_SNDBUF, &len,
 		    &(socklen_t){sizeof(len)}) == 0) {
-			if (len < MAXLINE) {
-				len = MAXLINE;
+			/* Connected local datagrams queue on this send buffer. */
+			if (len < 256 * 1024) {
+				len = 256 * 1024;
 				(void)_setsockopt(LogFile, SOL_SOCKET, SO_SNDBUF,
 				    &len, sizeof(len));
 			}
