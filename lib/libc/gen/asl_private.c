@@ -14,11 +14,11 @@
 /* Use libsys's exported syscall entry points. The public Mach names are
  * not in libc's symbol map: its dynamic syscall objects contain empty stubs,
  * so those names bind locally instead of passing through the libsys filter. */
-extern mach_port_t task_self_trap(void);
-extern mach_port_t mach_reply_port(void);
-extern int _kernelrpc_mach_port_deallocate_trap(mach_port_t, mach_port_t);
-extern int _kernelrpc_mach_port_destroy_trap(mach_port_t, mach_port_t);
-extern mach_msg_return_t mach_msg_trap(mach_msg_header_t *, mach_msg_option_t,
+extern mach_port_t __sys_task_self_trap(void);
+extern mach_port_t __sys_mach_reply_port(void);
+extern int __sys__kernelrpc_mach_port_deallocate_trap(mach_port_t, mach_port_t);
+extern int __sys__kernelrpc_mach_port_destroy_trap(mach_port_t, mach_port_t);
+extern mach_msg_return_t __sys_mach_msg_trap(mach_msg_header_t *, mach_msg_option_t,
     mach_msg_size_t, mach_msg_size_t, mach_port_t, mach_msg_timeout_t, mach_port_t);
 
 static pid_t owner;
@@ -53,7 +53,7 @@ static void
 release_port(mach_port_t *port)
 {
 	if (*port != MACH_PORT_NULL)
-		(void)_kernelrpc_mach_port_deallocate_trap(task, *port);
+		(void)__sys__kernelrpc_mach_port_deallocate_trap(task, *port);
 	*port = MACH_PORT_NULL;
 }
 
@@ -71,12 +71,12 @@ port_rpc(mach_msg_header_t *request, size_t size, mach_port_t destination,
 	request->msgh_local_port = reply;
 	request->msgh_id = id;
 	do {
-		kr = mach_msg_trap(request, MACH_SEND_MSG, size, 0, 0, 0, 0);
+		kr = __sys_mach_msg_trap(request, MACH_SEND_MSG, size, 0, 0, 0, 0);
 	} while (kr == MACH_SEND_INTERRUPTED);
 	if (kr != MACH_MSG_SUCCESS)
 		return (-1);
 	do {
-		kr = mach_msg_trap(&response.head, MACH_RCV_MSG, 0,
+		kr = __sys_mach_msg_trap(&response.head, MACH_RCV_MSG, 0,
 		    sizeof(response), reply, 0, 0);
 	} while (kr == MACH_RCV_INTERRUPTED);
 	if (kr != MACH_MSG_SUCCESS || response.head.msgh_id != id + 100 ||
@@ -102,7 +102,7 @@ lookup(void)
 	struct lookup_request request = { .ndr = ndr };
 
 	if (reply == MACH_PORT_NULL)
-		reply = mach_reply_port();
+		reply = __sys_mach_reply_port();
 	if (reply == MACH_PORT_NULL)
 		return (-1);
 	if (bootstrap == MACH_PORT_NULL && port_rpc(&special.head,
@@ -121,7 +121,7 @@ __libc_asl_send(const char *record)
 	size_t length = strlen(record) + 1;
 
 	if (owner != pid) {
-		task = task_self_trap();
+		task = __sys_task_self_trap();
 		release_port(&server);
 		release_port(&bootstrap);
 		/* Drop only this child's descriptor reference. Destroying the
@@ -150,7 +150,7 @@ __libc_asl_send(const char *record)
 		request.ndr = ndr;
 		request.count = length;
 		do {
-			kr = mach_msg_trap(&request.head, MACH_SEND_MSG,
+			kr = __sys_mach_msg_trap(&request.head, MACH_SEND_MSG,
 			    sizeof(request), 0, 0, MACH_MSG_TIMEOUT_NONE, 0);
 		} while (kr == MACH_SEND_INTERRUPTED);
 		if (kr == MACH_MSG_SUCCESS)
