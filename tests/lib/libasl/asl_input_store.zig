@@ -303,16 +303,23 @@ fn mdUnit() c_int {
     _ = c.fclose(fp);
     return if (got == 1 and unit >= 0 and unit < 10000) unit else -1;
 }
+fn cleanupNeed(ok: bool, message: [*:0]const u8) void {
+    if (!ok) {
+        _ = c.printf("asl_cleanup failure=%s\n", message);
+        _ = c.fflush(null);
+        c._exit(1);
+    }
+}
 fn cleanupFull(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const unit = mdUnit();
     if (unit >= 0) {
-        need(c.unmount("full", 0) == 0 or c.__error().* == c.EINVAL or c.__error().* == c.ENOENT, "cleanup unmount memory filesystem");
+        cleanupNeed(c.unmount("full", 0) == 0 or c.__error().* == c.EINVAL or c.__error().* == c.ENOENT, "cleanup unmount memory filesystem");
         var cmd: [128:0]u8 = undefined;
         _ = c.snprintf(&cmd, cmd.len, "/sbin/mdconfig -d -u %d", unit);
-        command(&cmd);
-        need(c.unlink("md-unit") == 0, "remove memory disk unit record");
+        cleanupNeed(c.system(&cmd) == 0, &cmd);
+        cleanupNeed(c.unlink("md-unit") == 0, "remove memory disk unit record");
     }
-    need(c.rmdir("full") == 0 or c.__error().* == c.ENOENT, "remove memory disk mount directory");
+    cleanupNeed(c.rmdir("full") == 0 or c.__error().* == c.ENOENT, "remove memory disk mount directory");
 }
 fn fullStore(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(c.getuid() == 0, "memory disk requires guest root");

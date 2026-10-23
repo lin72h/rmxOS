@@ -39,4 +39,17 @@ log_units_test: ${.CURDIR}/log_units.zig ${.CURDIR}/job_fixture.zig ${.CURDIR}/l
 job_actions_unit: ${.CURDIR}/job_actions.zig ${LOGDIR}/ipc_job_action.h
 	${ZIG} test ${.CURDIR}/job_actions.zig -I${LOGDIR} --test-no-exec -lc -femit-bin=${.TARGET}
 
+SCRIPTS+= unload_completion_unit
+UNLOAD_CFLAGS= -fblocks -ffunction-sections -fdata-sections
+.for dir in include/apple lib/liblaunch lib/libxpc lib/libdispatch lib/libdispatch/private sbin/launchd bin/launchctl contrib/jansson/src lib/libjansson include/mach sys
+UNLOAD_CFLAGS+= -I${SRCTOP}/${dir}
+.endfor
+UNLOAD_CFLAGS+= -idirafter ${SRCTOP}/include
+launchctl_unload_adapter.o: ${.CURDIR}/launchctl_unload_adapter.c ${SRCTOP}/bin/launchctl/launchctl.c
+	${CC} ${CFLAGS} ${UNLOAD_CFLAGS} -c ${.ALLSRC:[1]} -o ${.TARGET}
+launchctl_plist.o: ${SRCTOP}/bin/launchctl/plist_to_launch_data.c
+	${CC} ${CFLAGS} ${UNLOAD_CFLAGS} -c ${.ALLSRC:[1]} -o ${.TARGET}
+unload_completion_unit: ${.CURDIR}/unload_completion.zig launchctl_unload_adapter.o launchctl_plist.o
+	${ZIG} test ${.CURDIR}/unload_completion.zig launchctl_unload_adapter.o launchctl_plist.o ${SYSROOT}/usr/lib/liblaunch.so.5 ${SYSROOT}/usr/lib/libjansson.so.4 ${SYSROOT}/usr/lib/libbsdxml.a --test-no-exec --gc-sections -rdynamic -lc --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/lib/liblaunch -I${SRCTOP}/lib/libxpc -I${SRCTOP}/include/apple -I${SRCTOP}/include -I${SRCTOP}/sys -femit-bin=${.TARGET}
+
 .include <bsd.test.mk>

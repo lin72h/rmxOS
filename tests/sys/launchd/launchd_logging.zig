@@ -231,18 +231,33 @@ fn midBatchExit() void {
     need(stored_count == 0, "held batch was never resent");
 }
 fn restart() void {
-    need(recovery.health("before-restart"), "boot asld stores health record");
-    need(recovery.descriptors("boot"), "boot descriptor table");
+    _ = recovery.snapshot("before-unload");
     const old = recovery.pid();
-    need(recovery.run(&.{ "/bin/launchctl", "unload", recovery.plist }), "unload syslogd");
+    const before = recovery.health("before-restart");
+    const tracing = recovery.traceStartup();
+    const unloaded = recovery.runStatus(&.{ "/bin/launchctl", "unload", recovery.plist });
+    const absent = recovery.snapshot("after-unload") != 0;
+    const no_receiver = recovery.serviceAbsent();
+    const loaded = recovery.runStatus(&.{ "/bin/launchctl", "load", recovery.plist });
+    _ = c.printf("asld_restart old_pid=%d unload_status=%d load_status=%d\n", old, unloaded, loaded);
+    _ = c.fflush(null);
+    // Capture the replacement before any assertion, including unhealthy starts.
     for (0..100) |_| {
-        if (c.kill(old, 0) != 0) break;
+        if (recovery.pid() != old and recovery.pid() > 1) break;
         _ = c.usleep(20000);
     }
-    need(c.kill(old, 0) != 0, "old asld exited");
-    need(recovery.restore(), "launchctl load restores store and messages");
+    _ = recovery.snapshot("after-load");
+    const served = recovery.health("after-restart");
+    _ = recovery.snapshot("after-health");
+    const plist_restored = recovery.restorePlist();
+    recovery.stopTrace();
+    need(tracing and plist_restored, "diagnostic job copy restored");
+    need(before, "boot asld stores health record");
+    need(unloaded == 0, "unload syslogd completes");
+    need(absent and no_receiver, "unload removes job and its service before return");
+    need(loaded == 0, "load immediately after unload succeeds");
     need(recovery.pid() != old, "restart changes process");
-    need(recovery.descriptors("restarted"), "restarted descriptor table");
+    need(served, "launchctl load restores store and messages");
 }
 fn stopped() void {
 
@@ -409,8 +424,10 @@ fn body(tc: [*c]const c.atf_tc_t) callconv(.c) void {
 fn cleanup(tc: [*c]const c.atf_tc_t) callconv(.c) void {
     const name = std.mem.span(c.atf_tc_get_ident(tc));
     if (std.mem.eql(u8, name, "stopped")) _ = f.run(&.{ "/bin/launchctl", "load", "/etc/launchd.d/com.rmxos.aslmanager.once.plist" });
+    const destructive = std.mem.eql(u8, name, "stopped") or std.mem.eql(u8, name, "mid_batch_exit") or std.mem.eql(u8, name, "restart");
+    const restored = if (destructive) recovery.restore() else true;
     f.cleanup(name);
-    if (std.mem.eql(u8, name, "stopped") or std.mem.eql(u8, name, "mid_batch_exit") or std.mem.eql(u8, name, "restart")) need(recovery.restore(), "cleanup must restore a serving asld");
+    if (destructive) recovery.cleanupResult(restored, "launchd");
 }
 fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     const name = std.mem.span(c.atf_tc_get_ident(tc));

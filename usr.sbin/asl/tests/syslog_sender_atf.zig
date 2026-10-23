@@ -406,6 +406,8 @@ fn bounded(_: [*c]const c.atf_tc_t) callconv(.c) void {
 }
 
 fn bounds(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    need(recovery.run(&.{"/usr/tests/sys/launchd/unload_completion_unit"}), "unload completion RPC");
+    need(recovery.run(&.{"/usr/tests/usr.sbin/asl/cleanup_status_unit"}), "cleanup exit status");
     need(recovery.run(&.{"/usr/tests/usr.sbin/asl/mach_bound_unit"}), "Mach timeout controls");
     need(recovery.run(&.{"/usr/tests/usr.sbin/asl/filesystems_unit"}), "filesystem boot identity controls");
 }
@@ -413,7 +415,7 @@ fn timingCase(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(timing.nanoseconds(9, 50000000) - timing.nanoseconds(8, 950000000) == 100000000, "nanoseconds across second boundary");
 }
 fn cleanup(_: [*c]const c.atf_tc_t) callconv(.c) void {
-    need(recovery.restore(), "sender cleanup restores working asld");
+    recovery.cleanupResult(recovery.restore(), "sender");
 }
 fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(tc, "timeout", "%s", "120");

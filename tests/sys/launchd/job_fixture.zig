@@ -16,16 +16,16 @@ pub fn z(s: []const u8) [:0]const u8 {
     return a.dupeZ(u8, s) catch c.atf_tc_fail("fixture allocation");
 }
 pub fn run(args: []const []const u8) i32 {
-    const argv = a.allocSentinel(?[*:0]const u8, args.len, null) catch c.atf_tc_fail("argv allocation");
-    for (args, 0..) |s, i| argv[i] = z(s).ptr;
+    const argv = a.allocSentinel(?[*:0]const u8, args.len, null) catch return -1;
+    for (args, 0..) |s, i| argv[i] = (a.dupeZ(u8, s) catch return -1).ptr;
     const pid = c.fork();
-    if (pid < 0) c.atf_tc_fail("fixture fork");
+    if (pid < 0) return -1;
     if (pid == 0) {
         _ = c.execv(argv[0].?, @ptrCast(argv.ptr));
         c._exit(127);
     }
     var status: c_int = 0;
-    if (c.waitpid(pid, &status, 0) != pid) c.atf_tc_fail("fixture wait");
+    if (c.waitpid(pid, &status, 0) != pid) return -1;
     return status;
 }
 pub fn enter(binary: []const u8, case_name: []const u8) bool {
@@ -104,7 +104,11 @@ pub fn cleanup(case_name: []const u8) void {
     var lines = std.mem.splitScalar(u8, bytes, '\n');
     const label = lines.next() orelse return;
     const dir = lines.next() orelse return;
-    if (!std.mem.startsWith(u8, label, "com.rmxos.op789.runner.") or !std.mem.startsWith(u8, dir, "/tmp/op789-test-")) c.atf_tc_fail("fixture cleanup state");
+    if (!std.mem.startsWith(u8, label, "com.rmxos.op789.runner.") or !std.mem.startsWith(u8, dir, "/tmp/op789-test-")) {
+        _ = c.printf("launchd_cleanup failure=invalid_fixture_state\n");
+        _ = c.fflush(null);
+        c._exit(1);
+    }
     _ = run(&.{ "/bin/launchctl", "remove", label });
     std.fs.cwd().deleteTree(dir) catch {};
     std.fs.cwd().deleteFile(state) catch {};

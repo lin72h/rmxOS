@@ -70,4 +70,6 @@ void job_set_pid_crashed(pid_t p);
 bool xpc_event_demux(mach_port_t p, xpc_object_t request, xpc_object_t *reply);
 bool xpc_process_demux(mach_port_t p, xpc_object_t request, xpc_object_t *reply);
 
+launch_data_t job_get_service_state(const char *name);
+
 #endif /* __LAUNCHD_CORE_LOGIC__ */

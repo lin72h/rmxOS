@@ -45,6 +45,8 @@
 		<key>ASL_DISABLE</key>
 		<string>1</string>
 	</dict>
+	<key>StandardErrorPath</key>
+	<string>/var/log/asld.stderr.log</string>
 	<key>MachServices</key>
 	<dict>
 		<key>com.apple.system.logger</key>

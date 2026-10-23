@@ -7340,6 +7340,28 @@ jobmgr_lookup_service(jobmgr_t jm, const char *name, bool check_parent, pid_t ta
 	return jobmgr_lookup_service(jm->parentmgr, name, true, 0);
 }
 
+launch_data_t
+job_get_service_state(const char *name)
+{
+	if (!name) return launch_data_new_errno(EINVAL);
+	struct machservice *ms = jobmgr_lookup_service(root_jobmgr, name, true, 0);
+	launch_data_t result = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
+	mach_port_type_t type = 0;
+	kern_return_t kr = KERN_SUCCESS;
+	if (!result) return NULL;
+	if (ms) {
+		if (ms->alias) ms = ms->alias;
+		kr = mach_port_type(mach_task_self(), ms->port, &type);
+		launch_data_dict_insert(result, launch_data_new_string(ms->job->label), "Label");
+	}
+	launch_data_dict_insert(result, launch_data_new_bool(ms != NULL), "Registered");
+	launch_data_dict_insert(result, launch_data_new_integer(kr), "PortTypeResult");
+	launch_data_dict_insert(result, launch_data_new_integer(type), "PortType");
+	launch_data_dict_insert(result, launch_data_new_bool(ms && kr == KERN_SUCCESS &&
+		(type & MACH_PORT_TYPE_RECEIVE)), "ReceiveRightInLaunchd");
+	return result;
+}
+
 mach_port_t
 machservice_port(struct machservice *ms)
 {

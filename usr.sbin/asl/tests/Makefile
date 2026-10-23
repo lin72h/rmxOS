@@ -23,9 +23,8 @@ syslog_manual_adapter.o: ${.CURDIR}/syslog_manual_adapter.c
 	${CC} ${CFLAGS} ${MANUAL_CFLAGS} -c ${.ALLSRC} -o ${.TARGET}
 asl_private.o: ${SRCTOP}/lib/libc/gen/asl_private.c
 	${CC} ${CFLAGS} ${ABI_CFLAGS} -c ${.ALLSRC} -o ${.TARGET}
-syslog_sender_test: ${.CURDIR}/syslog_sender_atf.zig ${.CURDIR}/syslog_transport.zig ${.CURDIR}/syslog_timing.zig ${.CURDIR}/syslog_sender.zig ${.CURDIR}/syslog_reports.zig syslog_sender_adapter.o syslog_transport_sender.o syslog_transport_adapter.o syslog_manual_adapter.o asl_private.o
-	${ZIG} build-exe ${.CURDIR}/syslog_sender_atf.zig syslog_sender_adapter.o syslog_transport_sender.o syslog_transport_adapter.o syslog_manual_adapter.o asl_private.o ${SYSROOT}/lib/libc.so.7 ${SYSROOT}/usr/lib/libasl.so.1 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/lib/libsys.so.7 ${ATF_C_ARCHIVE} --gc-sections -rdynamic -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -I${SRCTOP}/include/apple -I${SRCTOP}/include -I${SRCTOP}/sys -I${SRCTOP}/lib/libasl -femit-bin=${.TARGET}
-.include <bsd.test.mk>
+syslog_sender_test: ${.CURDIR}/asld_recovery.zig ${.CURDIR}/syslog_sender_atf.zig ${.CURDIR}/syslog_transport.zig ${.CURDIR}/syslog_timing.zig ${.CURDIR}/syslog_sender.zig ${.CURDIR}/syslog_reports.zig syslog_sender_adapter.o syslog_transport_sender.o syslog_transport_adapter.o syslog_manual_adapter.o asl_private.o
+	${ZIG} build-exe ${.CURDIR}/syslog_sender_atf.zig syslog_sender_adapter.o syslog_transport_sender.o syslog_transport_adapter.o syslog_manual_adapter.o asl_private.o ${SYSROOT}/lib/libc.so.7 ${SYSROOT}/usr/lib/libasl.so.1 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/lib/libsys.so.7 ${ATF_C_ARCHIVE} --gc-sections -rdynamic -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -I${SRCTOP}/include/apple -I${SRCTOP}/include -I${SRCTOP}/sys -I${SRCTOP}/lib/libasl -I${SRCTOP}/lib/liblaunch -I${SRCTOP}/lib/libxpc -I${SRCTOP}/include/apple -I${SRCTOP}/include -I${SRCTOP}/sys -femit-bin=${.TARGET}
 
 SCRIPTS+= mach_bound_unit filesystems_unit
 mach_bound_unit: ${.CURDIR}/mach_send_bound.zig syslog_transport_adapter.o
@@ -34,3 +33,9 @@ filesystems_adapter.o: ${.CURDIR}/filesystems_adapter.c ${ASL_SOURCE}/filesystem
 	${CC} ${CFLAGS} -c ${.CURDIR}/filesystems_adapter.c -o ${.TARGET}
 filesystems_unit: ${.CURDIR}/filesystems.zig filesystems_adapter.o
 	${ZIG} test ${.CURDIR}/filesystems.zig filesystems_adapter.o --test-no-exec -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -femit-bin=${.TARGET}
+
+SCRIPTS+= cleanup_status_unit
+cleanup_status_unit: ${.CURDIR}/cleanup_status.zig ${.CURDIR}/asld_recovery.zig
+	${ZIG} test ${.CURDIR}/cleanup_status.zig --test-no-exec -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/lib/libasl -I${SRCTOP}/lib/liblaunch -I${SRCTOP}/lib/libxpc -I${SRCTOP}/include/apple -I${SRCTOP}/include -I${SRCTOP}/sys -femit-bin=${.TARGET}
+
+.include <bsd.test.mk>

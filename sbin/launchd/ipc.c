@@ -432,6 +432,8 @@ ipc_readmsg2(launch_data_t data, const char *cmd, void *context)
 				resp = launch_data_new_errno(0);
 			} else if (!strcmp(cmd, LAUNCH_KEY_SETRESOURCELIMITS)) {
 				resp = adjust_rlimits(data);
+			} else if (!strcmp(cmd, "GetServiceState")) {
+				resp = job_get_service_state(launch_data_get_string(data));
 			} else if (!strcmp(cmd, LAUNCH_KEY_GETJOB)) {
 				if ((j = job_find(NULL, launch_data_get_string(data))) == NULL) {
 					resp = launch_data_new_errno(ESRCH);
@@ -550,6 +552,8 @@ ipc_process_command(launch_data_t data, const char *cmd, void *context)
 				resp = launch_data_new_errno(0);
 			} else if (!strcmp(cmd, LAUNCH_KEY_SETRESOURCELIMITS)) {
 				resp = adjust_rlimits(data);
+			} else if (!strcmp(cmd, "GetServiceState")) {
+				resp = job_get_service_state(launch_data_get_string(data));
 			} else if (!strcmp(cmd, LAUNCH_KEY_GETJOB)) {
 				if ((j = job_find(NULL, launch_data_get_string(data))) == NULL) {
 					resp = launch_data_new_errno(ESRCH);

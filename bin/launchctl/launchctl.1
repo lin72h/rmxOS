@@ -258,3 +258,9 @@ Mac OS X System wide daemons.
 .Xr launchd.plist 5 ,
 .Xr launchd.conf 5 ,
 .Xr launchd 8
+
+.Sh SERVICE INSPECTION
+The list command accepts an optional job label and prints its configuration.
+The service-state command accepts a Mach service name and reports whether it
+is registered and whether launchd currently holds its receive right.
+It inspects launchd's own port type without checking in or transferring rights.

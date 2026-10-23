@@ -69,7 +69,6 @@ static json_t *launch_msg_json(json_t *msg);
 static int submit_job(launch_data_t job);
 static launch_data_t read_job_file(const char *filename, bool materialize_sockets);
 static int load_job(const char *filename);
-static int launchd_job_command(const char *command, const char *label);
 static int unload_job(const char *filename);
 static bool bootstrap_scan_has_plist_peer(struct dirent **files, int nfiles,
     const char *name);
@@ -80,6 +79,7 @@ static int cmd_load(int argc, char * const argv[]);
 static int cmd_unload(int argc, char * const argv[]);
 static int cmd_remove(int argc, char * const argv[]);
 static int cmd_list(int argc, char * const argv[]);
+static int cmd_service_state(int argc, char * const argv[]);
 static int cmd_dump(int argc, char * const argv[]);
 static int cmd_log(int argc, char * const argv[]);
 static int cmd_help(int argc, char * const argv[]);
@@ -98,6 +98,7 @@ static const struct {
 	{ "remove",	cmd_remove, 	"Remove specified job" },
 	{ "bootstrap",	cmd_bootstrap,	"Bootstrap launchd" },
 	{ "list",	cmd_list,	"List jobs and information about jobs" },
+	{ "service-state", cmd_service_state, "Inspect a named Mach service" },
 	{ "dump",	cmd_dump,       "Dumps job(s) plist(s)"},
 	{ "log",	cmd_log,	"Adjust logging level of launchd"},
 	{ "help",	cmd_help,	"This help output" },
@@ -554,28 +555,6 @@ submit_job(launch_data_t job)
 	return (ret);
 }
 
-static int
-launchd_job_command(const char *command, const char *label)
-{
-	launch_data_t msg, value;
-	int ret;
-
-	msg = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
-	value = launch_data_new_string(label);
-	if (msg == NULL || value == NULL) {
-		if (msg != NULL)
-			launch_data_free(msg);
-		if (value != NULL)
-			launch_data_free(value);
-		errno = ENOMEM;
-		return (-1);
-	}
-
-	launch_data_dict_insert(msg, value, command);
-	ret = launch_msg_errno_command(msg);
-	return (ret);
-}
-
 static void
 stall(const char *message, ...)
 {
@@ -802,8 +781,11 @@ unload_job(const char *filename)
 	}
 
 	label = launch_data_get_string(label_value);
-	(void)launchd_job_command(LAUNCH_KEY_STOPJOB, label);
-	ret = launchd_job_command(LAUNCH_KEY_REMOVEJOB, label);
+	/* Apple's unload RPC replies only after job_remove frees the job and
+	 * its Mach services. StopJob/RemoveJob acknowledge only the request. */
+	ret = _vproc_send_signal_by_label(label, VPROC_MAGIC_UNLOAD_SIGNAL) == NULL ? 0 : -1;
+	if (ret != 0) errno = EIO;
+	launch_data_free(job);
 	return (ret);
 }
 
@@ -965,8 +947,9 @@ cmd_list(int argc, char * const argv[])
 	json_t *msg, *result, *job;
 	const char *key;
 
-	(void)argc;
-	(void)argv;
+	if (argc == 2)
+		return cmd_dump(argc, argv);
+	if (argc != 1) errx(EX_USAGE, "Usage: launchctl list [label]");
 
 	msg = json_string("GetJobs");
 	result = launch_msg_json(msg);
@@ -1000,6 +983,20 @@ cmd_dump(int argc, char * const argv[])
 
 	json_dumpf(result, stdout, JSON_INDENT(4));
 	return (0);
+}
+
+static int
+cmd_service_state(int argc, char * const argv[])
+{
+	json_t *msg, *result;
+	if (argc != 2) errx(EX_USAGE, "Usage: launchctl service-state <name>");
+	msg = json_object();
+	json_object_set_new(msg, "GetServiceState", json_string(argv[1]));
+	result = launch_msg_json(msg);
+	if (result == NULL) err(EX_OSERR, "Error getting service state");
+	json_dumpf(result, stdout, JSON_INDENT(4));
+	putchar('\n');
+	return 0;
 }
 
 static int
