@@ -54,7 +54,7 @@ pub fn fullSocket() !void {
     try drain(fd, &child_received, &child_reported);
     try std.testing.expectEqual(@as(u64, 1), child_received);
     try std.testing.expectEqual(@as(u64, 0), child_reported);
-    _ = c.sleep(1);
+    // Recovery must report on the very next successful send, without sleeping.
     rmx_sender_syslog(14, "numbered %u", @as(c_uint, 1000));
     try drain(fd, &received, &reported);
     try std.testing.expect(reported > 0);

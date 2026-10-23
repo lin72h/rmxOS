@@ -72,7 +72,6 @@ static int	LogMask = 0xff;		/* mask of priorities to be logged */
 /* Protected by syslog_mutex; inherited counts belong only to the parent. */
 static uint64_t LogRefused;
 static pid_t LogRefusedPid;
-static struct timespec LogReportTime;
 static pthread_mutex_t	syslog_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define	THREAD_LOCK()							\
@@ -329,22 +328,16 @@ vsyslog1(int pri, const char *fmt, va_list ap)
 	memcpy(body, tbuf + body_offset, body_length);
 	body[body_length] = '\0';
 	if (LogRefused != 0) {
-		struct timespec mono;
 		char report[512];
 		int length;
 		char report_body[128];
 
 		if (LogRefusedPid != getpid()) {
 			LogRefused = 0;
-			LogReportTime = (struct timespec){0};
-		} else if (clock_gettime(CLOCK_MONOTONIC, &mono) == 0 &&
-		    (LogReportTime.tv_sec == 0 ||
-		    mono.tv_sec - LogReportTime.tv_sec > 1 ||
-		    (mono.tv_sec - LogReportTime.tv_sec == 1 &&
-		    mono.tv_nsec >= LogReportTime.tv_nsec))) {
-			/* A refused report preserves the count; it is not another
-			 * refused application message. Limit attempts as well as sends. */
-			LogReportTime = mono;
+		} else {
+			/* Try the report before each subsequent application send. A
+			 * refused report preserves the count and is not another loss.
+			 * Both transports are bounded, including a full Mach queue. */
 			length = snprintf(report, sizeof(report),
 			    "<%d>1 - %s syslog %d - [rmxos-loss@0 count=\"%" PRIu64 "\"] "
 			    "syslog: local socket refused %" PRIu64 " messages",
@@ -366,7 +359,6 @@ vsyslog1(int pri, const char *fmt, va_list ap)
 		if (LogRefusedPid != pid) {
 			LogRefusedPid = pid;
 			LogRefused = 0;
-			LogReportTime = (struct timespec){0};
 		}
 		if (LogRefused != UINT64_MAX)
 			LogRefused++;

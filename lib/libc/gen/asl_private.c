@@ -21,6 +21,9 @@ extern int __sys__kernelrpc_mach_port_destroy_trap(mach_port_t, mach_port_t);
 extern mach_msg_return_t __sys_mach_msg_trap(mach_msg_header_t *, mach_msg_option_t,
     mach_msg_size_t, mach_msg_size_t, mach_port_t, mach_msg_timeout_t, mach_port_t);
 
+/* Port discovery may wait at most 100 ms per phase. Log sends never wait. */
+#define ASL_RPC_TIMEOUT_MS 100
+
 static pid_t owner;
 static mach_port_t server, reply, bootstrap, task;
 static const NDR_record_t ndr = { 0, 0, 0, 0, 1, 0, 0, 0 };
@@ -70,15 +73,18 @@ port_rpc(mach_msg_header_t *request, size_t size, mach_port_t destination,
 	request->msgh_size = size;
 	request->msgh_local_port = reply;
 	request->msgh_id = id;
-	do {
-		kr = __sys_mach_msg_trap(request, MACH_SEND_MSG, size, 0, 0, 0, 0);
-	} while (kr == MACH_SEND_INTERRUPTED);
+	kr = __sys_mach_msg_trap(request, MACH_SEND_MSG | MACH_SEND_TIMEOUT,
+	    size, 0, 0, ASL_RPC_TIMEOUT_MS, 0);
 	if (kr != MACH_MSG_SUCCESS)
 		return (-1);
-	do {
-		kr = __sys_mach_msg_trap(&response.head, MACH_RCV_MSG, 0,
-		    sizeof(response), reply, 0, 0);
-	} while (kr == MACH_RCV_INTERRUPTED);
+	kr = __sys_mach_msg_trap(&response.head, MACH_RCV_MSG | MACH_RCV_TIMEOUT,
+	    0, sizeof(response), reply, ASL_RPC_TIMEOUT_MS, 0);
+	if (kr != MACH_MSG_SUCCESS) {
+		/* A late reply must not satisfy a future lookup. */
+		(void)__sys__kernelrpc_mach_port_destroy_trap(task, reply);
+		reply = MACH_PORT_NULL;
+		return (-1);
+	}
 	if (kr != MACH_MSG_SUCCESS || response.head.msgh_id != id + 100 ||
 	    !(response.head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
 	    response.head.msgh_size != sizeof(mach_msg_header_t) +
@@ -149,10 +155,8 @@ __libc_asl_send(const char *record)
 		request.bytes.type = MACH_MSG_OOL_DESCRIPTOR;
 		request.ndr = ndr;
 		request.count = length;
-		do {
-			kr = __sys_mach_msg_trap(&request.head, MACH_SEND_MSG,
-			    sizeof(request), 0, 0, MACH_MSG_TIMEOUT_NONE, 0);
-		} while (kr == MACH_SEND_INTERRUPTED);
+		kr = __sys_mach_msg_trap(&request.head,
+		    MACH_SEND_MSG | MACH_SEND_TIMEOUT, sizeof(request), 0, 0, 0, 0);
 		if (kr == MACH_MSG_SUCCESS)
 			return (0);
 		if (kr != MACH_SEND_INVALID_DEST)

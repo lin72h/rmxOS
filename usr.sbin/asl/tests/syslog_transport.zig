@@ -34,6 +34,10 @@ fn real(comptime T: type, name: [*:0]const u8) T {
 }
 var active = false;
 var verbose = true;
+var quiet = false;
+pub fn setQuiet(value: bool) void {
+    quiet = value;
+}
 pub fn setVerbose(value: bool) void {
     verbose = value;
 }
@@ -91,7 +95,7 @@ pub export fn rmx_observe_trap(p: *c.mach_msg_header_t, options: c_uint, send_si
         _ = c.printf("op982_mig_error request=%d code=%d\n", id, code);
     }
     if (options & c.MACH_SEND_MSG != 0 and id == 118 and result == 0) mach_ok += 1;
-    if (verbose or result != 0) _ = c.printf("op982_trap record=%zu request=%d phase=%s kr=%#x errno=%d received_id=%d bits=%#x size=%u\n", current, id, if (options & c.MACH_SEND_MSG != 0) @as([*:0]const u8, "send") else "receive", @as(c_uint, @bitCast(result)), err, p.msgh_id, p.msgh_bits, p.msgh_size);
+    if (!quiet and (verbose or result != 0)) _ = c.printf("op982_trap record=%zu request=%d phase=%s kr=%#x errno=%d received_id=%d bits=%#x size=%u\n", current, id, if (options & c.MACH_SEND_MSG != 0) @as([*:0]const u8, "send") else "receive", @as(c_uint, @bitCast(result)), err, p.msgh_id, p.msgh_bits, p.msgh_size);
     c.__error().* = err;
     return result;
 }
@@ -99,7 +103,7 @@ pub export fn rmx_observe_send(fd: c_int, buffer: ?*const anyopaque, size: usize
     const rc = if (mock) @as(isize, @intCast(size)) else real(Send, "send")(fd, buffer, size, flags);
     const err = c.__error().*;
     if (rc >= 0) socket_ok += 1;
-    if (verbose or rc < 0) _ = c.printf("op982_socket record=%zu rc=%zd errno=%d\n", current, rc, if (rc >= 0) @as(c_int, 0) else err);
+    if (!quiet and (verbose or rc < 0)) _ = c.printf("op982_socket record=%zu rc=%zd errno=%d\n", current, rc, if (rc >= 0) @as(c_int, 0) else err);
     c.__error().* = err;
     return rc;
 }
@@ -114,7 +118,7 @@ pub fn record(priority: c_int, text: [*:0]const u8) void {
     const m = mach_ok - before_mach;
     const s = socket_ok - before_socket;
     if (m + s == 0) refused += 1;
-    if (verbose or m + s == 0) _ = c.printf("op982_transport record=%zu mach_success=%zu socket_success=%zu outcome=%s\n", current, m, s, if (m + s == 0) @as([*:0]const u8, "refused") else if (s != 0) @as([*:0]const u8, "socket") else @as([*:0]const u8, "mach"));
+    if (!quiet and (verbose or m + s == 0)) _ = c.printf("op982_transport record=%zu mach_success=%zu socket_success=%zu outcome=%s\n", current, m, s, if (m + s == 0) @as([*:0]const u8, "refused") else if (s != 0) @as([*:0]const u8, "socket") else @as([*:0]const u8, "mach"));
 }
 pub fn totals() [3]usize {
     return .{ mach_ok, socket_ok, refused };
@@ -157,4 +161,8 @@ pub export fn __sys_mach_reply_port() c_uint {
 }
 pub export fn __sys_mach_msg_trap(p: *c.mach_msg_header_t, o: c_uint, s: c_uint, r: c_uint, n: c_uint, t: c_uint, x: c_uint) c_int {
     return mach_msg_trap(p, o, s, r, n, t, x);
+}
+pub export fn __sys__kernelrpc_mach_port_destroy_trap(task: c_uint, port: c_uint) c_int {
+    if (mock) return 0;
+    return real(*const fn (c_uint, c_uint) callconv(.c) c_int, "__sys__kernelrpc_mach_port_destroy_trap")(task, port);
 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 const std = @import("std");
 const f = @import("job_fixture.zig");
+const recovery = @import("asld_recovery.zig");
 const scope = @import("log_store_scope.zig");
 const retained_records = @import("stopped_records.zig");
 extern fn _vproc_log(c_int, [*:0]const u8, ...) void;
@@ -25,7 +26,7 @@ const queue_count: c_uint = 27;
 const queue_bytes: c_uint = 28;
 const queue_dropped: c_uint = 29;
 const a = std.heap.page_allocator;
-const names = [_][*:0]const u8{ "drain", "early_boot", "stopped", "pid1_boot", "churn", "report_identity", "mid_batch_exit" };
+const names = [_][*:0]const u8{ "drain", "early_boot", "stopped", "pid1_boot", "churn", "report_identity", "mid_batch_exit", "restart", "post_stopped" };
 var cases: [names.len]c.atf_tc_t = undefined;
 fn need(ok: bool, msg: [*:0]const u8) void {
     if (!ok) c.atf_tc_fail("%s", msg);
@@ -229,7 +230,22 @@ fn midBatchExit() void {
     need(stored_count + lost - prior == produced, "stored plus counted drops equals produced");
     need(stored_count == 0, "held batch was never resent");
 }
+fn restart() void {
+    need(recovery.health("before-restart"), "boot asld stores health record");
+    need(recovery.descriptors("boot"), "boot descriptor table");
+    const old = recovery.pid();
+    need(recovery.run(&.{ "/bin/launchctl", "unload", recovery.plist }), "unload syslogd");
+    for (0..100) |_| {
+        if (c.kill(old, 0) != 0) break;
+        _ = c.usleep(20000);
+    }
+    need(c.kill(old, 0) != 0, "old asld exited");
+    need(recovery.restore(), "launchctl load restores store and messages");
+    need(recovery.pid() != old, "restart changes process");
+    need(recovery.descriptors("restarted"), "restarted descriptor table");
+}
 fn stopped() void {
+
     // The periodic retention job otherwise adds an unattributable exit at
     // 900 seconds. Pause it only for this case; the explicit other job below
     // still exercises a shared queue, with an independently checked record.
@@ -348,34 +364,37 @@ fn milliseconds() i64 {
 }
 fn churn() void {
     _ = c.alarm(1100);
+    const short = c.getenv("RMX_LOGGING_BOUNDED_CHURN") != null and c.getenv("RMX_LOGGING_BOUNDED_CHURN").?[0] != 0;
+    const duration: i64 = if (short) 5000 else 900000;
+    const interval: i64 = if (short) 1000 else 30000;
     const start = milliseconds();
     var next: i64 = 0;
     var cycles: u64 = 0;
     var baseline: u64 = 0;
     var newest: []const u8 = "";
-    while (milliseconds() - start < 900000) {
+    while (milliseconds() - start < duration) {
         const elapsed = milliseconds() - start;
         if (elapsed >= next) {
             const resident = rss();
-            if (next == 30000) baseline = resident;
+            if (next == interval) baseline = resident;
             _ = c.printf("pid1_churn elapsed_ms=%lld rss_kib=%ju cycles=%ju queued=%ju drops=%ju\n", @as(c_longlong, elapsed), resident, cycles, stat(queue_count), stat(queue_dropped));
             _ = c.fflush(null);
-            if (next >= 30000) need(resident <= baseline + 8192, "PID1 RSS flat within allocator bound during churn");
-            next += 30000;
+            if (next >= interval) need(resident <= baseline + 8192, "PID1 RSS flat within allocator bound during churn");
+            next += interval;
         }
         newest = text("com.rmxos.op789.churn.{d}.{d}", .{ c.getpid(), cycles });
         submit(newest);
         remove(newest);
         cycles += 1;
-        _ = c.usleep(100000);
+        _ = c.usleep(if (short) 1000 else 100000);
     }
     _ = awaitRecord("RefProc", newest, "[Message Exited with code: 73]");
     waitEmpty();
     _ = c.printf("pid1_churn elapsed_ms=%lld rss_kib=%ju cycles=%ju queued=%ju drops=%ju\n", @as(c_longlong, milliseconds() - start), rss(), cycles, stat(queue_count), stat(queue_dropped));
-    _ = c.sleep(60);
+    _ = c.sleep(if (short) 1 else 60);
     const idle = rss();
     _ = c.printf("pid1_churn_idle elapsed_ms=%lld rss_kib=%ju cycles=%ju\n", @as(c_longlong, milliseconds() - start), idle, cycles);
-    need(cycles > 1000 and idle <= baseline + 8192, "churn completed and idle RSS bounded");
+    need(cycles > (if (short) @as(u64, 10) else 1000) and idle <= baseline + 8192, "churn completed and idle RSS bounded");
 }
 fn body(tc: [*c]const c.atf_tc_t) callconv(.c) void {
     const name = std.mem.span(c.atf_tc_get_ident(tc));
@@ -384,18 +403,14 @@ fn body(tc: [*c]const c.atf_tc_t) callconv(.c) void {
     if (!f.enter("/usr/tests/sys/launchd/launchd_logging_test", name)) return;
     scope.begin();
     _ = c.alarm(if (std.mem.eql(u8, name, "stopped")) f.stoppedLimits().worker_seconds else 150);
-    if (std.mem.eql(u8, name, "early_boot")) early() else if (std.mem.eql(u8, name, "drain")) drain() else if (std.mem.eql(u8, name, "stopped")) stopped() else if (std.mem.eql(u8, name, "pid1_boot")) boot() else if (std.mem.eql(u8, name, "report_identity")) reportIdentity() else if (std.mem.eql(u8, name, "mid_batch_exit")) midBatchExit() else churn();
+    if (std.mem.eql(u8, name, "early_boot")) early() else if (std.mem.eql(u8, name, "drain")) drain() else if (std.mem.eql(u8, name, "stopped")) stopped() else if (std.mem.eql(u8, name, "pid1_boot")) boot() else if (std.mem.eql(u8, name, "report_identity")) reportIdentity() else if (std.mem.eql(u8, name, "mid_batch_exit")) midBatchExit() else if (std.mem.eql(u8, name, "restart")) restart() else if (std.mem.eql(u8, name, "post_stopped")) need(recovery.health("after-stopped"), "logger reaches store and messages after stopped") else churn();
+    if (std.mem.eql(u8, name, "stopped") or std.mem.eql(u8, name, "mid_batch_exit")) need(recovery.health("body-exit"), "destructive case leaves serving asld");
 }
 fn cleanup(tc: [*c]const c.atf_tc_t) callconv(.c) void {
     const name = std.mem.span(c.atf_tc_get_ident(tc));
     if (std.mem.eql(u8, name, "stopped")) _ = f.run(&.{ "/bin/launchctl", "load", "/etc/launchd.d/com.rmxos.aslmanager.once.plist" });
-    if (std.mem.eql(u8, name, "stopped") or std.mem.eql(u8, name, "mid_batch_exit")) {
-        const bytes = std.fs.cwd().readFileAlloc(a, "/var/run/syslog.pid", 64) catch "";
-        const pid = std.fmt.parseInt(i32, std.mem.trim(u8, bytes, " \r\n"), 10) catch 0;
-        if (pid > 1) _ = c.kill(pid, c.SIGCONT);
-        _ = f.run(&.{ "/bin/launchctl", "load", "/etc/launchd.d/com.apple.syslogd.plist" });
-    }
     f.cleanup(name);
+    if (std.mem.eql(u8, name, "stopped") or std.mem.eql(u8, name, "mid_batch_exit") or std.mem.eql(u8, name, "restart")) need(recovery.restore(), "cleanup must restore a serving asld");
 }
 fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     const name = std.mem.span(c.atf_tc_get_ident(tc));

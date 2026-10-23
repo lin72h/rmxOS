@@ -1,4 +1,5 @@
 const std = @import("std");
+const recovery = @import("asld_recovery.zig");
 const sender = @import("syslog_sender.zig");
 const timing = @import("syslog_timing.zig");
 const transport = @import("syslog_transport.zig");
@@ -280,9 +281,7 @@ fn fallback(_: [*c]const c.atf_tc_t) callconv(.c) void {
     // A held Mach queue may block the child. Restart from the parent so that
     // observation cannot deadlock waiting for the very service it controls.
     _ = c.sleep(2);
-    command("/bin/launchctl", "load", "/etc/launchd.d/com.apple.syslogd.plist");
-    command("/usr/sbin/service", "syslogd", "onestart");
-    _ = c.sleep(1);
+    need(recovery.restore(), "launchctl restart serves after fallback");
     need(c.read(readiness[0], &byte, 1) == 1, "100 sends completed");
     _ = c.write(release_pipe[1], &byte, 1);
     var result: c_int = 0;
@@ -317,19 +316,110 @@ fn fallback(_: [*c]const c.atf_tc_t) callconv(.c) void {
     for (readiness) |fd| _ = c.close(fd);
     for (release_pipe) |fd| _ = c.close(fd);
 }
+extern fn __libc_asl_send([*:0]const u8) c_int;
+fn bounded(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    need(recovery.health("bounded-before"), "initial asld serves");
+    const old = recovery.pid();
+    var ready: [2]c_int = undefined;
+    var release: [2]c_int = undefined;
+    need(c.pipe(&ready) == 0 and c.pipe(&release) == 0, "bounded pipes");
+    const child = c.fork();
+    need(child >= 0, "bounded child");
+    if (child == 0) {
+        _ = c.alarm(8);
+        _ = c.close(ready[0]);
+        _ = c.close(release[1]);
+        c.openlog("op021-bounded", c.LOG_PID, c.LOG_USER);
+        c.syslog(c.LOG_NOTICE, "op021 prime");
+        var byte: u8 = 0;
+        _ = c.write(ready[1], &byte, 1);
+        _ = c.read(release[0], &byte, 1);
+        // Raw protocol sends fill the stopped daemon's queue without changing
+        // syslog's application-loss counter. A refused raw fixture is not a log.
+        var filled: usize = 0;
+        while (filled < 1024 and __libc_asl_send("[Sender op021-prefill] [Message fixture]") == 0) filled += 1;
+        if (filled == 1024) c._exit(71);
+        const began = now(c.CLOCK_MONOTONIC);
+        transport.setVerbose(false);
+        transport.setQuiet(true);
+        const refused_before = transport.totals()[2];
+        for (0..1000) |_| transport.record(c.LOG_NOTICE, "op021 refused application");
+        const refused_full = transport.totals()[2] - refused_before;
+        if (refused_full == 0) c._exit(74);
+        const elapsed = now(c.CLOCK_MONOTONIC) - began;
+        _ = c.printf("syslog_mach_full sends=1000 queued_fixture=%zu elapsed_ns=%lld bound_ns=2000000000\n", filled, @as(c_longlong, elapsed));
+        _ = c.fflush(null);
+        if (elapsed >= 2 * std.time.ns_per_s) c._exit(72);
+        _ = c.write(ready[1], &byte, 1);
+        _ = c.read(release[0], &byte, 1);
+        const unloaded_began = now(c.CLOCK_MONOTONIC);
+        for (0..20) |_| transport.record(c.LOG_NOTICE, "op021 unloaded application");
+        const refused_total: u64 = @intCast(transport.totals()[2] - refused_before);
+        _ = c.printf("syslog_unloaded sends=20 elapsed_ns=%lld bound_ns=2000000000\n", @as(c_longlong, now(c.CLOCK_MONOTONIC) - unloaded_began));
+        _ = c.fflush(null);
+        if (now(c.CLOCK_MONOTONIC) - unloaded_began >= 2 * std.time.ns_per_s) c._exit(73);
+        _ = c.write(ready[1], &refused_total, @sizeOf(u64));
+        _ = c.read(release[0], &byte, 1);
+        _ = c.sleep(1);
+        c.syslog(c.LOG_NOTICE, "op021 bounded flush");
+        c.closelog();
+        c._exit(0);
+    }
+    _ = c.close(ready[1]);
+    _ = c.close(release[0]);
+    defer _ = c.close(ready[0]);
+    defer _ = c.close(release[1]);
+    var byte: u8 = 0;
+    need(c.read(ready[0], &byte, 1) == 1, "bounded child primed");
+    need(c.kill(old, c.SIGSTOP) == 0, "pause asld receiver");
+    _ = c.write(release[1], &byte, 1);
+    // Poll proves completion while the receiver is still stopped.
+    const Poll = @cImport({
+        @cInclude("poll.h");
+    });
+    var poll = Poll.struct_pollfd{ .fd = ready[0], .events = Poll.POLLIN, .revents = 0 };
+    need(Poll.poll(&poll, 1, 2500) == 1 and c.read(ready[0], &byte, 1) == 1, "full-queue syslog returns before receiver resumes");
+    command("/bin/launchctl", "unload", recovery.plist);
+    _ = c.kill(old, c.SIGCONT);
+    for (0..100) |_| {
+        if (c.kill(old, 0) != 0) break;
+        _ = c.usleep(20000);
+    }
+    need(c.kill(old, 0) != 0, "unloaded receiver exits");
+    _ = c.write(release[1], &byte, 1);
+    var expected: u64 = 0;
+    need(Poll.poll(&poll, 1, 2500) == 1 and c.read(ready[0], &expected, @sizeOf(u64)) == @sizeOf(u64), "unloaded syslog returns before reload");
+    need(expected >= 20, "unloaded transports refuse and count messages");
+    need(recovery.restore(), "reload serves after bounded sends");
+    _ = c.write(release[1], &byte, 1);
+    var result: c_int = 0;
+    need(c.waitpid(child, &result, 0) == child and result == 0, "bounded child result");
+    const dropped = status();
+    _ = c.printf("syslog_mach_loss expected=%ju observed=%ju\n", expected, dropped);
+    need(dropped == expected, "every refused application counted on next successful report");
+    need(status() == dropped, "loss report not duplicated");
+}
+
+fn bounds(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    need(recovery.run(&.{"/usr/tests/usr.sbin/asl/mach_bound_unit"}), "Mach timeout controls");
+    need(recovery.run(&.{"/usr/tests/usr.sbin/asl/filesystems_unit"}), "filesystem boot identity controls");
+}
 fn timingCase(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(timing.nanoseconds(9, 50000000) - timing.nanoseconds(8, 950000000) == 100000000, "nanoseconds across second boundary");
+}
+fn cleanup(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    need(recovery.restore(), "sender cleanup restores working asld");
 }
 fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(tc, "timeout", "%s", "120");
     _ = c.alarm(110);
 }
-var cases: [6]c.atf_tc_t = undefined;
+var cases: [8]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "timing", "socket", "report", "transport", "flood", "fallback" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ timingCase, socketCase, reportCase, nativeCase, flood, fallback };
+    const names = [_][*:0]const u8{ "timing", "socket", "report", "transport", "flood", "fallback", "bounded", "bounds" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ timingCase, socketCase, reportCase, nativeCase, flood, fallback, bounded, bounds };
     for (&cases, names, bodies) |*tc, name, body| {
-        var err = c.atf_tc_init(tc, name, head, body, null, c.atf_tp_get_config(tp));
+        var err = c.atf_tc_init(tc, name, head, body, cleanup, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
         err = c.atf_tp_add_tc(tp, tc);
         if (c.atf_is_error(err)) return err;
