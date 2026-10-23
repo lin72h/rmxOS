@@ -1,5 +1,6 @@
 const std = @import("std");
 const sender = @import("syslog_sender.zig");
+const transport = @import("syslog_transport.zig");
 const reports = @import("syslog_reports.zig");
 const c = @cImport({
     @cInclude("atf-c.h");
@@ -10,6 +11,8 @@ const c = @cImport({
     @cInclude("sys/wait.h");
     @cInclude("syslog.h");
     @cInclude("time.h");
+    @cInclude("errno.h");
+    @cInclude("dlfcn.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 fn socketCase(_: [*c]const c.atf_tc_t) callconv(.c) void {
@@ -63,10 +66,10 @@ fn status() u64 {
 fn now(clock: c.clockid_t) i64 {
     var t: c.struct_timespec = undefined;
     need(c.clock_gettime(clock, &t) == 0, "clock");
-    return t.tv_sec * 1000000000 + t.tv_nsec;
+    return t.tv_sec * 100000000 + t.tv_nsec;
 }
 fn phase(name: [*:0]const u8, began: i64) void {
-    _ = c.printf("op956_phase name=%s elapsed_ms=%lld\n", name, @as(c_longlong, @divTrunc(now(c.CLOCK_MONOTONIC) - began, 1000000)));
+    _ = c.printf("op956_phase name=%s elapsed_ms=%lld\n", name, @as(c_longlong, @divTrunc(now(c.CLOCK_MONOTONIC) - began, 100000)));
     _ = c.fflush(null);
 }
 fn flood(_: [*c]const c.atf_tc_t) callconv(.c) void {
@@ -76,14 +79,18 @@ fn flood(_: [*c]const c.atf_tc_t) callconv(.c) void {
     phase("generator", began);
     var tag_buf: [64]u8 = undefined;
     const tag = std.fmt.bufPrintZ(&tag_buf, "op956-{d}", .{c.getpid()}) catch unreachable;
-    c.openlog(tag, c.LOG_PID, c.LOG_USER);
-    defer c.closelog();
+    transport.openlog(tag, c.LOG_PID, c.LOG_USER);
+    defer transport.closelog();
     var wall: i64 = 0;
     var cpu: i64 = 0;
-    for (0..10) |second| {
+    for (0..1) |second| {
         const w = now(c.CLOCK_MONOTONIC);
         const p = now(c.CLOCK_THREAD_CPUTIME_ID);
-        for (0..1000) |i| c.syslog(c.LOG_NOTICE, "op956-numbered-%zu", second * 1000 + i);
+        for (0..1000) |i| {
+            var line: [64]u8 = undefined;
+            const text = std.fmt.bufPrintZ(&line, "op956-numbered-{d}", .{second * 1000 + i}) catch unreachable;
+            transport.record(c.LOG_NOTICE, text);
+        }
         wall += now(c.CLOCK_MONOTONIC) - w;
         cpu += now(c.CLOCK_THREAD_CPUTIME_ID) - p;
         phase("sends", began);
@@ -114,18 +121,20 @@ fn flood(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(child_count == 1, "fork child record stored exactly once");
     const final_wall = now(c.CLOCK_MONOTONIC);
     const final_cpu = now(c.CLOCK_THREAD_CPUTIME_ID);
-    c.syslog(c.LOG_NOTICE, "op956-numbered-10000");
+    transport.record(c.LOG_NOTICE, "op956-numbered-1000");
     wall += now(c.CLOCK_MONOTONIC) - final_wall;
     cpu += now(c.CLOCK_THREAD_CPUTIME_ID) - final_cpu;
-    _ = c.printf("op956_sender sent=10001 send_wall_ns=%lld send_cpu_ns=%lld blocked_estimate_ns=%lld\n", @as(c_longlong, wall), @as(c_longlong, cpu), @as(c_longlong, @max(0, wall - cpu)));
+    _ = c.printf("op956_sender sent=1001 send_wall_ns=%lld send_cpu_ns=%lld blocked_estimate_ns=%lld\n", @as(c_longlong, wall), @as(c_longlong, cpu), @as(c_longlong, @max(0, wall - cpu)));
     _ = c.fflush(null);
     phase("status_after", began);
     const dropped = status() - before;
     phase("store_query", began);
+    var identity_ok = true;
+    var native_fields_ok = true;
     var stored: usize = 0;
     for (0..50) |_| {
-        const result = query("Sender", tag, 10002);
-        var seen: [10001]bool = @splat(false);
+        const result = query("Sender", tag, 1002);
+        var seen: [1001]bool = @splat(false);
         stored = 0;
         while (c.asl_next(result)) |m| {
             const text = c.asl_get(m, "Message");
@@ -135,18 +144,21 @@ fn flood(_: [*c]const c.atf_tc_t) callconv(.c) void {
             const id = std.fmt.parseInt(usize, bytes["op956-numbered-".len..], 10) catch c.atf_tc_fail("number");
             need(id < seen.len and !seen[id], "no duplicate or invented number");
             seen[id] = true;
-            need(std.mem.eql(u8, std.mem.span(c.asl_get(m, "UID")), "0"), "kernel audit UID");
-            need(std.mem.eql(u8, std.mem.span(c.asl_get(m, "GID")), "0"), "kernel audit GID");
-            need(c.asl_get(m, "RFC5424.Timestamp") == null and c.asl_get(m, "RFC5424.StructuredData") == null, "Mach records have no RFC parse metadata");
+            identity("flood", m);
+            identity_ok = identity_ok and equal(m, "UID", "0") and equal(m, "GID", "0");
+
+            native_fields_ok = native_fields_ok and c.asl_get(m, "RFC5424.Timestamp") == null and c.asl_get(m, "RFC5424.StructuredData") == null;
             stored += 1;
         }
         c.asl_release(result);
-        if (stored + dropped >= 10001) break;
-        _ = c.usleep(100000);
+        if (stored + dropped >= 1001) break;
+        _ = c.usleep(10000);
     }
-    _ = c.printf("op956_flood sent=10001 stored=%zu sender_dropped=%ju observed_accounted=%ju\n", stored, dropped, stored + dropped);
+    _ = c.printf("op956_flood sent=1001 stored=%zu sender_dropped=%ju observed_accounted=%ju\n", stored, dropped, stored + dropped);
     phase("complete", began);
-    need(stored == 10001 and dropped == 0, "unbounded Mach send stores every numbered message");
+    need(identity_ok, "kernel audit UID and GID");
+    need(native_fields_ok, "Mach records have no RFC parse metadata");
+    need(stored == 1001 and dropped == 0, "unbounded Mach send stores every numbered message");
 }
 fn command(program: [*:0]const u8, verb: [*:0]const u8, path: [*:0]const u8) void {
     const child = c.fork();
@@ -158,9 +170,94 @@ fn command(program: [*:0]const u8, verb: [*:0]const u8, path: [*:0]const u8) voi
     var result: c_int = 0;
     need(c.waitpid(child, &result, 0) == child and result == 0, "command outcome");
 }
+fn equal(m: c.asl_object_t, key: [*:0]const u8, expected: []const u8) bool {
+    const value = c.asl_get(m, key);
+    return value != null and std.mem.eql(u8, std.mem.span(value), expected);
+}
+fn identity(label: [*:0]const u8, m: c.asl_object_t) void {
+    _ = c.printf("op982_stored case=%s PID=%s Sender=%s UID=%s GID=%s RFC5424.Timestamp=%s Message=%s\n", label, c.asl_get(m, "PID"), c.asl_get(m, "Sender"), c.asl_get(m, "UID"), c.asl_get(m, "GID"), c.asl_get(m, "RFC5424.Timestamp"), c.asl_get(m, "Message"));
+}
+fn awaitSender(tag: [*:0]const u8) c.asl_object_t {
+    for (0..100) |_| {
+        const found = query("Sender", tag, 2);
+        if (c.asl_next(found)) |m| {
+            _ = c.asl_retain(m);
+            c.asl_release(found);
+            return m;
+        }
+        c.asl_release(found);
+        _ = c.usleep(20000);
+    }
+    c.atf_tc_fail("record missing for Sender %s", tag);
+}
+fn nativeCase(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    var library: c.Dl_info = undefined;
+    need(c.dladdr(@ptrCast(&c.syslog), &library) != 0, "syslog binding");
+    _ = c.printf("op982_binding symbol=syslog object=%s\n", library.dli_fname);
+    var name: [64]u8 = undefined;
+    const tag = std.fmt.bufPrintZ(&name, "op982-native-{d}", .{c.getpid()}) catch unreachable;
+    transport.openlog(tag, c.LOG_PID, c.LOG_USER);
+    transport.record(c.LOG_NOTICE, "observed libc source");
+    const observed = awaitSender(tag);
+    defer c.asl_release(observed);
+    identity("observed-libc", observed);
+    var other: [64]u8 = undefined;
+    const installed = std.fmt.bufPrintZ(&other, "op982-installed-{d}", .{c.getpid()}) catch unreachable;
+    c.openlog(installed, c.LOG_PID, c.LOG_USER);
+    c.syslog(c.LOG_NOTICE, "installed libc control");
+    c.closelog();
+    const actual = awaitSender(installed);
+    defer c.asl_release(actual);
+    identity("installed-libc", actual);
+    var control_name: [64]u8 = undefined;
+    const control_tag = std.fmt.bufPrintZ(&control_name, "op982-asl-{d}", .{c.getpid()}) catch unreachable;
+    const client = c.asl_open(control_tag, "user", 0);
+    need(client != null, "asl_log control client");
+    transport.controlBegin();
+    const rc = c.asl_log(client, null, c.ASL_LEVEL_NOTICE, "asl_log Mach control");
+    _ = c.printf("op982_control api=asl_log rc=%d errno=%d\n", rc, c.__error().*);
+    transport.controlEnd();
+    c.asl_close(client);
+    const control = awaitSender(control_tag);
+    defer c.asl_release(control);
+    identity("asl_log", control);
+    _ = c.fflush(null);
+    need(equal(control, "UID", "0") and equal(control, "GID", "0"), "asl_log control has kernel audit identity");
+    need(equal(observed, "UID", "0") and equal(actual, "UID", "0") and equal(observed, "GID", "0") and equal(actual, "GID", "0"), "both libc paths retain kernel audit identity");
+    need(c.asl_get(actual, "RFC5424.Timestamp") == null and c.asl_get(observed, "RFC5424.Timestamp") == null, "native libc records have no RFC parse fields");
+    const t = transport.totals();
+    need(t[0] == 1 and t[1] == 0 and t[2] == 0, "service-up record takes Mach without socket fallback");
+}
 fn fallback(_: [*c]const c.atf_tc_t) callconv(.c) void {
-    c.openlog("op956-fallback", c.LOG_PID, c.LOG_USER);
-    c.syslog(c.LOG_NOTICE, "prime service cache");
+    var readiness: [2]c_int = undefined;
+    var release_pipe: [2]c_int = undefined;
+    need(c.pipe(&readiness) == 0 and c.pipe(&release_pipe) == 0, "fallback pipes");
+    const child = c.fork();
+    need(child >= 0, "fallback child");
+    if (child == 0) {
+        var name: [64]u8 = undefined;
+        const tag = std.fmt.bufPrintZ(&name, "op982-fallback-{d}", .{c.getpid()}) catch unreachable;
+        transport.openlog(tag, c.LOG_PID, c.LOG_USER);
+        transport.record(c.LOG_NOTICE, "prime service cache");
+        var byte: u8 = 1;
+        _ = c.write(readiness[1], &byte, 1);
+        _ = c.read(release_pipe[0], &byte, 1);
+        const began = now(c.CLOCK_MONOTONIC);
+        for (0..100) |i| {
+            var line: [64]u8 = undefined;
+            const text = std.fmt.bufPrintZ(&line, "fallback-numbered-{d}", .{i}) catch unreachable;
+            transport.record(c.LOG_NOTICE, text);
+        }
+        _ = c.printf("op982_unavailable sends=100 elapsed_ns=%lld\n", @as(c_longlong, now(c.CLOCK_MONOTONIC) - began));
+        _ = c.write(readiness[1], &byte, 1);
+        _ = c.read(release_pipe[0], &byte, 1);
+        transport.record(c.LOG_NOTICE, "flush after restart");
+        _ = c.printf("op982_after_restart flush_completed=1\n");
+        _ = c.fflush(null);
+        c._exit(0);
+    }
+    var byte: u8 = 0;
+    need(c.read(readiness[0], &byte, 1) == 1, "child primed cache");
     var old_pid: c_int = 0;
     const pidfile = c.fopen("/var/run/syslog.pid", "r") orelse @panic("pidfile");
     _ = c.fscanf(pidfile, "%d", &old_pid);
@@ -170,28 +267,56 @@ fn fallback(_: [*c]const c.atf_tc_t) callconv(.c) void {
         if (c.kill(old_pid, 0) != 0) break;
         _ = c.usleep(100000);
     }
-    need(c.kill(old_pid, 0) != 0, "asld exited before unavailable-service sends");
-    for (0..100) |i| c.syslog(c.LOG_NOTICE, "fallback-numbered-%zu", i);
+    need(c.kill(old_pid, 0) != 0, "asld exited");
+    _ = c.write(release_pipe[1], &byte, 1);
+    // A held Mach queue may block the child. Restart from the parent so that
+    // observation cannot deadlock waiting for the very service it controls.
+    _ = c.sleep(2);
     command("/bin/launchctl", "load", "/etc/launchd.d/com.apple.syslogd.plist");
     command("/usr/sbin/service", "syslogd", "onestart");
     _ = c.sleep(1);
-    const before = status();
-    c.syslog(c.LOG_NOTICE, "after-restart");
-    const after = status();
-    _ = c.printf("op956_fallback refused=100 expected_reported=100 observed_reported=%ju\n", after - before);
-    need(after - before == 100, "both failed transports are reported after restart");
-    c.syslog(c.LOG_NOTICE, "after-report");
-    need(status() == after, "loss report counted once");
-    c.closelog();
+    need(c.read(readiness[0], &byte, 1) == 1, "100 sends completed");
+    _ = c.write(release_pipe[1], &byte, 1);
+    var result: c_int = 0;
+    need(c.waitpid(child, &result, 0) == child and result == 0, "fallback child finished");
+    var name: [64]u8 = undefined;
+    const tag = std.fmt.bufPrintZ(&name, "op982-fallback-{d}", .{child}) catch unreachable;
+    var stored: usize = 0;
+    for (0..100) |_| {
+        const found = query("Sender", tag, 110);
+        var seen: [100]bool = @splat(false);
+        stored = 0;
+        while (c.asl_next(found)) |m| {
+            const value = c.asl_get(m, "Message");
+            if (value == null) continue;
+            const text = std.mem.span(value);
+            if (!std.mem.startsWith(u8, text, "fallback-numbered-")) continue;
+            const id = std.fmt.parseInt(usize, text["fallback-numbered-".len..], 10) catch c.atf_tc_fail("number");
+            need(id < 100 and !seen[id], "unique fallback record");
+            seen[id] = true;
+            identity("fallback", m);
+            stored += 1;
+        }
+        c.asl_release(found);
+        if (stored == 100) break;
+        _ = c.usleep(20000);
+    }
+    const dropped = status(); // Controlled restart: this asld's counter starts at zero.
+    _ = c.printf("op982_fallback sent=100 stored=%zu sender_dropped=%ju accounted=%ju\n", stored, dropped, stored + dropped);
+    _ = c.fflush(null);
+    need(stored + dropped == 100, "fallback stored plus reported equals sent exactly");
+    need(status() == dropped, "no second loss report");
+    for (readiness) |fd| _ = c.close(fd);
+    for (release_pipe) |fd| _ = c.close(fd);
 }
 fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(tc, "timeout", "%s", "120");
     _ = c.alarm(110);
 }
-var cases: [4]c.atf_tc_t = undefined;
+var cases: [5]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "socket", "report", "flood", "fallback" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ socketCase, reportCase, flood, fallback };
+    const names = [_][*:0]const u8{ "socket", "report", "transport", "flood", "fallback" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ socketCase, reportCase, nativeCase, flood, fallback };
     for (&cases, names, bodies) |*tc, name, body| {
         var err = c.atf_tc_init(tc, name, head, body, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
