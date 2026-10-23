@@ -65,6 +65,9 @@ pub fn enter(binary: []const u8, case_name: []const u8) bool {
         }
         const observed = std.fs.cwd().readFileAlloc(a, output, 1048576) catch "";
         if (observed.len > printed) _ = c.printf("%.*s", @as(c_int, @intCast(observed.len - printed)), observed[printed..].ptr);
+        const stderr_path = std.fmt.allocPrint(a, "{s}/stderr", .{dir}) catch unreachable;
+        const diagnostic = std.fs.cwd().readFileAlloc(a, stderr_path, 1048576) catch "";
+        if (diagnostic.len > 0) _ = c.printf("launchd_fixture_stderr %.*s\n", @as(c_int, @intCast(diagnostic.len)), diagnostic.ptr);
         _ = c.printf("launchd_fixture case=%s result=%.*s", z(case_name).ptr, @as(c_int, @intCast(bytes.len)), bytes.ptr);
         if (!std.mem.eql(u8, bytes, "passed\n")) c.atf_tc_fail("launchd child case failed");
         return false;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 const std = @import("std");
 const observations = @import("logging_observations.zig");
+const scope = @import("log_store_scope.zig");
 const c = @cImport({
     @cInclude("atf-c.h");
     @cInclude("asl.h");
@@ -152,7 +153,7 @@ fn awaitFile(path: [*:0]const u8, text: []const u8, expected: usize) void {
     need(false, "text record exact count");
 }
 fn store(message: [*:0]const u8) []const u8 {
-    return run(&.{ "/usr/bin/aslutil", "-d", "/var/log/asl", "-F", "raw", "-k", "Message", message });
+    return scope.query("Message", std.mem.span(message), false, false);
 }
 fn awaitStore(message: [*:0]const u8, expected: usize) []const u8 {
     const text = std.mem.span(message);
@@ -266,7 +267,7 @@ fn kernel(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const before_unload = count(store(unload), unload);
     // Rotation can precede even the first fixture load. The persistent store
     // must still contain the boot banner exactly once.
-    const boot_records = awaitStore(boot, 1);
+    const boot_records = scope.query("Message", boot, false, true);
     const boot_stored = count(boot_records, boot);
     const boot_current = fileCount("/var/log/messages", boot);
     _ = c.printf("kernel_boot current_text=%zu stored=%zu expected_stored=1\n", boot_current, boot_stored);
@@ -300,11 +301,10 @@ fn rotation(_: [*c]const c.atf_tc_t) callconv(.c) void {
     rotateAndLog();
 }
 fn freshStatus() []const u8 {
-    const status_args = &.{ "/usr/bin/aslutil", "-d", "/var/log/asl", "-F", "raw", "-k", "com.rmxos.asld.record", "status" };
-    const before = count(run(status_args), "[com.rmxos.asld.record status]");
+    const before = count(scope.query("com.rmxos.asld.record", "status", false, false), "[com.rmxos.asld.record status]");
     need(c.kill(pidfile(), c.SIGUSR1) == 0, "request system logger status");
     for (0..100) |i| {
-        const raw = run(status_args);
+        const raw = scope.query("com.rmxos.asld.record", "status", false, false);
         if (count(raw, "[com.rmxos.asld.record status]") > before) {
             const fresh = observations.newestStatus(raw) orelse unreachable;
             return std.heap.page_allocator.dupe(u8, fresh) catch c.atf_tc_fail("status snapshot allocation");
@@ -377,11 +377,11 @@ fn retention(_: [*c]const c.atf_tc_t) callconv(.c) void {
     _ = c.fputs("<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>Label</key><string>com.rmxos.op767.interval</string><key>ProgramArguments</key><array><string>/usr/sbin/aslmanager</string><string>-once</string><string>-wait-for-filesystems</string><string>-s</string><string>/var/log/asl</string></array><key>ThrottleInterval</key><integer>0</integer><key>StartInterval</key><integer>2</integer></dict></plist>", f);
     need(c.fclose(f) == 0, "close interval fixture");
     const marker = "[com.rmxos.aslmanager.record summary]";
-    const before = count(run(&.{ "/usr/bin/aslutil", "-d", "/var/log/asl", "-F", "raw", "-k", "com.rmxos.aslmanager.record", "summary" }), marker);
+    const before = count(scope.query("com.rmxos.aslmanager.record", "summary", false, false), marker);
     _ = run(&.{ "/bin/launchctl", "load", path });
     var observed = before;
     for (0..140) |_| {
-        observed = count(run(&.{ "/usr/bin/aslutil", "-d", "/var/log/asl", "-F", "raw", "-k", "com.rmxos.aslmanager.record", "summary" }), marker);
+        observed = count(scope.query("com.rmxos.aslmanager.record", "summary", false, false), marker);
         if (observed >= before + 2) break;
         _ = c.usleep(50000);
     }
@@ -406,6 +406,7 @@ fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(tc, "timeout", "%s", "90");
     _ = c.atf_tc_set_md_var(tc, "require.user", "%s", "root");
     _ = c.alarm(85);
+    scope.begin();
 }
 var cases: [10]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {

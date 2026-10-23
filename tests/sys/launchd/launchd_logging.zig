@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 const std = @import("std");
 const f = @import("job_fixture.zig");
+const scope = @import("log_store_scope.zig");
 const retained_records = @import("stopped_records.zig");
 extern fn _vproc_log(c_int, [*:0]const u8, ...) void;
 const c = @cImport({
@@ -39,7 +40,7 @@ fn stat(key: c_uint) u64 {
     return @intCast(value);
 }
 fn store(key: []const u8, value: []const u8) []const u8 {
-    return f.capture(&.{ "/usr/bin/aslutil", "-d", "/var/log/asl", "-F", "raw", "-k", key, value });
+    return scope.query(key, value, false, false);
 }
 fn occurrences(bytes: []const u8, needle: []const u8) usize {
     return std.mem.count(u8, bytes, needle);
@@ -98,9 +99,9 @@ fn waitEmpty() void {
 fn early() void {
     const first = "*** launchd[1] has started up. ***";
     const second = "*** Shutdown logging is enabled. ***";
-    const bytes = awaitRecord("Sender", "com.apple.launchd", second);
+    const bytes = scope.query("Sender", "com.apple.launchd", false, true);
     const x = std.mem.indexOf(u8, bytes, first) orelse c.atf_tc_fail("early startup record absent");
-    const y = std.mem.indexOf(u8, bytes, second) orelse unreachable;
+    const y = std.mem.indexOf(u8, bytes, second) orelse c.atf_tc_fail("early shutdown logging record absent");
     need(x < y, "early launchd messages preserve order");
     need(occurrences(bytes, first) == 1 and occurrences(bytes, second) == 1, "early records stored once");
     need(std.mem.indexOf(u8, bytes, "[PID 1]") != null, "launchd sender pid");
@@ -222,7 +223,7 @@ fn midBatchExit() void {
     }
     need(reported, "one fresh report carries the exact settled count");
     waitEmpty();
-    const stored = f.capture(&.{ "/usr/bin/aslutil", "-d", "/var/log/asl", "-F", "raw", "-k", "Message", "Aeq", exit_prefix });
+    const stored = scope.query("Message", exit_prefix, true, false);
     const stored_count = occurrences(stored, "[Message ");
     _ = c.printf("launchd_mid_batch_exit produced=%ju callbacks=%u stored=%zu counted=%ju prior=%ju helper_pid=%d\n", produced, @as(c_uint, callbacks), stored_count, lost - prior, prior, helper);
     need(stored_count + lost - prior == produced, "stored plus counted drops equals produced");
@@ -299,7 +300,7 @@ fn stopped() void {
     waitEmpty();
     const other_records = store("RefProc", other);
     need(occurrences(other_records, "[Message Exited with code: 73]") == 1, "separately labelled exit stored exactly once, with no drop credit");
-    const own_records = f.capture(&.{ "/usr/bin/aslutil", "-d", "/var/log/asl", "-F", "raw", "-k", "RefProc", "Aeq", prefix });
+    const own_records = scope.query("RefProc", prefix, true, false);
     const own_count = occurrences(own_records, "[Message Exited with code: 73]");
     need(own_count <= count and own_count <= retained, "owned retained records fit the stopped queue");
     const own_drops = lost - prior_records;
@@ -336,12 +337,9 @@ fn boot() void {
     need(f.run(&.{ "/usr/sbin/service", "syslogd", "status" }) == 0, "asld compatibility service ready");
     const jobs = f.capture(&.{ "/bin/launchctl", "list" });
     for ([_][]const u8{ "com.rmxos.console-getty", "com.apple.notifyd", "com.apple.syslogd", "com.rmxos.aslmanager.once" }) |name| need(std.mem.indexOf(u8, jobs, name) != null, "default service job loaded");
-    var marker: c.struct_stat = undefined;
-    var ready: c.struct_stat = undefined;
-    need(c.stat("/var/run/asld.filesystems-ready", &marker) == 0 and c.stat("/var/run/asld.service-ready", &ready) == 0, "boot handshake timestamps");
-    const ms = (ready.st_mtim.tv_sec - marker.st_mtim.tv_sec) * 1000 + @divTrunc(ready.st_mtim.tv_nsec - marker.st_mtim.tv_nsec, 1000000);
+    const ms = @import("boot_first_ready.zig").observe() catch c.atf_tc_fail("first boot readiness proof unavailable");
     _ = c.printf("pid1_boot marker_to_ready_ms=%lld pid1=launchd root_rw=1 base_services=1\n", @as(c_longlong, ms));
-    need(ms >= 0 and ms < 1000, "marker to compatibility ready under one second");
+    need(@import("boot_first_ready.zig").valid(ms), "boot first marker to readiness under one second");
 }
 fn milliseconds() i64 {
     var t: c.struct_timespec = undefined;
@@ -381,7 +379,10 @@ fn churn() void {
 }
 fn body(tc: [*c]const c.atf_tc_t) callconv(.c) void {
     const name = std.mem.span(c.atf_tc_get_ident(tc));
+    const first_ms = @import("boot_first_ready.zig").observe() catch c.atf_tc_fail("capture boot first readiness before any restart");
+    need(@import("boot_first_ready.zig").valid(first_ms), "boot first logger startup under one second");
     if (!f.enter("/usr/tests/sys/launchd/launchd_logging_test", name)) return;
+    scope.begin();
     _ = c.alarm(if (std.mem.eql(u8, name, "stopped")) f.stoppedLimits().worker_seconds else 150);
     if (std.mem.eql(u8, name, "early_boot")) early() else if (std.mem.eql(u8, name, "drain")) drain() else if (std.mem.eql(u8, name, "stopped")) stopped() else if (std.mem.eql(u8, name, "pid1_boot")) boot() else if (std.mem.eql(u8, name, "report_identity")) reportIdentity() else if (std.mem.eql(u8, name, "mid_batch_exit")) midBatchExit() else churn();
 }
