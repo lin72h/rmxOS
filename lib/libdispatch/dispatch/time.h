@@ -65,6 +65,11 @@ struct timespec;
 typedef uint64_t dispatch_time_t;
 
 #define DISPATCH_TIME_NOW (0ull)
+/* Current wall time (nanoseconds since the Unix epoch). */
+#define DISPATCH_WALLTIME_NOW (~1ull)
+/* Current monotonic time, including time spent asleep. */
+#define DISPATCH_MONOTONICTIME_NOW (1ull << 63)
+
 #define DISPATCH_TIME_FOREVER (~0ull)
 
 /*!
@@ -78,7 +83,10 @@ typedef uint64_t dispatch_time_t;
  * On Mac OS X the default clock is based on mach_absolute_time().
  *
  * @param when
- * An optional dispatch_time_t to add nanoseconds to. If zero is passed, then
+ * An optional dispatch_time_t to add nanoseconds to.
+ * DISPATCH_MONOTONICTIME_NOW selects the monotonic clock;
+ * DISPATCH_WALLTIME_NOW is equivalent to dispatch_walltime(NULL, delta).
+ * If zero is passed, then
  * dispatch_time() will use the result of mach_absolute_time().
  *
  * @param delta

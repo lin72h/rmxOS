@@ -1221,6 +1221,9 @@ _dispatch_source_timer_now(uint64_t nows[], unsigned int tidx)
 	case DISPATCH_TIMER_KIND_MACH:
 		now = _dispatch_absolute_time();
 		break;
+	case DISPATCH_TIMER_KIND_MONOTONIC:
+		now = _dispatch_monotonic_time();
+		break;
 	case DISPATCH_TIMER_KIND_WALL:
 		now = _dispatch_get_nanoseconds();
 		break;
@@ -1311,22 +1314,19 @@ _dispatch_source_timer_params(dispatch_source_t ds, dispatch_time_t start,
 		start = INT64_MAX;
 	}
 
-	if ((int64_t)start < 0) {
-		// wall clock
-		start = (dispatch_time_t)-((int64_t)start);
+	dispatch_clock_t clock;
+	_dispatch_time_decode(start, &clock, &start);
+	params->values.flags &= ~(unsigned long)(DISPATCH_TIMER_WALL_CLOCK |
+			DISPATCH_TIMER_MONOTONIC_CLOCK);
+	if (clock == DISPATCH_CLOCK_WALL) {
 		params->values.flags |= DISPATCH_TIMER_WALL_CLOCK;
+	} else if (clock == DISPATCH_CLOCK_MONOTONIC) {
+		if (!start) start = _dispatch_monotonic_time();
+		params->values.flags |= DISPATCH_TIMER_MONOTONIC_CLOCK;
 	} else {
-		// absolute clock
 		interval = _dispatch_time_nano2mach(interval);
-		if (interval < 1) {
-			// rdar://problem/7287561 interval must be at least one in
-			// in order to avoid later division by zero when calculating
-			// the missed interval count. (NOTE: the wall clock's
-			// interval is already "fixed" to be 1 or more)
-			interval = 1;
-		}
+		if (interval < 1) interval = 1;
 		leeway = _dispatch_time_nano2mach(leeway);
-		params->values.flags &= ~(unsigned long)DISPATCH_TIMER_WALL_CLOCK;
 	}
 	params->ident = DISPATCH_TIMER_IDENT(params->values.flags);
 	params->values.target = start;
@@ -1431,6 +1431,9 @@ static struct dispatch_timer_s _dispatch_timer[] =  {
 	DISPATCH_TIMER_INIT(MACH, NORMAL),
 	DISPATCH_TIMER_INIT(MACH, CRITICAL),
 	DISPATCH_TIMER_INIT(MACH, BACKGROUND),
+	DISPATCH_TIMER_INIT(MONOTONIC, NORMAL),
+	DISPATCH_TIMER_INIT(MONOTONIC, CRITICAL),
+	DISPATCH_TIMER_INIT(MONOTONIC, BACKGROUND),
 };
 #define DISPATCH_TIMER_COUNT \
 		((sizeof(_dispatch_timer) / sizeof(_dispatch_timer[0])))
@@ -1466,6 +1469,9 @@ static struct dispatch_kevent_s _dispatch_kevent_timer[] = {
 	DISPATCH_KEVENT_TIMER_INIT(MACH, NORMAL),
 	DISPATCH_KEVENT_TIMER_INIT(MACH, CRITICAL),
 	DISPATCH_KEVENT_TIMER_INIT(MACH, BACKGROUND),
+	DISPATCH_KEVENT_TIMER_INIT(MONOTONIC, NORMAL),
+	DISPATCH_KEVENT_TIMER_INIT(MONOTONIC, CRITICAL),
+	DISPATCH_KEVENT_TIMER_INIT(MONOTONIC, BACKGROUND),
 	DISPATCH_KEVENT_TIMER_INITIALIZER(DISPATCH_TIMER_INDEX_DISARM),
 };
 #define DISPATCH_KEVENT_TIMER_COUNT \
@@ -1477,7 +1483,7 @@ static struct dispatch_kevent_s _dispatch_kevent_timer[] = {
 		.ident = DISPATCH_KEVENT_TIMEOUT_IDENT_MASK|(qos), \
 		.filter = EVFILT_TIMER, \
 		.flags = EV_ONESHOT, \
-		.fflags = NOTE_ABSOLUTE|NOTE_NSECONDS|NOTE_LEEWAY|(note), \
+		.fflags = NOTE_NSECONDS|NOTE_LEEWAY|(note), \
 	}
 #define DISPATCH_KEVENT_TIMEOUT_INIT(qos, note) \
 		DISPATCH_KEVENT_TIMEOUT_INITIALIZER(DISPATCH_TIMER_QOS_##qos, note)
@@ -1743,7 +1749,7 @@ _dispatch_timers_get_delay(uint64_t nows[], struct dispatch_timer_s timer[],
 			break;
 		}
 		tmp = target - now;
-		if (DISPATCH_TIMER_KIND(tidx) != DISPATCH_TIMER_KIND_WALL) {
+		if (DISPATCH_TIMER_KIND(tidx) == DISPATCH_TIMER_KIND_MACH) {
 			tmp = _dispatch_time_mach2nano(tmp);
 		}
 		if (tmp < INT64_MAX && tmp < delta) {
@@ -1752,7 +1758,7 @@ _dispatch_timers_get_delay(uint64_t nows[], struct dispatch_timer_s timer[],
 		}
 		dispatch_assert(target <= deadline);
 		tmp = deadline - now;
-		if (DISPATCH_TIMER_KIND(tidx) != DISPATCH_TIMER_KIND_WALL) {
+		if (DISPATCH_TIMER_KIND(tidx) == DISPATCH_TIMER_KIND_MACH) {
 			tmp = _dispatch_time_mach2nano(tmp);
 		}
 		if (tmp < INT64_MAX && tmp < dldelta) {
@@ -1787,7 +1793,8 @@ _dispatch_timers_program2(uint64_t nows[], struct kevent64_s *ke,
 		_dispatch_trace_next_timer_set(
 				TAILQ_FIRST(&_dispatch_kevent_timer[tidx].dk_sources), qos);
 		_dispatch_trace_next_timer_program(delay, qos);
-		delay += _dispatch_source_timer_now(nows, DISPATCH_TIMER_KIND_WALL);
+		/* Relative kernel timers cannot be moved by a wall-clock step.
+		 * Calendar-change notifications recompute wall timer delays. */
 		if (slowpath(_dispatch_timers_force_max_leeway)) {
 			ke->data = (int64_t)(delay + leeway);
 			ke->ext[1] = 0;

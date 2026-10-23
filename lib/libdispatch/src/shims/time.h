@@ -133,4 +133,55 @@ _dispatch_absolute_time(void)
 }
 
 
+/* Three-clock encoding used by later Apple libdispatch and Swift concurrency. */
+#define DISPATCH_TIME_MONOTONIC_MASK (1ull << 63)
+#define DISPATCH_TIME_WALL_MASK (1ull << 62)
+#define DISPATCH_TIME_MAX_VALUE (DISPATCH_TIME_WALL_MASK - 1)
+typedef enum {
+	DISPATCH_CLOCK_UPTIME,
+	DISPATCH_CLOCK_MONOTONIC,
+	DISPATCH_CLOCK_WALL,
+} dispatch_clock_t;
+
+static inline uint64_t
+_dispatch_monotonic_time(void)
+{
+	struct timespec ts;
+	int ret = clock_gettime(CLOCK_MONOTONIC, &ts);
+	(void)dispatch_assume_zero(ret);
+	return (uint64_t)ts.tv_sec * NSEC_PER_SEC + (uint64_t)ts.tv_nsec;
+}
+
+static inline void
+_dispatch_time_decode(dispatch_time_t time, dispatch_clock_t *clock,
+		uint64_t *value)
+{
+	if (time & DISPATCH_TIME_MONOTONIC_MASK) {
+		if (time & DISPATCH_TIME_WALL_MASK) {
+			*clock = DISPATCH_CLOCK_WALL;
+			*value = time == DISPATCH_WALLTIME_NOW ?
+					_dispatch_get_nanoseconds() : -time;
+		} else {
+			*clock = DISPATCH_CLOCK_MONOTONIC;
+			*value = time & ~DISPATCH_TIME_MONOTONIC_MASK;
+		}
+	} else {
+		*clock = DISPATCH_CLOCK_UPTIME;
+		*value = time;
+	}
+	if (*value > DISPATCH_TIME_MAX_VALUE) *value = DISPATCH_TIME_FOREVER;
+}
+
+static inline dispatch_time_t
+_dispatch_time_encode(dispatch_clock_t clock, uint64_t value)
+{
+	if (value >= DISPATCH_TIME_MAX_VALUE) return DISPATCH_TIME_FOREVER;
+	switch (clock) {
+	case DISPATCH_CLOCK_UPTIME: return value;
+	case DISPATCH_CLOCK_MONOTONIC: return value | DISPATCH_TIME_MONOTONIC_MASK;
+	case DISPATCH_CLOCK_WALL: return -value;
+	}
+	__builtin_unreachable();
+}
+
 #endif // __DISPATCH_SHIMS_TIME__

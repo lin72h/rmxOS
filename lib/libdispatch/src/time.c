@@ -70,78 +70,70 @@ _dispatch_get_host_time_init(void *context DISPATCH_UNUSED)
 dispatch_time_t
 dispatch_time(dispatch_time_t inval, int64_t delta)
 {
-	uint64_t offset;
-	if (inval == DISPATCH_TIME_FOREVER) {
-		return DISPATCH_TIME_FOREVER;
+	dispatch_clock_t clock;
+	uint64_t value, offset;
+	if (inval == DISPATCH_TIME_FOREVER) return DISPATCH_TIME_FOREVER;
+	_dispatch_time_decode(inval, &clock, &value);
+	if (value == DISPATCH_TIME_FOREVER) return value;
+	if (!value && clock != DISPATCH_CLOCK_WALL) {
+		value = clock == DISPATCH_CLOCK_UPTIME ? _dispatch_absolute_time() :
+				_dispatch_monotonic_time();
 	}
-	if ((int64_t)inval < 0) {
-		// wall clock
-		if (delta >= 0) {
-			offset = (uint64_t)delta;
-			if ((int64_t)(inval -= offset) >= 0) {
-				return DISPATCH_TIME_FOREVER; // overflow
-			}
-			return inval;
-		} else {
-			offset = (uint64_t)-delta;
-			if ((int64_t)(inval += offset) >= -1) {
-				// -1 is special == DISPATCH_TIME_FOREVER == forever
-				return (dispatch_time_t)-2ll; // underflow
-			}
-			return inval;
-		}
+	/* Unsigned magnitude also handles INT64_MIN without signed overflow. */
+	offset = delta < 0 ? -(uint64_t)delta : (uint64_t)delta;
+	if (clock == DISPATCH_CLOCK_UPTIME) {
+		offset = _dispatch_time_nano2mach(offset);
 	}
-	// mach clock
-	if (inval == 0) {
-		inval = _dispatch_absolute_time();
-	}
-	if (delta >= 0) {
-		offset = _dispatch_time_nano2mach((uint64_t)delta);
-		if ((int64_t)(inval += offset) <= 0) {
-			return DISPATCH_TIME_FOREVER; // overflow
-		}
-		return inval;
+	if (delta < 0) {
+		value = offset >= value ? (clock == DISPATCH_CLOCK_WALL ? 2 : 1) :
+				value - offset;
+		if (clock == DISPATCH_CLOCK_WALL && value <= 1) value = 2;
 	} else {
-		offset = _dispatch_time_nano2mach((uint64_t)-delta);
-		if ((int64_t)(inval -= offset) < 1) {
-			return 1; // underflow
+		if (offset >= DISPATCH_TIME_MAX_VALUE ||
+				value >= DISPATCH_TIME_MAX_VALUE - offset) {
+			return DISPATCH_TIME_FOREVER;
 		}
-		return inval;
+		value += offset;
 	}
+	return _dispatch_time_encode(clock, value);
 }
 
 dispatch_time_t
 dispatch_walltime(const struct timespec *inval, int64_t delta)
 {
-	int64_t nsec;
-	if (inval) {
-		nsec = inval->tv_sec * 1000000000ll + inval->tv_nsec;
+	uint64_t value, offset;
+	value = inval ? (uint64_t)inval->tv_sec * NSEC_PER_SEC +
+			(uint64_t)inval->tv_nsec : _dispatch_get_nanoseconds();
+	offset = delta < 0 ? -(uint64_t)delta : (uint64_t)delta;
+	if (delta < 0) {
+		if (offset >= value || value - offset <= 1) return (dispatch_time_t)-2;
+		value -= offset;
 	} else {
-		nsec = (int64_t)_dispatch_get_nanoseconds();
+		if (offset >= DISPATCH_TIME_MAX_VALUE ||
+				value >= DISPATCH_TIME_MAX_VALUE - offset) {
+			return DISPATCH_TIME_FOREVER;
+		}
+		value += offset;
 	}
-	nsec += delta;
-	if (nsec <= 1) {
-		// -1 is special == DISPATCH_TIME_FOREVER == forever
-		return delta >= 0 ? DISPATCH_TIME_FOREVER : (dispatch_time_t)-2ll;
-	}
-	return (dispatch_time_t)-nsec;
+	if (value <= 1) return delta >= 0 ? DISPATCH_TIME_FOREVER : (dispatch_time_t)-2;
+	return _dispatch_time_encode(DISPATCH_CLOCK_WALL, value);
 }
 
 uint64_t
 _dispatch_timeout(dispatch_time_t when)
 {
-	dispatch_time_t now;
-	if (when == DISPATCH_TIME_FOREVER) {
-		return DISPATCH_TIME_FOREVER;
+	dispatch_clock_t clock;
+	uint64_t value, now;
+	if (when == DISPATCH_TIME_FOREVER) return DISPATCH_TIME_FOREVER;
+	if (when == DISPATCH_TIME_NOW) return 0;
+	_dispatch_time_decode(when, &clock, &value);
+	if (value == DISPATCH_TIME_FOREVER) return value;
+	switch (clock) {
+	case DISPATCH_CLOCK_WALL: now = _dispatch_get_nanoseconds(); break;
+	case DISPATCH_CLOCK_MONOTONIC: now = _dispatch_monotonic_time(); break;
+	case DISPATCH_CLOCK_UPTIME: now = _dispatch_absolute_time(); break;
 	}
-	if (when == 0) {
-		return 0;
-	}
-	if ((int64_t)when < 0) {
-		when = (dispatch_time_t)-(int64_t)when;
-		now = _dispatch_get_nanoseconds();
-		return now >= when ? 0 : when - now;
-	}
-	now = _dispatch_absolute_time();
-	return now >= when ? 0 : _dispatch_time_mach2nano(when - now);
+	if (now >= value) return 0;
+	return clock == DISPATCH_CLOCK_UPTIME ?
+			_dispatch_time_mach2nano(value - now) : value - now;
 }
