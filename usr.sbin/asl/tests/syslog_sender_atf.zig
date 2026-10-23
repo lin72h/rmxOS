@@ -1,5 +1,6 @@
 const std = @import("std");
 const sender = @import("syslog_sender.zig");
+const timing = @import("syslog_timing.zig");
 const transport = @import("syslog_transport.zig");
 const reports = @import("syslog_reports.zig");
 const c = @cImport({
@@ -66,10 +67,10 @@ fn status() u64 {
 fn now(clock: c.clockid_t) i64 {
     var t: c.struct_timespec = undefined;
     need(c.clock_gettime(clock, &t) == 0, "clock");
-    return t.tv_sec * 100000000 + t.tv_nsec;
+    return timing.nanoseconds(t.tv_sec, t.tv_nsec);
 }
 fn phase(name: [*:0]const u8, began: i64) void {
-    _ = c.printf("op956_phase name=%s elapsed_ms=%lld\n", name, @as(c_longlong, @divTrunc(now(c.CLOCK_MONOTONIC) - began, 100000)));
+    _ = c.printf("op956_phase name=%s elapsed_ms=%lld\n", name, @as(c_longlong, @divTrunc(now(c.CLOCK_MONOTONIC) - began, std.time.ns_per_ms)));
     _ = c.fflush(null);
 }
 fn flood(_: [*c]const c.atf_tc_t) callconv(.c) void {
@@ -83,7 +84,10 @@ fn flood(_: [*c]const c.atf_tc_t) callconv(.c) void {
     defer transport.closelog();
     var wall: i64 = 0;
     var cpu: i64 = 0;
-    for (0..1) |second| {
+    transport.setVerbose(false);
+    defer transport.setVerbose(true);
+    const initial_transports = transport.totals();
+    for (0..10) |second| {
         const w = now(c.CLOCK_MONOTONIC);
         const p = now(c.CLOCK_THREAD_CPUTIME_ID);
         for (0..1000) |i| {
@@ -121,10 +125,10 @@ fn flood(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(child_count == 1, "fork child record stored exactly once");
     const final_wall = now(c.CLOCK_MONOTONIC);
     const final_cpu = now(c.CLOCK_THREAD_CPUTIME_ID);
-    transport.record(c.LOG_NOTICE, "op956-numbered-1000");
+    transport.record(c.LOG_NOTICE, "op956-numbered-10000");
     wall += now(c.CLOCK_MONOTONIC) - final_wall;
     cpu += now(c.CLOCK_THREAD_CPUTIME_ID) - final_cpu;
-    _ = c.printf("op956_sender sent=1001 send_wall_ns=%lld send_cpu_ns=%lld blocked_estimate_ns=%lld\n", @as(c_longlong, wall), @as(c_longlong, cpu), @as(c_longlong, @max(0, wall - cpu)));
+    _ = c.printf("op956_sender sent=10001 send_wall_ns=%lld send_cpu_ns=%lld blocked_estimate_ns=%lld\n", @as(c_longlong, wall), @as(c_longlong, cpu), @as(c_longlong, @max(0, wall - cpu)));
     _ = c.fflush(null);
     phase("status_after", began);
     const dropped = status() - before;
@@ -133,8 +137,8 @@ fn flood(_: [*c]const c.atf_tc_t) callconv(.c) void {
     var native_fields_ok = true;
     var stored: usize = 0;
     for (0..50) |_| {
-        const result = query("Sender", tag, 1002);
-        var seen: [1001]bool = @splat(false);
+        const result = query("Sender", tag, 10002);
+        var seen: [10001]bool = @splat(false);
         stored = 0;
         while (c.asl_next(result)) |m| {
             const text = c.asl_get(m, "Message");
@@ -144,21 +148,25 @@ fn flood(_: [*c]const c.atf_tc_t) callconv(.c) void {
             const id = std.fmt.parseInt(usize, bytes["op956-numbered-".len..], 10) catch c.atf_tc_fail("number");
             need(id < seen.len and !seen[id], "no duplicate or invented number");
             seen[id] = true;
-            identity("flood", m);
+            if (stored == 0 or !equal(m, "UID", "0") or !equal(m, "GID", "0")) identity("flood", m);
             identity_ok = identity_ok and equal(m, "UID", "0") and equal(m, "GID", "0");
 
             native_fields_ok = native_fields_ok and c.asl_get(m, "RFC5424.Timestamp") == null and c.asl_get(m, "RFC5424.StructuredData") == null;
             stored += 1;
         }
         c.asl_release(result);
-        if (stored + dropped >= 1001) break;
+        if (stored + dropped >= 10001) break;
         _ = c.usleep(10000);
     }
-    _ = c.printf("op956_flood sent=1001 stored=%zu sender_dropped=%ju observed_accounted=%ju\n", stored, dropped, stored + dropped);
+    _ = c.printf("op956_flood sent=10001 stored=%zu sender_dropped=%ju observed_accounted=%ju\n", stored, dropped, stored + dropped);
     phase("complete", began);
+    const final_transports = transport.totals();
+    _ = c.printf("op982_flood_transport expected_mach=10001 observed_mach=%zu socket=%zu refused=%zu\n", final_transports[0] - initial_transports[0], final_transports[1] - initial_transports[1], final_transports[2] - initial_transports[2]);
+    need(final_transports[0] - initial_transports[0] == 10001 and final_transports[1] == initial_transports[1] and final_transports[2] == initial_transports[2], "every flood record uses Mach");
+    need(wall >= cpu and cpu >= 0, "valid nonnegative send timing");
     need(identity_ok, "kernel audit UID and GID");
     need(native_fields_ok, "Mach records have no RFC parse metadata");
-    need(stored == 1001 and dropped == 0, "unbounded Mach send stores every numbered message");
+    need(stored == 10001 and dropped == 0, "unbounded Mach send stores every numbered message");
 }
 fn command(program: [*:0]const u8, verb: [*:0]const u8, path: [*:0]const u8) void {
     const child = c.fork();
@@ -281,6 +289,7 @@ fn fallback(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(c.waitpid(child, &result, 0) == child and result == 0, "fallback child finished");
     var name: [64]u8 = undefined;
     const tag = std.fmt.bufPrintZ(&name, "op982-fallback-{d}", .{child}) catch unreachable;
+    const dropped = status(); // Fresh asld; flush/report precede the status snapshot.
     var stored: usize = 0;
     for (0..100) |_| {
         const found = query("Sender", tag, 110);
@@ -298,10 +307,9 @@ fn fallback(_: [*c]const c.atf_tc_t) callconv(.c) void {
             stored += 1;
         }
         c.asl_release(found);
-        if (stored == 100) break;
+        if (stored + dropped >= 100) break;
         _ = c.usleep(20000);
     }
-    const dropped = status(); // Controlled restart: this asld's counter starts at zero.
     _ = c.printf("op982_fallback sent=100 stored=%zu sender_dropped=%ju accounted=%ju\n", stored, dropped, stored + dropped);
     _ = c.fflush(null);
     need(stored + dropped == 100, "fallback stored plus reported equals sent exactly");
@@ -309,14 +317,17 @@ fn fallback(_: [*c]const c.atf_tc_t) callconv(.c) void {
     for (readiness) |fd| _ = c.close(fd);
     for (release_pipe) |fd| _ = c.close(fd);
 }
+fn timingCase(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    need(timing.nanoseconds(9, 50000000) - timing.nanoseconds(8, 950000000) == 100000000, "nanoseconds across second boundary");
+}
 fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(tc, "timeout", "%s", "120");
     _ = c.alarm(110);
 }
-var cases: [5]c.atf_tc_t = undefined;
+var cases: [6]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "socket", "report", "transport", "flood", "fallback" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ socketCase, reportCase, nativeCase, flood, fallback };
+    const names = [_][*:0]const u8{ "timing", "socket", "report", "transport", "flood", "fallback" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ timingCase, socketCase, reportCase, nativeCase, flood, fallback };
     for (&cases, names, bodies) |*tc, name, body| {
         var err = c.atf_tc_init(tc, name, head, body, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;

@@ -33,6 +33,10 @@ fn real(comptime T: type, name: [*:0]const u8) T {
     return @ptrCast(@alignCast(c.dlsym(c.RTLD_NEXT, name) orelse @panic("missing real transport")));
 }
 var active = false;
+var verbose = true;
+pub fn setVerbose(value: bool) void {
+    verbose = value;
+}
 pub fn controlBegin() void {
     active = true;
 }
@@ -87,7 +91,7 @@ pub export fn rmx_observe_trap(p: *c.mach_msg_header_t, options: c_uint, send_si
         _ = c.printf("op982_mig_error request=%d code=%d\n", id, code);
     }
     if (options & c.MACH_SEND_MSG != 0 and id == 118 and result == 0) mach_ok += 1;
-    _ = c.printf("op982_trap record=%zu request=%d phase=%s kr=%#x errno=%d received_id=%d bits=%#x size=%u\n", current, id, if (options & c.MACH_SEND_MSG != 0) @as([*:0]const u8, "send") else "receive", @as(c_uint, @bitCast(result)), err, p.msgh_id, p.msgh_bits, p.msgh_size);
+    if (verbose or result != 0) _ = c.printf("op982_trap record=%zu request=%d phase=%s kr=%#x errno=%d received_id=%d bits=%#x size=%u\n", current, id, if (options & c.MACH_SEND_MSG != 0) @as([*:0]const u8, "send") else "receive", @as(c_uint, @bitCast(result)), err, p.msgh_id, p.msgh_bits, p.msgh_size);
     c.__error().* = err;
     return result;
 }
@@ -95,7 +99,7 @@ pub export fn rmx_observe_send(fd: c_int, buffer: ?*const anyopaque, size: usize
     const rc = if (mock) @as(isize, @intCast(size)) else real(Send, "send")(fd, buffer, size, flags);
     const err = c.__error().*;
     if (rc >= 0) socket_ok += 1;
-    _ = c.printf("op982_socket record=%zu rc=%zd errno=%d\n", current, rc, if (rc >= 0) @as(c_int, 0) else err);
+    if (verbose or rc < 0) _ = c.printf("op982_socket record=%zu rc=%zd errno=%d\n", current, rc, if (rc >= 0) @as(c_int, 0) else err);
     c.__error().* = err;
     return rc;
 }
@@ -110,7 +114,7 @@ pub fn record(priority: c_int, text: [*:0]const u8) void {
     const m = mach_ok - before_mach;
     const s = socket_ok - before_socket;
     if (m + s == 0) refused += 1;
-    _ = c.printf("op982_transport record=%zu mach_success=%zu socket_success=%zu outcome=%s\n", current, m, s, if (m + s == 0) @as([*:0]const u8, "refused") else if (s != 0) @as([*:0]const u8, "socket") else @as([*:0]const u8, "mach"));
+    if (verbose or m + s == 0) _ = c.printf("op982_transport record=%zu mach_success=%zu socket_success=%zu outcome=%s\n", current, m, s, if (m + s == 0) @as([*:0]const u8, "refused") else if (s != 0) @as([*:0]const u8, "socket") else @as([*:0]const u8, "mach"));
 }
 pub fn totals() [3]usize {
     return .{ mach_ok, socket_ok, refused };
