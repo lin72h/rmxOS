@@ -14,6 +14,7 @@ void
 asld_count_sender_drops(asl_msg_t *m)
 {
  const char *s = asl_msg_get_val_for_key(m, "RFC5424.SD.12:rmxos-loss@0.count");
+ if (s == NULL) s = asl_msg_get_val_for_key(m, "com.rmxos.syslog.sender_dropped");
  uint64_t count = 0;
  if (s == NULL || *s == '\0') return;
  for (; *s; s++) {

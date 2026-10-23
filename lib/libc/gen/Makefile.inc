@@ -151,6 +151,7 @@ SRCS+= \
 	sysctlbyname.c \
 	sysctlnametomib.c \
 	syslog.c \
+	asl_private.c \
 	telldir.c \
 	termios.c \
 	time.c \

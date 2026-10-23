@@ -254,12 +254,17 @@ the mask for all priorities up to and including
 is given by the macro
 .Fn LOG_UPTO toppri ; .
 The default allows all priorities to be logged.
-.Ss Local socket congestion
-When the local logging socket refuses a message with
-.Er ENOBUFS ,
-the process counts the refused message without waiting or retrying.
+.Ss Local delivery
+Messages normally use ASL over Mach IPC. Sending waits without a timeout
+when the service queue is full; libc applies no sender quota.
+If lookup or delivery fails, the traditional local socket is tried.
+A socket refused with
+.Er ENOBUFS
+is not retried. A message refused by both transports is counted.
 Before a later message, at most once per second, it attempts a separate
-RFC 5424 report with structured data
+report over either transport. The Mach report carries the ASL key
+.Li com.rmxos.syslog.sender_dropped .
+The socket report uses RFC 5424 structured data
 .Li [rmxos-loss@0 count="N"]
 and text
 .Li "syslog: local socket refused N messages" .

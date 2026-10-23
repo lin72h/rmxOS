@@ -10,7 +10,7 @@ test "rotation removes current text but preserves the boot record in ASL" {
     try std.testing.expect(!kernelBoot(0, 2));
 }
 
-pub const counters = [_][]const u8{ "dropped_wq", "dropped_kern_quota", "dropped_parse", "bsd_in_truncated", "store_failed", "store_fallback_memory", "file_action_failed", "native_malformed", "dup_suppressed", "config_rejected" };
+pub const counters = [_][]const u8{ "dropped_wq", "dropped_kern_quota", "dropped_parse", "bsd_in_truncated", "store_failed", "store_fallback_memory", "file_action_failed", "native_malformed", "dup_suppressed", "config_rejected", "launchd_dropped", "sender_dropped" };
 pub fn validStatus(raw: []const u8) bool {
     if (std.mem.count(u8, raw, "[com.rmxos.asld.record status]") != 1) return false;
     for (counters) |name| {
@@ -48,8 +48,8 @@ fn value(raw: []const u8, name: []const u8) u64 {
     return std.fmt.parseInt(u64, raw[start..end], 10) catch unreachable;
 }
 test "a numeric but changed idle counter fails" {
-    const before = "[com.rmxos.asld.record status] [dropped_wq 7] [dropped_kern_quota 3980] [dropped_parse 0] [bsd_in_truncated 0] [store_failed 0] [store_fallback_memory 0] [file_action_failed 0] [native_malformed 0] [dup_suppressed 1] [config_rejected 0]";
-    const wrong = "[com.rmxos.asld.record status] [dropped_wq 7] [dropped_kern_quota 3980] [dropped_parse 0] [bsd_in_truncated 0] [store_failed 7] [store_fallback_memory 0] [file_action_failed 0] [native_malformed 0] [dup_suppressed 1] [config_rejected 0]";
+    const before = "[com.rmxos.asld.record status] [dropped_wq 7] [dropped_kern_quota 3980] [dropped_parse 0] [bsd_in_truncated 0] [store_failed 0] [store_fallback_memory 0] [file_action_failed 0] [native_malformed 0] [dup_suppressed 1] [config_rejected 0] [launchd_dropped 0] [sender_dropped 0]";
+    const wrong = "[com.rmxos.asld.record status] [dropped_wq 7] [dropped_kern_quota 3980] [dropped_parse 0] [bsd_in_truncated 0] [store_failed 7] [store_fallback_memory 0] [file_action_failed 0] [native_malformed 0] [dup_suppressed 1] [config_rejected 0] [launchd_dropped 0] [sender_dropped 0]";
     try std.testing.expect(!statusMatches(wrong, before));
     try std.testing.expect(statusMatches(before, before));
 }
@@ -62,11 +62,22 @@ pub fn directCount(raw: []const u8, token: []const u8) usize {
     return result;
 }
 test "fresh status accepts accumulated drops and ignores older status" {
-    const line = "[com.rmxos.asld.record status] [dropped_wq 7] [dropped_kern_quota 0] [dropped_parse 0] [bsd_in_truncated 0] [store_failed 0] [store_fallback_memory 0] [file_action_failed 0] [native_malformed 0] [dup_suppressed 1] [config_rejected 0]";
+    const line = "[com.rmxos.asld.record status] [dropped_wq 7] [dropped_kern_quota 0] [dropped_parse 0] [bsd_in_truncated 0] [store_failed 0] [store_fallback_memory 0] [file_action_failed 0] [native_malformed 0] [dup_suppressed 1] [config_rejected 0] [launchd_dropped 0] [sender_dropped 0]";
     try std.testing.expect(validStatus(line));
     try std.testing.expect(!validStatus("[com.rmxos.asld.record status] [dropped_wq invalid]"));
 }
 test "direct startup channel excludes a console record routed by asld" {
     const text = "fixture[1]: startup failed: timeout\nOct 22 kernel[0]: fixture[1]: startup failed: timeout\n";
     try std.testing.expectEqual(@as(usize, 1), directCount(text, "fixture"));
+}
+
+test "both sender and launchd loss counters reject changed values" {
+    const baseline = "[com.rmxos.asld.record status] [dropped_wq 0] [dropped_kern_quota 0] [dropped_parse 0] [bsd_in_truncated 0] [store_failed 0] [store_fallback_memory 0] [file_action_failed 0] [native_malformed 0] [dup_suppressed 0] [config_rejected 0] [launchd_dropped 0] [sender_dropped 0]";
+    for ([_][]const u8{ "launchd_dropped", "sender_dropped" }) |name| {
+        var buffer: [512]u8 = undefined;
+        @memcpy(buffer[0..baseline.len], baseline);
+        const at = std.mem.indexOf(u8, baseline, name).? + name.len + 1;
+        buffer[at] = '1';
+        try std.testing.expect(!statusMatches(buffer[0..baseline.len], baseline));
+    }
 }

@@ -55,6 +55,7 @@
 #include "un-namespace.h"
 
 #include "libc_private.h"
+#include "asl_private.h"
 
 /* Maximum number of characters of syslog message */
 #define	MAXLINE		8192
@@ -136,14 +137,41 @@ syslog(int pri, const char *fmt, ...)
 	va_end(ap);
 }
 
+static int
+log_send(int pri, const struct timeval *now, const char *host,
+    const char *sender, int pid, const char *message, const char *wire,
+    size_t length, uint64_t dropped)
+{
+	char *record = __libc_asl_record(sender, pid, pri, now, host, message, dropped);
+	if (record != NULL) {
+		int result = __libc_asl_send(record);
+		free(record);
+		if (result == 0)
+			return (0);
+	}
+	if (!opened)
+		openlog_unlocked(LogTag, LogStat | LOG_NDELAY, 0);
+	connectlog();
+	if (send(LogFile, wire, length, 0) >= 0)
+		return (0);
+	if (errno != ENOBUFS) {
+		disconnectlog();
+		connectlog();
+		if (send(LogFile, wire, length, 0) >= 0)
+			return (0);
+	}
+	return (-1);
+}
+
 static void
 vsyslog1(int pri, const char *fmt, va_list ap)
 {
-	struct timeval now;
+	struct timeval now = {0};
 	struct tm tm;
 	char ch, *p;
 	long tz_offset;
-	int cnt, fd, saved_errno;
+	int cnt, fd, saved_errno, body_offset;
+	char sender[MAXLINE], body[MAXLINE];
 	char hostname[MAXHOSTNAMELEN], *stdp, tbuf[MAXLINE], fmt_cpy[MAXLINE],
 	    errstr[64], tz_sign;
 	FILE *fp, *fmt_fp;
@@ -269,6 +297,8 @@ vsyslog1(int pri, const char *fmt, va_list ap)
 		fmt = fmt_cpy;
 	}
 
+	(void)fflush(fp);
+	body_offset = tbuf_cookie.base - tbuf;
 	/* Message. */
 	(void)vfprintf(fp, fmt, ap);
 	(void)fclose(fp);
@@ -292,14 +322,17 @@ vsyslog1(int pri, const char *fmt, va_list ap)
 		(void)_writev(STDERR_FILENO, iov, 2);
 	}
 
-	/* Get connected, output the message to the local logger. */
-	if (!opened)
-		openlog_unlocked(LogTag, LogStat | LOG_NDELAY, 0);
-	connectlog();
+	/* Keep the traditional stderr/console representation; ASL gets fields. */
+	snprintf(sender, sizeof(sender), "%.*s",
+	    LogTagLength > 0 ? LogTagLength : (int)strlen(LogTag), LogTag);
+	int body_length = cnt > body_offset ? cnt - body_offset : 0;
+	memcpy(body, tbuf + body_offset, body_length);
+	body[body_length] = '\0';
 	if (LogRefused != 0) {
 		struct timespec mono;
 		char report[512];
 		int length;
+		char report_body[128];
 
 		if (LogRefusedPid != getpid()) {
 			LogRefused = 0;
@@ -317,30 +350,18 @@ vsyslog1(int pri, const char *fmt, va_list ap)
 			    "syslog: local socket refused %" PRIu64 " messages",
 			    LOG_SYSLOG | LOG_WARNING, hostname, (int)LogRefusedPid,
 			    LogRefused, LogRefused);
+			snprintf(report_body, sizeof(report_body),
+			    "syslog: local transports refused %" PRIu64 " messages", LogRefused);
 			if (length > 0 && length < (int)sizeof(report) &&
-			    send(LogFile, report, length, 0) == length)
+			    log_send(LOG_SYSLOG | LOG_WARNING, &now, hostname, "syslog",
+			    LogRefusedPid, report_body, report, length, LogRefused) == 0)
 				LogRefused = 0;
 		}
 	}
 
-	/*
-	 * If the send() failed, there are two likely scenarios:
-	 * 1) syslogd was restarted.  In this case make one (only) attempt
-	 *    to reconnect.
-	 * 2) We filled our buffer due to syslogd not being able to read
-	 *    as fast as we write.  In this case prefer to lose the current
-	 *    message rather than whole buffer of previously logged data.
-	 */
-	if (send(LogFile, tbuf, cnt, 0) < 0) {
-		if (errno != ENOBUFS) {
-			disconnectlog();
-			connectlog();
-			if (send(LogFile, tbuf, cnt, 0) >= 0)
-				return;
-		}
-	} else
+	if (log_send(pri, &now, hostname, sender, LogPid, body, tbuf, cnt, 0) == 0)
 		return;
-	if (errno == ENOBUFS) {
+	{
 		pid_t pid = getpid();
 		if (LogRefusedPid != pid) {
 			LogRefusedPid = pid;
