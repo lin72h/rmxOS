@@ -14,3 +14,7 @@ monotonic_wake: Swift-format monotonic timer wakes after 400ms
 wall_wake: negated wall deadline wakes after 400ms
 uptime_wall_step: backward wall step does not move uptime timer
 monotonic_wall_step: backward wall step does not move monotonic timer
+autorelease_frequency: all three frequencies preserve inactive/QoS/overcommit attributes in either order; invalid values rejected
+assert_queue_barrier: serial, sync/async/slow barriers return; off-queue and ordinary concurrent sync/async children terminate
+data_replace: latest full-width merge replaces pending values; zero suppresses delivery; exactly two callbacks and cancellation
+data_munmap: both mmap pages remain through a retained reference and unmap after final data release

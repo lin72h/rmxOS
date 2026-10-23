@@ -41,6 +41,11 @@ const dispatch_block_t _dispatch_data_destructor_free = ^{
 	DISPATCH_CRASH("free destructor called");
 };
 
+/* Marker pattern from later Apple/libdispatch; FreeBSD uses munmap directly. */
+const dispatch_block_t _dispatch_data_destructor_munmap = ^{
+	DISPATCH_CRASH("munmap destructor called");
+};
+
 const dispatch_block_t _dispatch_data_destructor_none = ^{
 	DISPATCH_CRASH("none destructor called");
 };
@@ -84,6 +89,8 @@ _dispatch_data_destroy_buffer(const void* buffer, size_t size,
 {
 	if (destructor == DISPATCH_DATA_DESTRUCTOR_FREE) {
 		free((void*)buffer);
+	} else if (destructor == DISPATCH_DATA_DESTRUCTOR_MUNMAP) {
+		(void)munmap((void *)buffer, size);
 	} else if (destructor == DISPATCH_DATA_DESTRUCTOR_NONE) {
 		// do nothing
 	} else if (destructor == DISPATCH_DATA_DESTRUCTOR_VM_DEALLOCATE) {
@@ -179,6 +186,7 @@ dispatch_data_create_f(const void *buffer, size_t size, dispatch_queue_t queue,
 	dispatch_block_t destructor = (dispatch_block_t)destructor_function;
 	if (destructor != DISPATCH_DATA_DESTRUCTOR_DEFAULT &&
 			destructor != DISPATCH_DATA_DESTRUCTOR_FREE &&
+			destructor != DISPATCH_DATA_DESTRUCTOR_MUNMAP &&
 			destructor != DISPATCH_DATA_DESTRUCTOR_NONE &&
 			destructor != DISPATCH_DATA_DESTRUCTOR_VM_DEALLOCATE &&
 			destructor != DISPATCH_DATA_DESTRUCTOR_INLINE) {

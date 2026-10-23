@@ -1206,6 +1206,13 @@ const struct dispatch_source_type_s _dispatch_source_type_data_add = {
 	},
 };
 
+const struct dispatch_source_type_s _dispatch_source_type_data_replace = {
+	.ke = {
+		.filter = DISPATCH_EVFILT_CUSTOM_REPLACE,
+		.flags = EV_CLEAR,
+	},
+};
+
 const struct dispatch_source_type_s _dispatch_source_type_data_or = {
 	.ke = {
 		.filter = DISPATCH_EVFILT_CUSTOM_OR,

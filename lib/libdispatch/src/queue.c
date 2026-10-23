@@ -674,6 +674,18 @@ dispatch_assert_queue(dispatch_queue_t dq)
 	_dispatch_assert_queue_fail(dq, true);
 }
 
+/* Adapted from Apple libdispatch-1504.60.7, using 442's exclusive drain owner. */
+void
+dispatch_assert_queue_barrier(dispatch_queue_t dq)
+{
+	dispatch_assert_queue(dq);
+	if (dq->dq_width == 1 || (dq->do_targetq &&
+			dq->dq_thread == _dispatch_thread_port())) {
+		return;
+	}
+	DISPATCH_CLIENT_CRASH("Block was expected to act as a barrier on queue");
+}
+
 void
 dispatch_assert_queue_not(dispatch_queue_t dq)
 {
@@ -1111,6 +1123,28 @@ dispatch_queue_attr_make_with_qos_class(dispatch_queue_attr_t dqa,
 	}
 	return _dispatch_get_queue_attr(qos_class, relative_priority,
 			dqa->dqa_overcommit, dqa->dqa_concurrent, dqa->dqa_inactive);
+}
+
+/* No Objective-C runtime: validate the frequency, preserving every attribute. */
+dispatch_queue_attr_t
+dispatch_queue_attr_make_with_autorelease_frequency(dispatch_queue_attr_t dqa,
+		dispatch_autorelease_frequency_t frequency)
+{
+	switch (frequency) {
+	case DISPATCH_AUTORELEASE_FREQUENCY_INHERIT:
+	case DISPATCH_AUTORELEASE_FREQUENCY_WORK_ITEM:
+	case DISPATCH_AUTORELEASE_FREQUENCY_NEVER:
+		break;
+	default:
+		return NULL;
+	}
+	if (!dqa) {
+		return _dispatch_get_queue_attr(0, 0, false, false, false);
+	}
+	if (dqa->do_vtable != DISPATCH_VTABLE(queue_attr)) {
+		DISPATCH_CLIENT_CRASH("Invalid queue attribute");
+	}
+	return dqa;
 }
 
 dispatch_queue_attr_t

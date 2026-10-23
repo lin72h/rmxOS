@@ -424,7 +424,50 @@ dispatch_get_global_queue(long identifier, unsigned long flags);
 DISPATCH_DECL(dispatch_queue_attr);
 
 /*!
+ * @typedef dispatch_autorelease_frequency_t
+ * INHERIT uses the target queue's behavior, WORK_ITEM requests a pool for
+ * asynchronous work items, and NEVER requests no pool. Synchronous work is
+ * unaffected. rmxOS has no Objective-C autorelease pools, so these are no-ops.
+ */
+DISPATCH_ENUM(dispatch_autorelease_frequency, unsigned long,
+	DISPATCH_AUTORELEASE_FREQUENCY_INHERIT = 0,
+	DISPATCH_AUTORELEASE_FREQUENCY_WORK_ITEM = 1,
+	DISPATCH_AUTORELEASE_FREQUENCY_NEVER = 2
+);
+
+/*!
+ * Combines attr (or NULL for a serial queue) with the requested frequency.
+ * Returns NULL for an invalid frequency. All other attributes are preserved.
+ */
+#if defined(__MAC_10_12) && defined(__IPHONE_10_0)
+__OSX_AVAILABLE_STARTING(__MAC_10_12,__IPHONE_10_0)
+#endif
+DISPATCH_EXPORT DISPATCH_WARN_RESULT DISPATCH_PURE DISPATCH_NOTHROW
+dispatch_queue_attr_t
+dispatch_queue_attr_make_with_autorelease_frequency(dispatch_queue_attr_t attr,
+		dispatch_autorelease_frequency_t frequency);
+
+/*!
+ * Verifies that the current block executes on queue and acts as a barrier.
+ * Blocks executing on a serial queue always act as barriers. A failed
+ * assertion terminates the process. Passing NULL is undefined.
+ */
+#if defined(__MAC_10_12) && defined(__IPHONE_10_0)
+__OSX_AVAILABLE_STARTING(__MAC_10_12,__IPHONE_10_0)
+#endif
+DISPATCH_EXPORT DISPATCH_NONNULL1
+void
+dispatch_assert_queue_barrier(dispatch_queue_t queue);
+
+#ifdef NDEBUG
+#define dispatch_assert_queue_barrier_debug(q) ((void)(0 && (q)))
+#else
+#define dispatch_assert_queue_barrier_debug(q) dispatch_assert_queue_barrier(q)
+#endif
+
+/*!
  * @function dispatch_queue_attr_make_initially_inactive
+
  *
  * Combines attr (or NULL for a serial queue) with initial inactivity.
  * The resulting queue executes no work until dispatch_activate() is called.

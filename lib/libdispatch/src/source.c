@@ -113,6 +113,7 @@ dispatch_source_create(dispatch_source_type_t type,
 #if DISPATCH_USE_MEMORYSTATUS
 	case EVFILT_MEMORYSTATUS:
 #endif
+	case DISPATCH_EVFILT_CUSTOM_REPLACE:
 	case DISPATCH_EVFILT_CUSTOM_ADD:
 	case DISPATCH_EVFILT_CUSTOM_OR:
 		if (handle) {
@@ -263,6 +264,7 @@ dispatch_source_merge_data(dispatch_source_t ds, unsigned long val)
 	};
 
 	dispatch_assert(
+			ds->ds_dkev->dk_kevent.filter == DISPATCH_EVFILT_CUSTOM_REPLACE ||
 			ds->ds_dkev->dk_kevent.filter == DISPATCH_EVFILT_CUSTOM_ADD ||
 			ds->ds_dkev->dk_kevent.filter == DISPATCH_EVFILT_CUSTOM_OR);
 
@@ -725,7 +727,10 @@ _dispatch_source_merge_kevent(dispatch_source_t ds, const struct kevent64_s *ke)
 	if ((ds->ds_atomic_flags & DSF_CANCELED) || (ds->do_xref_cnt == -1)) {
 		return;
 	}
-	if (ds->ds_is_level) {
+	if (ds->ds_dkev->dk_kevent.filter == DISPATCH_EVFILT_CUSTOM_REPLACE) {
+		dispatch_atomic_store2o(ds, ds_pending_data, (unsigned long)ke->data,
+				relaxed);
+	} else if (ds->ds_is_level) {
 		// ke->data is signed and "negative available data" makes no sense
 		// zero bytes happens when EV_EOF is set
 		// 10A268 does not fail this assert with EVFILT_READ and a 10 GB file
@@ -764,6 +769,13 @@ static struct dispatch_kevent_s _dispatch_kevent_data_or = {
 		.flags = EV_CLEAR,
 	},
 	.dk_sources = TAILQ_HEAD_INITIALIZER(_dispatch_kevent_data_or.dk_sources),
+};
+static struct dispatch_kevent_s _dispatch_kevent_data_replace = {
+	.dk_kevent = {
+		.filter = DISPATCH_EVFILT_CUSTOM_REPLACE,
+		.flags = EV_CLEAR,
+	},
+	.dk_sources = TAILQ_HEAD_INITIALIZER(_dispatch_kevent_data_replace.dk_sources),
 };
 static struct dispatch_kevent_s _dispatch_kevent_data_add = {
 	.dk_kevent = {
@@ -852,6 +864,10 @@ _dispatch_kevent_init()
 			&_dispatch_kevent_data_or, dk_list);
 	TAILQ_INSERT_TAIL(&_dispatch_sources[0],
 			&_dispatch_kevent_data_add, dk_list);
+	TAILQ_INSERT_TAIL(&_dispatch_sources[0],
+			&_dispatch_kevent_data_replace, dk_list);
+	_dispatch_kevent_data_replace.dk_kevent.udata =
+			(uintptr_t)&_dispatch_kevent_data_replace;
 	_dispatch_kevent_data_or.dk_kevent.udata =
 			(uintptr_t)&_dispatch_kevent_data_or;
 	_dispatch_kevent_data_add.dk_kevent.udata =
@@ -935,6 +951,7 @@ _dispatch_kevent_resume(dispatch_kevent_t dk, uint32_t new_flags,
 	long r;
 	switch (dk->dk_kevent.filter) {
 	case DISPATCH_EVFILT_TIMER:
+	case DISPATCH_EVFILT_CUSTOM_REPLACE:
 	case DISPATCH_EVFILT_CUSTOM_ADD:
 	case DISPATCH_EVFILT_CUSTOM_OR:
 		// these types not registered with kevent
@@ -966,6 +983,7 @@ _dispatch_kevent_dispose(dispatch_kevent_t dk)
 
 	switch (dk->dk_kevent.filter) {
 	case DISPATCH_EVFILT_TIMER:
+	case DISPATCH_EVFILT_CUSTOM_REPLACE:
 	case DISPATCH_EVFILT_CUSTOM_ADD:
 	case DISPATCH_EVFILT_CUSTOM_OR:
 		// these sources live on statically allocated lists
@@ -4467,6 +4485,7 @@ _evfiltstr(short filt)
 	_evfilt2(EVFILT_USER);
 
 	_evfilt2(DISPATCH_EVFILT_TIMER);
+	_evfilt2(DISPATCH_EVFILT_CUSTOM_REPLACE);
 	_evfilt2(DISPATCH_EVFILT_CUSTOM_ADD);
 	_evfilt2(DISPATCH_EVFILT_CUSTOM_OR);
 	default:

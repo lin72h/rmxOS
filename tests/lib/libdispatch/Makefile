@@ -4,6 +4,7 @@ SCRIPTS+= dispatch_mach_test
 SCRIPTS+= workqueue_lane_test
 SCRIPTS+= activation_test
 SCRIPTS+= time_clocks_test
+SCRIPTS+= swift_exports_test
 SCRIPTSDIR= ${TESTSDIR}
 ZIG?= zig
 ZIG_SYSROOT?= ${SYSROOT}
@@ -24,3 +25,6 @@ workqueue_lane_test: ${.CURDIR}/workqueue_lane.zig
 
 time_clocks_test: ${.CURDIR}/time_clocks.zig
 	${ZIG} build-exe ${.CURDIR}/time_clocks.zig ${DISPATCH_SO} ${SYSROOT}/usr/lib/libmach.so.5 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET} -rdynamic
+
+swift_exports_test: ${.CURDIR}/swift_exports.zig
+	${ZIG} build-exe ${.CURDIR}/swift_exports.zig ${DISPATCH_SO} ${SYSROOT}/usr/lib/libmach.so.5 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET} -rdynamic

@@ -36,7 +36,8 @@
 #define DISPATCH_EVFILT_CUSTOM_ADD	(-EVFILT_SYSCOUNT - 2)
 #define DISPATCH_EVFILT_CUSTOM_OR	(-EVFILT_SYSCOUNT - 3)
 #define DISPATCH_EVFILT_MACH_NOTIFICATION	(-EVFILT_SYSCOUNT - 4)
-#define DISPATCH_EVFILT_SYSCOUNT	( EVFILT_SYSCOUNT + 4)
+#define DISPATCH_EVFILT_CUSTOM_REPLACE	(-EVFILT_SYSCOUNT - 5)
+#define DISPATCH_EVFILT_SYSCOUNT	( EVFILT_SYSCOUNT + 5)
 
 // NOTE: dispatch_source_mach_send_flags_t and dispatch_source_mach_recv_flags_t
 //       bit values must not overlap as they share the same kevent fflags !

@@ -100,7 +100,19 @@ __OSX_AVAILABLE_STARTING(__MAC_10_6,__IPHONE_4_0)
 DISPATCH_SOURCE_TYPE_DECL(data_or);
 
 /*!
+ * @const DISPATCH_SOURCE_TYPE_DATA_REPLACE
+ * Newly merged values replace values not yet delivered to the handler.
+ * Zero suppresses delivery. The unused handle and mask must both be zero.
+ */
+#define DISPATCH_SOURCE_TYPE_DATA_REPLACE (&_dispatch_source_type_data_replace)
+#if defined(__MAC_10_13) && defined(__IPHONE_11_0)
+__OSX_AVAILABLE_STARTING(__MAC_10_13,__IPHONE_11_0)
+#endif
+DISPATCH_SOURCE_TYPE_DECL(data_replace);
+
+/*!
  * @const DISPATCH_SOURCE_TYPE_MACH_SEND
+
  * @discussion A dispatch source that monitors a Mach port for dead name
  * notifications (send right no longer has any corresponding receive right).
  * The handle is a Mach port with a send or send-once right (mach_port_t).
