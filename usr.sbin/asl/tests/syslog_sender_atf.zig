@@ -104,9 +104,6 @@ fn flood(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const child = c.fork();
     need(child >= 0, "fork cached client");
     if (child == 0) {
-        _ = c.alarm(20);
-        _ = c.close(readiness[0]);
-        _ = c.close(release_pipe[1]);
         var name: [64]u8 = undefined;
         const child_tag = std.fmt.bufPrintZ(&name, "op956-child-{d}", .{c.getpid()}) catch unreachable;
         c.openlog(child_tag, c.LOG_PID, c.LOG_USER);
@@ -321,8 +318,8 @@ fn fallback(_: [*c]const c.atf_tc_t) callconv(.c) void {
     _ = c.fflush(null);
     need(stored + dropped == 100, "fallback stored plus reported equals sent exactly");
     need(status() == dropped, "no second loss report");
-    for (readiness) |fd| _ = c.close(fd);
-    for (release_pipe) |fd| _ = c.close(fd);
+    _ = c.close(readiness[0]);
+    _ = c.close(release_pipe[1]);
 }
 extern fn __libc_asl_send([*:0]const u8) c_int;
 fn bounded(_: [*c]const c.atf_tc_t) callconv(.c) void {
