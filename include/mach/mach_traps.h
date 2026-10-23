@@ -1,5 +1,7 @@
 #ifndef _MACH_MACH_TRAPS_H_
 #define _MACH_MACH_TRAPS_H_
+#include <sys/cdefs.h>
+#include <mach/mach_types.h>
 #include <sys/mach/mach_traps.h>
 
 kern_return_t mach_port_allocate(

@@ -21,9 +21,7 @@
 #ifndef __OS_OBJECT__
 #define __OS_OBJECT__
 
-#ifdef __APPLE__
 #include <Availability.h>
-#endif
 #include <os/base.h>
 
 /*!

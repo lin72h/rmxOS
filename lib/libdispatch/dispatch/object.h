@@ -141,7 +141,9 @@ typedef union {
  * Instead, the block literal must be copied to the heap with the Block_copy()
  * function or by sending it a -[copy] message.
  */
+#ifdef __BLOCKS__
 typedef void (^dispatch_block_t)(void);
+#endif
 
 __BEGIN_DECLS
 
@@ -323,7 +325,7 @@ DISPATCH_UNAVAILABLE
 DISPATCH_EXPORT DISPATCH_NONNULL1 DISPATCH_NOTHROW
 long
 dispatch_wait(void *object, dispatch_time_t timeout);
-#if __has_extension(c_generic_selections)
+#if defined(__BLOCKS__) && __has_extension(c_generic_selections)
 #define dispatch_wait(object, timeout) \
 		_Generic((object), \
 			dispatch_block_t:dispatch_block_wait, \
@@ -356,12 +358,14 @@ dispatch_wait(void *object, dispatch_time_t timeout);
  * @param notification_block
  * The block to submit when the observed object completes.
  */
+#ifdef __BLOCKS__
 DISPATCH_UNAVAILABLE
 DISPATCH_EXPORT DISPATCH_NONNULL_ALL DISPATCH_NOTHROW
 void
 dispatch_notify(void *object, dispatch_object_t queue,
 		dispatch_block_t notification_block);
-#if __has_extension(c_generic_selections)
+#endif /* __BLOCKS__ */
+#if defined(__BLOCKS__) && __has_extension(c_generic_selections)
 #define dispatch_notify(object, queue, notification_block) \
 		_Generic((object), \
 			dispatch_block_t:dispatch_block_notify, \
@@ -389,7 +393,7 @@ DISPATCH_UNAVAILABLE
 DISPATCH_EXPORT DISPATCH_NONNULL_ALL DISPATCH_NOTHROW
 void
 dispatch_cancel(void *object);
-#if __has_extension(c_generic_selections)
+#if defined(__BLOCKS__) && __has_extension(c_generic_selections)
 #define dispatch_cancel(object) \
 		_Generic((object), \
 			dispatch_block_t:dispatch_block_cancel, \
@@ -421,7 +425,7 @@ DISPATCH_EXPORT DISPATCH_NONNULL_ALL DISPATCH_WARN_RESULT DISPATCH_PURE
 DISPATCH_NOTHROW
 long
 dispatch_testcancel(void *object);
-#if __has_extension(c_generic_selections)
+#if defined(__BLOCKS__) && __has_extension(c_generic_selections)
 #define dispatch_testcancel(object) \
 		_Generic((object), \
 			dispatch_block_t:dispatch_block_testcancel, \

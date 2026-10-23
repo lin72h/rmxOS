@@ -7,7 +7,11 @@
 #include <dispatch/dispatch.h>
 
 #include <sys/mman.h>
+#ifdef __FreeBSD__
+#include <apple/uuid/uuid.h>
+#else
 #include <uuid/uuid.h>
+#endif
 #include <bsm/audit.h>
 #include <stdarg.h>
 #include <stdbool.h>

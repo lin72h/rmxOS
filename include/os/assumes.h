@@ -28,8 +28,11 @@
 __BEGIN_DECLS
 
 #include <Availability.h>
+#include <os/base.h>
+#ifdef __APPLE__
 #include <TargetConditionals.h>
 #include <sys/proc_info.h>
+#endif
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdarg.h>

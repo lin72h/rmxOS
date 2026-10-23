@@ -36,7 +36,11 @@
 #define _UUID_UUID_H
 
 #include <sys/_types.h>
+#ifdef __FreeBSD__
+#include <apple/sys/_types/_uuid_t.h>
+#else
 #include <sys/_types/_uuid_t.h>
+#endif
 
 #ifndef _UUID_STRING_T
 #define _UUID_STRING_T

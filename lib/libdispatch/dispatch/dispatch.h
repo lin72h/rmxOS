@@ -21,8 +21,8 @@
 #ifndef __DISPATCH_PUBLIC__
 #define __DISPATCH_PUBLIC__
 
-#ifdef __APPLE__
 #include <Availability.h>
+#ifdef __APPLE__
 #include <TargetConditionals.h>
 #endif
 #include <sys/cdefs.h>

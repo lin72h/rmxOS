@@ -28,7 +28,7 @@
 #ifndef _LIBC_CRASHREPORTERCLIENT_H
 #define _LIBC_CRASHREPORTERCLIENT_H
 
-#ifdef LIBC_NO_LIBCRASHREPORTERCLIENT
+#if defined(LIBC_NO_LIBCRASHREPORTERCLIENT) || defined(__FreeBSD__)
 
 /* Fake the CrashReporterClient API */
 #define CRGetCrashLogMessage() 0
