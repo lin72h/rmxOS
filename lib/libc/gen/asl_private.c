@@ -190,7 +190,7 @@ __libc_asl_record(const char *sender, int pid, int priority,
 	if (fp == NULL) return (NULL);
 	field(fp, "Sender", sender);
 	fprintf(fp, "[Level %d] [Facility %s] [PID %d] [Time %jd] "
-	    "[TimeNsec %ld] ", LOG_PRI(priority),
+	    "[TimeNanoSec %ld] ", LOG_PRI(priority),
 	    facility < sizeof(facilities) / sizeof(*facilities) ? facilities[facility] : "user",
 	    pid, (intmax_t)time->tv_sec, time->tv_usec * 1000);
 	field(fp, "Host", host);

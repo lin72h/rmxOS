@@ -64,7 +64,7 @@ test "ASL formatter round trips delimiters, identity and native loss metadata" {
     defer free(raw);
     const msg = asl_msg_from_string(raw) orelse return error.Parse;
     defer asl_msg_release(msg);
-    for ([_][2][*:0]const u8{ .{ "Sender", "sender[child]" }, .{ "Message", "brackets ] [ slash \\ and\nnewline" }, .{ "Facility", "user" }, .{ "TimeNsec", "123456000" }, .{ "com.rmxos.syslog.sender_dropped", "7" } }) |pair| {
+    for ([_][2][*:0]const u8{ .{ "Sender", "sender[child]" }, .{ "Message", "brackets ] [ slash \\ and\nnewline" }, .{ "Facility", "user" }, .{ "TimeNanoSec", "123456000" }, .{ "com.rmxos.syslog.sender_dropped", "7" } }) |pair| {
         try std.testing.expectEqualStrings(std.mem.span(pair[1]), std.mem.span(asl_msg_get_val_for_key(msg, pair[0]).?));
     }
     try std.testing.expect(asl_msg_get_val_for_key(msg, "RFC5424.Timestamp") == null);
