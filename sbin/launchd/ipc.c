@@ -52,6 +52,7 @@
 #include "launchd.h"
 #include "runtime.h"
 #include "core.h"
+#include "ipc_job_action.h"
 
 extern char **environ;
 
@@ -405,22 +406,15 @@ ipc_readmsg2(launch_data_t data, const char *cmd, void *context)
 			}
 		} else {
 			if (!strcmp(cmd, LAUNCH_KEY_STARTJOB)) {
-				if ((j = job_find(NULL, launch_data_get_string(data))) != NULL) {
-					errno = job_dispatch(j, true) ? 0 : errno;
-				}
-				resp = launch_data_new_errno(errno);
+				j = job_find(NULL, launch_data_get_string(data));
+				resp = launch_data_new_errno(j == NULL ? ESRCH :
+				    (job_dispatch(j, true) != NULL ? 0 : EIO));
 			} else if (!strcmp(cmd, LAUNCH_KEY_STOPJOB)) {
-				if ((j = job_find(NULL, launch_data_get_string(data))) != NULL) {
-					errno = 0;
-					job_stop(j);
-				}
-				resp = launch_data_new_errno(errno);
+				j = job_find(NULL, launch_data_get_string(data));
+				resp = launch_data_new_errno(ipc_job_action(j, job_stop));
 			} else if (!strcmp(cmd, LAUNCH_KEY_REMOVEJOB)) {
-				if ((j = job_find(NULL, launch_data_get_string(data))) != NULL) {
-					errno = 0;
-					job_remove(j);
-				}
-				resp = launch_data_new_errno(errno);
+				j = job_find(NULL, launch_data_get_string(data));
+				resp = launch_data_new_errno(ipc_job_action(j, job_remove));
 			} else if (!strcmp(cmd, LAUNCH_KEY_SUBMITJOB)) {
 				if (launch_data_get_type(data) == LAUNCH_DATA_ARRAY) {
 					resp = job_import_bulk(data);
@@ -440,7 +434,7 @@ ipc_readmsg2(launch_data_t data, const char *cmd, void *context)
 				resp = adjust_rlimits(data);
 			} else if (!strcmp(cmd, LAUNCH_KEY_GETJOB)) {
 				if ((j = job_find(NULL, launch_data_get_string(data))) == NULL) {
-					resp = launch_data_new_errno(errno);
+					resp = launch_data_new_errno(ESRCH);
 				} else {
 					resp = job_export(j);
 					ipc_revoke_fds(resp);
@@ -530,22 +524,15 @@ ipc_process_command(launch_data_t data, const char *cmd, void *context)
 			}
 		} else {
 			if (!strcmp(cmd, LAUNCH_KEY_STARTJOB)) {
-				if ((j = job_find(NULL, launch_data_get_string(data))) != NULL) {
-					errno = job_dispatch(j, true) ? 0 : errno;
-				}
-				resp = launch_data_new_errno(errno);
+				j = job_find(NULL, launch_data_get_string(data));
+				resp = launch_data_new_errno(j == NULL ? ESRCH :
+				    (job_dispatch(j, true) != NULL ? 0 : EIO));
 			} else if (!strcmp(cmd, LAUNCH_KEY_STOPJOB)) {
-				if ((j = job_find(NULL, launch_data_get_string(data))) != NULL) {
-					errno = 0;
-					job_stop(j);
-				}
-				resp = launch_data_new_errno(errno);
+				j = job_find(NULL, launch_data_get_string(data));
+				resp = launch_data_new_errno(ipc_job_action(j, job_stop));
 			} else if (!strcmp(cmd, LAUNCH_KEY_REMOVEJOB)) {
-				if ((j = job_find(NULL, launch_data_get_string(data))) != NULL) {
-					errno = 0;
-					job_remove(j);
-				}
-				resp = launch_data_new_errno(errno);
+				j = job_find(NULL, launch_data_get_string(data));
+				resp = launch_data_new_errno(ipc_job_action(j, job_remove));
 			} else if (!strcmp(cmd, LAUNCH_KEY_SUBMITJOB)) {
 				if (launch_data_get_type(data) == LAUNCH_DATA_ARRAY) {
 					resp = job_import_bulk(data);
@@ -565,7 +552,7 @@ ipc_process_command(launch_data_t data, const char *cmd, void *context)
 				resp = adjust_rlimits(data);
 			} else if (!strcmp(cmd, LAUNCH_KEY_GETJOB)) {
 				if ((j = job_find(NULL, launch_data_get_string(data))) == NULL) {
-					resp = launch_data_new_errno(errno);
+					resp = launch_data_new_errno(ESRCH);
 				} else {
 					resp = job_export(j);
 					ipc_revoke_fds(resp);
