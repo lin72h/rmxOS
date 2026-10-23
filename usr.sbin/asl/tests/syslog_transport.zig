@@ -9,8 +9,13 @@ const c = @cImport({
     @cInclude("syslog.h");
     @cInclude("dlfcn.h");
 });
-extern fn task_self_trap() c_uint;
-extern fn mach_reply_port() c_uint;
+const Port = *const fn () callconv(.c) c_uint;
+pub export fn task_self_trap() c_uint {
+    return if (mock) 16 else real(Port, "task_self_trap")();
+}
+pub export fn mach_reply_port() c_uint {
+    return if (mock) 17 else real(Port, "mach_reply_port")();
+}
 extern fn _kernelrpc_mach_port_deallocate_trap(c_uint, c_uint) c_int;
 pub export fn rmx_observe_task() c_uint {
     return if (mock) 16 else task_self_trap();
@@ -68,6 +73,8 @@ var before_mach: usize = 0;
 var before_socket: usize = 0;
 var request_id: c_int = 0;
 var mock = false;
+var use_installed = false;
+var receive_failures: usize = 0;
 var mock_id: c_int = 0;
 pub export fn rmx_observe_trap(p: *c.mach_msg_header_t, options: c_uint, send_size: c_uint, recv_size: c_uint, recv_name: c_uint, timeout: c_uint, notify: c_uint) c_int {
     if (options & c.MACH_SEND_MSG != 0) request_id = p.msgh_id;
@@ -98,7 +105,7 @@ pub fn record(priority: c_int, text: [*:0]const u8) void {
     before_mach = mach_ok;
     before_socket = socket_ok;
     active = true;
-    if (mock) rmx_observed_syslog(priority, "%s", text) else c.syslog(priority, "%s", text);
+    if (mock and !use_installed) rmx_observed_syslog(priority, "%s", text) else c.syslog(priority, "%s", text);
     active = false;
     const m = mach_ok - before_mach;
     const s = socket_ok - before_socket;
@@ -113,6 +120,7 @@ fn mockTrap(p: *c.mach_msg_header_t, options: c_uint) c_int {
         mock_id = p.msgh_id;
     } else {
         _ = mock_id;
+        receive_failures += 1;
         return c.MACH_RCV_INVALID_NAME;
     }
     return 0;
@@ -126,4 +134,23 @@ test "a receive failure is visible and routes the same production record to the 
     try std.testing.expectEqual(@as(usize, 1), t[1]);
     try std.testing.expectEqual(@as(usize, 0), t[2]);
     rmx_observed_closelog();
+}
+
+test "the installed libc enters the observed Mach client before fallback" {
+    mock = true;
+    use_installed = true;
+    const before = receive_failures;
+    c.openlog("op982-installed-host", c.LOG_PID, c.LOG_USER);
+    record(c.LOG_NOTICE, "actual libc mock transport");
+    try std.testing.expectEqual(before + 1, receive_failures);
+    c.closelog();
+}
+pub export fn __sys_task_self_trap() c_uint {
+    return task_self_trap();
+}
+pub export fn __sys_mach_reply_port() c_uint {
+    return mach_reply_port();
+}
+pub export fn __sys_mach_msg_trap(p: *c.mach_msg_header_t, o: c_uint, s: c_uint, r: c_uint, n: c_uint, t: c_uint, x: c_uint) c_int {
+    return mach_msg_trap(p, o, s, r, n, t, x);
 }

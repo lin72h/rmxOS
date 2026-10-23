@@ -1,9 +1,9 @@
 /* ABI projection only; assertions and mocked trap behavior live in Zig. */
-#define mach_msg_trap rmx_mach_msg_trap
-#define mach_reply_port rmx_reply_port
-#define task_self_trap rmx_task_self
-#define _kernelrpc_mach_port_deallocate_trap rmx_port_deallocate
-#define _kernelrpc_mach_port_destroy_trap rmx_port_destroy
+#define __sys_mach_msg_trap rmx_mach_msg_trap
+#define __sys_mach_reply_port rmx_reply_port
+#define __sys_task_self_trap rmx_task_self
+#define __sys__kernelrpc_mach_port_deallocate_trap rmx_port_deallocate
+#define __sys__kernelrpc_mach_port_destroy_trap rmx_port_destroy
 #ifndef RMX_LIBC_ASL_SOURCE
 #define RMX_LIBC_ASL_SOURCE "../../../lib/libc/gen/asl_private.c"
 #endif

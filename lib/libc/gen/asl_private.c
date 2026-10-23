@@ -11,7 +11,9 @@
 #include <inttypes.h>
 #include "asl_private.h"
 
-/* libsys traps; deliberately avoid the libmach client/runtime headers. */
+/* Use libsys's exported syscall entry points. The public Mach names are
+ * not in libc's symbol map: its dynamic syscall objects contain empty stubs,
+ * so those names bind locally instead of passing through the libsys filter. */
 extern mach_port_t task_self_trap(void);
 extern mach_port_t mach_reply_port(void);
 extern int _kernelrpc_mach_port_deallocate_trap(mach_port_t, mach_port_t);

@@ -6,10 +6,10 @@
 extern mach_msg_return_t rmx_observe_trap(mach_msg_header_t *, mach_msg_option_t,
     mach_msg_size_t, mach_msg_size_t, mach_port_t, mach_msg_timeout_t, mach_port_t);
 extern ssize_t rmx_observe_send(int, const void *, size_t, int);
-#define task_self_trap rmx_observe_task
-#define mach_reply_port rmx_observe_reply
-#define _kernelrpc_mach_port_deallocate_trap rmx_observe_deallocate
-#define mach_msg_trap rmx_observe_trap
+#define __sys_task_self_trap rmx_observe_task
+#define __sys_mach_reply_port rmx_observe_reply
+#define __sys__kernelrpc_mach_port_deallocate_trap rmx_observe_deallocate
+#define __sys_mach_msg_trap rmx_observe_trap
 #define __libc_asl_send rmx_observed_asl_send
 #define __libc_asl_record rmx_observed_asl_record
 #ifndef RMX_LIBC_ASL_SOURCE
