@@ -384,8 +384,10 @@ fn bounded(_: [*c]const c.atf_tc_t) callconv(.c) void {
     });
     var poll = Poll.struct_pollfd{ .fd = ready[0], .events = Poll.POLLIN, .revents = 0 };
     need(Poll.poll(&poll, 1, 2500) == 1 and c.read(ready[0], &byte, 1) == 1, "full-queue syslog returns before receiver resumes");
-    command("/bin/launchctl", "unload", recovery.plist);
+    // The full-queue measurement is complete. Unload now waits for exit,
+    // so resume the receiver before asking launchd to remove it.
     _ = c.kill(old, c.SIGCONT);
+    command("/bin/launchctl", "unload", recovery.plist);
     for (0..100) |_| {
         if (c.kill(old, 0) != 0) break;
         _ = c.usleep(20000);
