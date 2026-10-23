@@ -269,7 +269,6 @@ identifies this report; the count is cleared only after the report is sent.
 The report uses application name
 .Li syslog
 and the sending process's process ID.
-The socket send buffer is raised to 256 KB when possible to absorb bursts.
 A fork child starts with a zero count.
 Counts saturate at the largest unsigned 64-bit value.
 A process that exits before a later successful report cannot report its losses.

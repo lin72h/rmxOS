@@ -420,9 +420,8 @@ connectlog(void)
 			return;
 		if (_getsockopt(LogFile, SOL_SOCKET, SO_SNDBUF, &len,
 		    &(socklen_t){sizeof(len)}) == 0) {
-			/* Connected local datagrams queue on this send buffer. */
-			if (len < 256 * 1024) {
-				len = 256 * 1024;
+			if (len < MAXLINE) {
+				len = MAXLINE;
 				(void)_setsockopt(LogFile, SOL_SOCKET, SO_SNDBUF,
 				    &len, sizeof(len));
 			}
