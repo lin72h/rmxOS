@@ -112,7 +112,11 @@ fn flood(_: [*c]const c.atf_tc_t) callconv(.c) void {
         _ = c.usleep(20000);
     }
     need(child_count == 1, "fork child record stored exactly once");
+    const final_wall = now(c.CLOCK_MONOTONIC);
+    const final_cpu = now(c.CLOCK_THREAD_CPUTIME_ID);
     c.syslog(c.LOG_NOTICE, "op956-numbered-10000");
+    wall += now(c.CLOCK_MONOTONIC) - final_wall;
+    cpu += now(c.CLOCK_THREAD_CPUTIME_ID) - final_cpu;
     _ = c.printf("op956_sender sent=10001 send_wall_ns=%lld send_cpu_ns=%lld blocked_estimate_ns=%lld\n", @as(c_longlong, wall), @as(c_longlong, cpu), @as(c_longlong, @max(0, wall - cpu)));
     _ = c.fflush(null);
     phase("status_after", began);
@@ -157,8 +161,16 @@ fn command(program: [*:0]const u8, verb: [*:0]const u8, path: [*:0]const u8) voi
 fn fallback(_: [*c]const c.atf_tc_t) callconv(.c) void {
     c.openlog("op956-fallback", c.LOG_PID, c.LOG_USER);
     c.syslog(c.LOG_NOTICE, "prime service cache");
+    var old_pid: c_int = 0;
+    const pidfile = c.fopen("/var/run/syslog.pid", "r") orelse @panic("pidfile");
+    _ = c.fscanf(pidfile, "%d", &old_pid);
+    _ = c.fclose(pidfile);
     command("/bin/launchctl", "unload", "/etc/launchd.d/com.apple.syslogd.plist");
-    _ = c.sleep(1);
+    for (0..100) |_| {
+        if (c.kill(old_pid, 0) != 0) break;
+        _ = c.usleep(100000);
+    }
+    need(c.kill(old_pid, 0) != 0, "asld exited before unavailable-service sends");
     for (0..100) |i| c.syslog(c.LOG_NOTICE, "fallback-numbered-%zu", i);
     command("/bin/launchctl", "load", "/etc/launchd.d/com.apple.syslogd.plist");
     command("/usr/sbin/service", "syslogd", "onestart");
