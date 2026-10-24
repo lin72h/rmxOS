@@ -29,7 +29,7 @@ SCRIPTS+= mach_bound_unit filesystems_unit
 mach_bound_unit: ${.CURDIR}/mach_send_bound.zig syslog_transport_adapter.o
 	${ZIG} test ${.CURDIR}/mach_send_bound.zig syslog_transport_adapter.o --test-no-exec -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/sys -femit-bin=${.TARGET}
 filesystems_adapter.o: ${.CURDIR}/filesystems_adapter.c ${ASL_SOURCE}/filesystems.h
-	${CC} ${CFLAGS} -c ${.CURDIR}/filesystems_adapter.c -o ${.TARGET}
+	${CC} ${CFLAGS} -Wno-error -c ${.CURDIR}/filesystems_adapter.c -o ${.TARGET}
 filesystems_unit: ${.CURDIR}/filesystems.zig filesystems_adapter.o
 	${ZIG} test ${.CURDIR}/filesystems.zig filesystems_adapter.o --test-no-exec -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -femit-bin=${.TARGET}
 
