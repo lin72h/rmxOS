@@ -23,6 +23,7 @@ SUBDIR=	\
 	cron \
 	ctl \
 	devd \
+	developer-tools \
 	devmatch \
 	dhclient \
 	fetch \

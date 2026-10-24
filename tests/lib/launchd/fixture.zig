@@ -3,6 +3,14 @@
 const std = @import("std");
 const p = @import("protocol.zig");
 const c = @cImport({
+    // Zig 0.16 cannot translate the unused BSD bintime_shift inline.
+    @cInclude("sys/cdefs.h");
+    @cInclude("sys/types.h");
+    @cUndef("__BSD_VISIBLE");
+    @cDefine("__BSD_VISIBLE", "0");
+    @cInclude("sys/time.h");
+    @cUndef("__BSD_VISIBLE");
+    @cDefine("__BSD_VISIBLE", "1");
     @cInclude("sys/types.h");
     @cInclude("sys/socket.h");
     @cInclude("sys/un.h");
@@ -335,7 +343,7 @@ fn serve(_: ?*anyopaque, _: *c.struct_kevent) callconv(.c) void {
     if (c.recv(fd, &q, @sizeOf(p.Request), 0) != @sizeOf(p.Request) or q.magic != 0x48400001) return;
     fixture_error = 0;
     var reply = p.Reply{ .operation = q.operation, .pid = @intCast(c.getpid()) };
-    const op = std.meta.intToEnum(p.Operation, q.operation) catch return;
+    const op = std.enums.fromInt(p.Operation, q.operation) orelse return;
     switch (op) {
         .demand_removed => demand(&reply),
         .close_unregistered => closeUnregistered(&reply),

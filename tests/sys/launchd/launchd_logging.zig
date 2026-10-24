@@ -1,11 +1,21 @@
 // SPDX-License-Identifier: BSD-2-Clause
 const std = @import("std");
+// ATF callbacks have no process.Init; their file operations are synchronous.
+const io = std.Io.Threaded.global_single_threaded.io();
 const f = @import("job_fixture.zig");
 const recovery = @import("asld_recovery.zig");
 const scope = @import("log_store_scope.zig");
 const retained_records = @import("stopped_records.zig");
 extern fn _vproc_log(c_int, [*:0]const u8, ...) void;
 const c = @cImport({
+    // Zig 0.16 cannot translate the unused BSD bintime_shift inline.
+    @cInclude("sys/cdefs.h");
+    @cInclude("sys/types.h");
+    @cUndef("__BSD_VISIBLE");
+    @cDefine("__BSD_VISIBLE", "0");
+    @cInclude("sys/time.h");
+    @cUndef("__BSD_VISIBLE");
+    @cDefine("__BSD_VISIBLE", "1");
     @cInclude("atf-c.h");
     @cInclude("unistd.h");
     @cInclude("stdio.h");
@@ -316,7 +326,7 @@ fn stopped() void {
     need(f.run(&.{ "/bin/launchctl", "load", "/etc/launchd.d/com.apple.syslogd.plist" }) == 0, "start asld candidate job");
     var restarted: i32 = 0;
     for (0..100) |_| {
-        const raw = std.fs.cwd().readFileAlloc(a, "/var/run/syslog.pid", 64) catch "";
+        const raw = std.Io.Dir.cwd().readFileAlloc(io, "/var/run/syslog.pid", a, .limited(64)) catch "";
         restarted = std.fmt.parseInt(i32, std.mem.trim(u8, raw, " \r\n"), 10) catch 0;
         if (restarted > 1 and restarted != pid and c.kill(restarted, 0) == 0) break;
         _ = c.usleep(100000);
@@ -379,7 +389,7 @@ fn milliseconds() i64 {
 }
 fn churn() void {
     _ = c.alarm(1100);
-    const short = c.getenv("RMX_LOGGING_BOUNDED_CHURN") != null and c.getenv("RMX_LOGGING_BOUNDED_CHURN").?[0] != 0;
+    const short = c.getenv("RMX_LOGGING_BOUNDED_CHURN") != null and c.getenv("RMX_LOGGING_BOUNDED_CHURN")[0] != 0;
     const duration: i64 = if (short) 5000 else 900000;
     const interval: i64 = if (short) 1000 else 30000;
     const start = milliseconds();

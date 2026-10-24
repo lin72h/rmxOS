@@ -18,4 +18,11 @@ ZIG?= zig
 darwin_headers_test: ${.CURDIR}/darwin_headers.zig
 	${ZIG} build-exe ${.ALLSRC} -lc -femit-bin=${.TARGET}
 
+
+SCRIPTS+= developer_tools_test
+ZIG_SYSROOT?= ${SYSROOT}
+ATF_C_ARCHIVE?= ${OBJTOP}/lib/atf/libatf-c/libprivateatf-c.a
+developer_tools_test: ${.CURDIR}/developer_tools.zig
+	${ZIG} build-exe ${.ALLSRC} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}
+
 .include <bsd.test.mk>

@@ -2,6 +2,14 @@
 const std = @import("std");
 const iteration = @import("store_iteration.zig");
 const c = @cImport({
+    // Zig 0.16 cannot translate the unused BSD bintime_shift inline.
+    @cInclude("sys/cdefs.h");
+    @cInclude("sys/types.h");
+    @cUndef("__BSD_VISIBLE");
+    @cDefine("__BSD_VISIBLE", "0");
+    @cInclude("sys/time.h");
+    @cUndef("__BSD_VISIBLE");
+    @cDefine("__BSD_VISIBLE", "1");
     @cInclude("atf-c.h");
     @cInclude("sys/types.h");
     @cInclude("sys/socket.h");

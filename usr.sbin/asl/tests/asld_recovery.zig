@@ -1,7 +1,17 @@
 // SPDX-License-Identifier: BSD-2-Clause
 // Shared by destructive logging cases and their ATF cleanup processes.
 const std = @import("std");
+// ATF callbacks have no process.Init; their file operations are synchronous.
+const io = std.Io.Threaded.global_single_threaded.io();
 const c = @cImport({
+    // Zig 0.16 cannot translate the unused BSD bintime_shift inline.
+    @cInclude("sys/cdefs.h");
+    @cInclude("sys/types.h");
+    @cUndef("__BSD_VISIBLE");
+    @cDefine("__BSD_VISIBLE", "0");
+    @cInclude("sys/time.h");
+    @cUndef("__BSD_VISIBLE");
+    @cDefine("__BSD_VISIBLE", "1");
     @cInclude("unistd.h");
     @cInclude("sys/wait.h");
     @cInclude("signal.h");
@@ -32,7 +42,7 @@ pub fn runStatus(args: []const []const u8) i32 {
     return status;
 }
 pub fn pid() i32 {
-    const raw = std.fs.cwd().readFileAlloc(a, "/var/run/syslog.pid", 64) catch return 0;
+    const raw = std.Io.Dir.cwd().readFileAlloc(io, "/var/run/syslog.pid", a, .limited(64)) catch return 0;
     return std.fmt.parseInt(i32, std.mem.trim(u8, raw, " \r\n"), 10) catch 0;
 }
 pub fn stored(message: [:0]const u8) bool {
@@ -50,12 +60,12 @@ pub fn stored(message: [:0]const u8) bool {
     return c.asl_next(result) != null;
 }
 pub fn fileHas(message: []const u8) bool {
-    const raw = std.fs.cwd().readFileAlloc(a, "/var/log/messages", 32 * 1024 * 1024) catch return false;
+    const raw = std.Io.Dir.cwd().readFileAlloc(io, "/var/log/messages", a, .limited(32 * 1024 * 1024)) catch return false;
     defer a.free(raw);
     return std.mem.indexOf(u8, raw, message) != null;
 }
 pub fn health(label: []const u8) bool {
-    const message = std.fmt.allocPrintSentinel(a, "op021.health.{s}.{d}.{d}", .{ label, c.getpid(), std.time.nanoTimestamp() }, 0) catch unreachable;
+    const message = std.fmt.allocPrintSentinel(a, "op021.health.{s}.{d}.{d}", .{ label, c.getpid(), std.Io.Clock.real.now(io).nanoseconds }, 0) catch unreachable;
     if (!run(&.{ "/usr/bin/logger", "-p", "user.notice", message })) return false;
     for (0..100) |_| {
         if (stored(message) and fileHas(message)) {
@@ -184,16 +194,16 @@ pub fn snapshot(label: []const u8) i32 {
 }
 const saved_plist = "/tmp/op026-syslogd.original.plist";
 pub fn traceStartup() bool {
-    const raw = std.fs.cwd().readFileAlloc(a, plist, 32768) catch return false;
-    std.fs.cwd().writeFile(.{ .sub_path = saved_plist, .data = raw }) catch return false;
+    const raw = std.Io.Dir.cwd().readFileAlloc(io, plist, a, .limited(32768)) catch return false;
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = saved_plist, .data = raw }) catch return false;
     const traced = std.mem.replaceOwned(u8, a, raw, "<string>/usr/sbin/asld</string>", "<string>/usr/sbin/asld</string><string>-d</string><string>/var/log/asld.restart.debug</string>") catch return false;
-    std.fs.cwd().writeFile(.{ .sub_path = plist, .data = traced }) catch return false;
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = plist, .data = traced }) catch return false;
     return true;
 }
 pub fn restorePlist() bool {
-    const raw = std.fs.cwd().readFileAlloc(a, saved_plist, 32768) catch |err| return err == error.FileNotFound;
-    std.fs.cwd().writeFile(.{ .sub_path = plist, .data = raw }) catch return false;
-    std.fs.cwd().deleteFile(saved_plist) catch return false;
+    const raw = std.Io.Dir.cwd().readFileAlloc(io, saved_plist, a, .limited(32768)) catch |err| return err == error.FileNotFound;
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = plist, .data = raw }) catch return false;
+    std.Io.Dir.cwd().deleteFile(io, saved_plist) catch return false;
     return true;
 }
 pub fn stopTrace() void {

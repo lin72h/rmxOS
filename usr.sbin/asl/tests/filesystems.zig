@@ -1,6 +1,16 @@
 // SPDX-License-Identifier: BSD-2-Clause
 const std = @import("std");
+// ATF callbacks have no process.Init; their file operations are synchronous.
+const io = std.Io.Threaded.global_single_threaded.io();
 const c = @cImport({
+    // Zig 0.16 cannot translate the unused BSD bintime_shift inline.
+    @cInclude("sys/cdefs.h");
+    @cInclude("sys/types.h");
+    @cUndef("__BSD_VISIBLE");
+    @cDefine("__BSD_VISIBLE", "0");
+    @cInclude("sys/time.h");
+    @cUndef("__BSD_VISIBLE");
+    @cDefine("__BSD_VISIBLE", "1");
     @cInclude("sys/stat.h");
     @cInclude("sys/time.h");
     @cInclude("unistd.h");
@@ -36,9 +46,9 @@ test "filesystem gate survives boottime adjustment but rejects a prior boot iden
     defer a.free(marker);
     identity = try std.fmt.allocPrintSentinel(a, "/tmp/op021-fs-{d}.boot-id", .{c.getpid()}, 0);
     defer a.free(identity);
-    defer std.fs.cwd().deleteFile(marker) catch {};
-    defer std.fs.cwd().deleteFile(identity) catch {};
-    try std.fs.cwd().writeFile(.{ .sub_path = marker, .data = std.mem.asBytes(&boot), .flags = .{ .mode = 0o600 } });
+    defer std.Io.Dir.cwd().deleteFile(io, marker) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, identity) catch {};
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = marker, .data = std.mem.asBytes(&boot), .flags = .{ .permissions = .fromMode(0o600) } });
     try std.testing.expectEqual(@as(c_int, 0), rmx_fs_wait());
     boot.tv_usec = 1; // a clock correction changes kern.boottime, not the boot
     try std.testing.expectEqual(@as(c_int, 0), rmx_fs_wait());

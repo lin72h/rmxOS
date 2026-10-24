@@ -1,0 +1,6 @@
+comment = "Developer tool selection and launchers"
+
+desc = <<EOD
+This package provides xcrun, xcode-select and Swift launcher hard links.
+Developer tool implementations are supplied by a separately installed SDK.
+EOD

@@ -4,6 +4,7 @@
 
 /set type=dir uname=root gname=wheel mode=0755
 .
+    # xcrun, xcode-select and their launcher links use the shared bin directory.
     bin
     ..
     include                   tags=package=clibs-dev

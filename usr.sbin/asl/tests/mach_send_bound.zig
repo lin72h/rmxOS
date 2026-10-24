@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: BSD-2-Clause
 const std = @import("std");
 const c = @cImport({
+    // Zig 0.16 cannot translate the unused BSD bintime_shift inline.
+    @cInclude("sys/cdefs.h");
+    @cInclude("sys/types.h");
+    @cUndef("__BSD_VISIBLE");
+    @cDefine("__BSD_VISIBLE", "0");
+    @cInclude("sys/time.h");
+    @cUndef("__BSD_VISIBLE");
+    @cDefine("__BSD_VISIBLE", "1");
     @cInclude("sys/mach/message.h");
     @cInclude("sys/mach/ndr.h");
     @cInclude("unistd.h");

@@ -1,6 +1,16 @@
 // SPDX-License-Identifier: BSD-2-Clause
 const std = @import("std");
+// ATF callbacks have no process.Init; their file operations are synchronous.
+const io = std.Io.Threaded.global_single_threaded.io();
 const c = @cImport({
+    // Zig 0.16 cannot translate the unused BSD bintime_shift inline.
+    @cInclude("sys/cdefs.h");
+    @cInclude("sys/types.h");
+    @cUndef("__BSD_VISIBLE");
+    @cDefine("__BSD_VISIBLE", "0");
+    @cInclude("sys/time.h");
+    @cUndef("__BSD_VISIBLE");
+    @cDefine("__BSD_VISIBLE", "1");
     @cInclude("asl.h");
     @cInclude("stdlib.h");
     @cInclude("stdio.h");
@@ -14,7 +24,7 @@ pub fn run(backward: bool) !void {
     var path = "op856-iteration-XXXXXX".* ++ [_]u8{0};
     if (c.mkdtemp(@ptrCast(&path)) == null) return error.FixtureDirectory;
     const fixture = std.mem.sliceTo(&path, 0);
-    defer std.fs.cwd().deleteTree(fixture) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, fixture) catch {};
     var writer: ?*anyopaque = null;
     if (asl_store_open_write(@ptrCast(&path), &writer) != 0 or writer == null) return error.OpenWriter;
     var time: [32]u8 = undefined;

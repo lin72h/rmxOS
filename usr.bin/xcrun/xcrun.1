@@ -1,0 +1,70 @@
+.Dd October 24, 2026
+.Dt XCRUN 1
+.Os
+.Sh NAME
+.Nm xcrun
+.Nd locate and run selected developer tools
+.Sh SYNOPSIS
+.Nm
+.Op Fl -run
+.Ar tool
+.Op Ar argument ...
+.Nm
+.Fl -find
+.Ar tool
+.Nm
+.Fl -show-sdk-path
+.Nm
+.Fl -help
+.Sh DESCRIPTION
+.Nm
+locates tools in the selected developer directory's
+.Pa usr/bin
+and executes them with their arguments and environment unchanged.
+It does not search
+.Ev PATH .
+A tool name must be a basename other than
+.Ql .
+or
+.Ql .. ,
+and must not start with a dash.
+The tool must resolve to an executable regular file.
+.Pp
+A nonempty
+.Ev DEVELOPER_DIR
+selects the developer directory first.
+Otherwise the target of
+.Pa /var/db/xcode_select_link
+is used.
+Only an absent selection permits the default
+.Pa /Library/Developer/CommandLineTools .
+An invalid selection fails without falling through.
+.Pp
+.Fl -find
+prints the executable path without running it.
+.Fl -show-sdk-path
+prints
+.Pa /
+without reading a selection.
+.Fl -help
+prints usage.
+These queries accept no additional arguments.
+.Pp
+The hard links
+.Nm swift ,
+.Nm swiftc ,
+.Nm swift-build ,
+.Nm swift-test ,
+.Nm swift-run ,
+.Nm swift-package ,
+and
+.Nm sourcekit-lsp
+run the corresponding selected tool, forwarding every argument.
+.Sh EXIT STATUS
+Selection, lookup and execution errors return 1; syntax errors return 2.
+After execution, the selected tool controls the exit status.
+.Sh SEE ALSO
+.Xr xcode-select 1
+.Sh NOTES
+The source directory's README.md specifies the supported contract.
+Other Apple options, SDK discovery and toolchain selection are not implemented.

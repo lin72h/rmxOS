@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = std.Io.Threaded.global_single_threaded.io();
 const c = @cImport({
     @cInclude("stdlib.h");
     @cInclude("stdio.h");
@@ -13,7 +14,7 @@ extern fn rmx_default_size() usize;
 fn check(config: ?[:0]const u8, options: []const ?[*:0]const u8, path: []const u8, ttl: u32, size: usize, rules: u32) !void {
     var directory = "op904-config-XXXXXX".* ++ [_]u8{0};
     try std.testing.expect(c.mkdtemp(@ptrCast(&directory)) != null);
-    defer std.fs.cwd().deleteTree(std.mem.sliceTo(&directory, 0)) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, std.mem.sliceTo(&directory, 0)) catch {};
     var buffer: [256]u8 = undefined;
     const filename = try std.fmt.bufPrintZ(&buffer, "{s}/asl.conf", .{std.mem.sliceTo(&directory, 0)});
     if (config) |text| {

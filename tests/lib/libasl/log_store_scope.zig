@@ -1,7 +1,17 @@
 // Test-side ASL reads: current-case tail for live observations, current boot
 // for boot history. Never rerun an unbounded historical scan in a poll.
 const std = @import("std");
+// ATF callbacks have no process.Init; their file operations are synchronous.
+const io = std.Io.Threaded.global_single_threaded.io();
 const c = @cImport({
+    // Zig 0.16 cannot translate the unused BSD bintime_shift inline.
+    @cInclude("sys/cdefs.h");
+    @cInclude("sys/types.h");
+    @cUndef("__BSD_VISIBLE");
+    @cDefine("__BSD_VISIBLE", "0");
+    @cInclude("sys/time.h");
+    @cUndef("__BSD_VISIBLE");
+    @cDefine("__BSD_VISIBLE", "1");
     @cInclude("asl.h");
     @cInclude("stdlib.h");
     @cInclude("stdio.h");
@@ -93,7 +103,7 @@ extern fn asl_store_close(?*anyopaque) u32;
 test "old boot records are excluded and current duplicates remain visible" {
     var path = "op942-scope-XXXXXX".* ++ [_]u8{0};
     try std.testing.expect(c.mkdtemp(@ptrCast(&path)) != null);
-    defer std.fs.cwd().deleteTree(std.mem.sliceTo(&path, 0)) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, std.mem.sliceTo(&path, 0)) catch {};
     try std.testing.expectEqual(@as(c_int, 0), c.setenv("RMX_ASL_TEST_STORE", @ptrCast(&path), 1));
     defer _ = c.unsetenv("RMX_ASL_TEST_STORE");
     var writer: ?*anyopaque = null;

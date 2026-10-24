@@ -8,3 +8,4 @@ atf_test_program{name="stdckdint_test"}
 atf_test_program{name="sys_endian_test"}
 atf_test_program{name="sys_endian_endian_test"}
 plain_test_program{name="darwin_headers_test", required_programs="cc c++", timeout=120}
+atf_test_program{name="developer_tools_test"}

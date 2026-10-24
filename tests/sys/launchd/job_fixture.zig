@@ -1,7 +1,17 @@
 // Run a test under launchd when the interactive shell has no bootstrap port.
 const std = @import("std");
+// ATF callbacks have no process.Init; their file operations are synchronous.
+const io = std.Io.Threaded.global_single_threaded.io();
 pub const budget = @import("logging_budget.zig");
 const c = @cImport({
+    // Zig 0.16 cannot translate the unused BSD bintime_shift inline.
+    @cInclude("sys/cdefs.h");
+    @cInclude("sys/types.h");
+    @cUndef("__BSD_VISIBLE");
+    @cDefine("__BSD_VISIBLE", "0");
+    @cInclude("sys/time.h");
+    @cUndef("__BSD_VISIBLE");
+    @cDefine("__BSD_VISIBLE", "1");
     @cInclude("unistd.h");
     @cInclude("sys/wait.h");
     @cInclude("stdlib.h");
@@ -31,31 +41,31 @@ pub fn run(args: []const []const u8) i32 {
 pub fn enter(binary: []const u8, case_name: []const u8) bool {
     if (c.getenv("OP789_LAUNCHD_CHILD") != null) return true;
     const dir = std.fmt.allocPrint(a, "/tmp/op789-test-{d}", .{c.getpid()}) catch unreachable;
-    std.fs.cwd().makePath(dir) catch c.atf_tc_fail("fixture directory");
+    std.Io.Dir.cwd().createDirPath(io, dir) catch c.atf_tc_fail("fixture directory");
     const label = std.fmt.allocPrint(a, "com.rmxos.op789.runner.{d}", .{c.getpid()}) catch unreachable;
     const plist = std.fmt.allocPrint(a, "{s}/job.plist", .{dir}) catch unreachable;
     const result = std.fmt.allocPrint(a, "{s}/result", .{dir}) catch unreachable;
     const output = std.fmt.allocPrint(a, "{s}/stdout", .{dir}) catch unreachable;
     const text = std.fmt.allocPrint(a, "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>Label</key><string>{s}</string><key>ProgramArguments</key><array><string>{s}</string><string>-r</string><string>{s}</string><string>{s}</string></array><key>WorkingDirectory</key><string>{s}</string><key>StandardOutPath</key><string>{s}</string><key>StandardErrorPath</key><string>{s}/stderr</string><key>EnvironmentVariables</key><dict><key>OP789_LAUNCHD_CHILD</key><string>1</string><key>RMX_LOGGING_BOUNDED_CHURN</key><string>{s}</string></dict><key>RunAtLoad</key><true/></dict></plist>", .{ label, binary, result, case_name, dir, output, dir, if (c.getenv("RMX_LOGGING_BOUNDED_CHURN") != null) @as([]const u8, "1") else "" }) catch unreachable;
-    std.fs.cwd().writeFile(.{ .sub_path = plist, .data = text }) catch c.atf_tc_fail("fixture plist");
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = plist, .data = text }) catch c.atf_tc_fail("fixture plist");
     const state = std.fmt.allocPrint(a, "/tmp/op789-runner-{s}", .{case_name}) catch unreachable;
-    std.fs.cwd().writeFile(.{ .sub_path = state, .data = std.fmt.allocPrint(a, "{s}\n{s}\n", .{ label, dir }) catch unreachable }) catch c.atf_tc_fail("fixture state");
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = state, .data = std.fmt.allocPrint(a, "{s}\n{s}\n", .{ label, dir }) catch unreachable }) catch c.atf_tc_fail("fixture state");
     if (run(&.{ "/bin/launchctl", "load", plist }) != 0) c.atf_tc_fail("fixture load");
     defer {
         _ = run(&.{ "/bin/launchctl", "remove", label });
-        std.fs.cwd().deleteTree(dir) catch {};
-        std.fs.cwd().deleteFile(state) catch {};
+        std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+        std.Io.Dir.cwd().deleteFile(io, state) catch {};
     }
     var printed: usize = 0;
     const polls: usize = if (std.mem.eql(u8, case_name, "stopped")) @as(usize, stoppedLimits().parent_seconds) * 10 else if (std.mem.eql(u8, case_name, "churn")) 11500 else 2000;
     for (0..polls) |_| {
-        const progress = std.fs.cwd().readFileAlloc(a, output, 1048576) catch "";
+        const progress = std.Io.Dir.cwd().readFileAlloc(io, output, a, .limited(1048576)) catch "";
         if (progress.len > printed) {
             _ = c.printf("%.*s", @as(c_int, @intCast(progress.len - printed)), progress[printed..].ptr);
             _ = c.fflush(null);
             printed = progress.len;
         }
-        const bytes = std.fs.cwd().readFileAlloc(a, result, 4096) catch {
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, result, a, .limited(4096)) catch {
             _ = c.usleep(100000);
             continue;
         };
@@ -63,10 +73,10 @@ pub fn enter(binary: []const u8, case_name: []const u8) bool {
             _ = c.usleep(100000);
             continue;
         }
-        const observed = std.fs.cwd().readFileAlloc(a, output, 1048576) catch "";
+        const observed = std.Io.Dir.cwd().readFileAlloc(io, output, a, .limited(1048576)) catch "";
         if (observed.len > printed) _ = c.printf("%.*s", @as(c_int, @intCast(observed.len - printed)), observed[printed..].ptr);
         const stderr_path = std.fmt.allocPrint(a, "{s}/stderr", .{dir}) catch unreachable;
-        const diagnostic = std.fs.cwd().readFileAlloc(a, stderr_path, 1048576) catch "";
+        const diagnostic = std.Io.Dir.cwd().readFileAlloc(io, stderr_path, a, .limited(1048576)) catch "";
         if (diagnostic.len > 0) _ = c.printf("launchd_fixture_stderr %.*s\n", @as(c_int, @intCast(diagnostic.len)), diagnostic.ptr);
         _ = c.printf("launchd_fixture case=%s result=%.*s", z(case_name).ptr, @as(c_int, @intCast(bytes.len)), bytes.ptr);
         if (!std.mem.eql(u8, bytes, "passed\n")) c.atf_tc_fail("launchd child case failed");
@@ -100,7 +110,7 @@ pub fn capture(args: []const []const u8) []const u8 {
 
 pub fn cleanup(case_name: []const u8) void {
     const state = std.fmt.allocPrint(a, "/tmp/op789-runner-{s}", .{case_name}) catch unreachable;
-    const bytes = std.fs.cwd().readFileAlloc(a, state, 4096) catch return;
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, state, a, .limited(4096)) catch return;
     var lines = std.mem.splitScalar(u8, bytes, '\n');
     const label = lines.next() orelse return;
     const dir = lines.next() orelse return;
@@ -110,6 +120,6 @@ pub fn cleanup(case_name: []const u8) void {
         c._exit(1);
     }
     _ = run(&.{ "/bin/launchctl", "remove", label });
-    std.fs.cwd().deleteTree(dir) catch {};
-    std.fs.cwd().deleteFile(state) catch {};
+    std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+    std.Io.Dir.cwd().deleteFile(io, state) catch {};
 }

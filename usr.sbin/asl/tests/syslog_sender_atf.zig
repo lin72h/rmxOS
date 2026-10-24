@@ -1,9 +1,19 @@
 const std = @import("std");
+// ATF callbacks have no process.Init; their file operations are synchronous.
+const io = std.Io.Threaded.global_single_threaded.io();
 const recovery = @import("asld_recovery.zig");
 const timing = @import("syslog_timing.zig");
 const transport = @import("syslog_transport.zig");
 const reports = @import("syslog_reports.zig");
 const c = @cImport({
+    // Zig 0.16 cannot translate the unused BSD bintime_shift inline.
+    @cInclude("sys/cdefs.h");
+    @cInclude("sys/types.h");
+    @cUndef("__BSD_VISIBLE");
+    @cDefine("__BSD_VISIBLE", "0");
+    @cInclude("sys/time.h");
+    @cUndef("__BSD_VISIBLE");
+    @cDefine("__BSD_VISIBLE", "1");
     @cInclude("atf-c.h");
     @cInclude("asl.h");
     @cInclude("stdio.h");
@@ -607,7 +617,7 @@ fn cleanupPrivate() void {
             _ = c.usleep(10000);
         }
     }
-    if (std.mem.startsWith(u8, std.mem.span(@as([*:0]const u8, @ptrCast(&root))), "/tmp/op045-shed.")) std.fs.cwd().deleteTree(std.mem.span(@as([*:0]const u8, @ptrCast(&root)))) catch {};
+    if (std.mem.startsWith(u8, std.mem.span(@as([*:0]const u8, @ptrCast(&root))), "/tmp/op045-shed.")) std.Io.Dir.cwd().deleteTree(io, std.mem.span(@as([*:0]const u8, @ptrCast(&root)))) catch {};
     _ = c.unlink(private_pidfile);
 }
 fn numeric(m: c.asl_object_t, key: [*:0]const u8) u64 {

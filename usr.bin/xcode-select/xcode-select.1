@@ -1,0 +1,51 @@
+.Dd October 24, 2026
+.Dt XCODE-SELECT 1
+.Os
+.Sh NAME
+.Nm xcode-select
+.Nd query and select a developer directory
+.Sh SYNOPSIS
+.Nm
+.Fl p | -print-path
+.Nm
+.Fl s | -switch
+.Ar directory
+.Nm
+.Fl r | -reset
+.Nm
+.Fl h | -help
+.Sh DESCRIPTION
+.Fl p
+prints the effective absolute developer directory using the same precedence
+and validation as
+.Xr xcrun 1 .
+Queries never modify the selection.
+.Pp
+.Fl s
+requires an absolute existing directory and atomically replaces
+.Pa /var/db/xcode_select_link
+with a symlink to it.
+It ignores
+.Ev DEVELOPER_DIR
+when storing the selection.
+The parent directory must exist and permit writes.
+A dangling selection symlink may be replaced;
+a regular file or directory is rejected and preserved.
+.Pp
+.Fl r
+removes only the selection symlink.
+An absent selector succeeds; a regular file or directory fails unchanged.
+Without
+.Ev DEVELOPER_DIR ,
+the next query validates the default
+.Pa /Library/Developer/CommandLineTools .
+.Pp
+.Fl h
+prints usage.
+.Sh EXIT STATUS
+Success returns 0, operational errors return 1 and syntax errors return 2.
+.Sh SEE ALSO
+.Xr xcrun 1
+.Sh NOTES
+The source directory's README.md specifies the supported contract.
+Installation, downloading and other Apple options are not implemented.

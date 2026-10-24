@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = std.Io.Threaded.global_single_threaded.io();
 const c = @cImport({
     @cInclude("stdlib.h");
     @cInclude("time.h");
@@ -39,7 +40,7 @@ pub export fn rmx_test_send(_: O, message: O) c_int {
 fn check(selected: u32, expect_ok: bool) !void {
     var path = "op856-summary-XXXXXX".* ++ [_]u8{0};
     try std.testing.expect(c.mkdtemp(@ptrCast(&path)) != null);
-    defer std.fs.cwd().deleteTree(std.mem.sliceTo(&path, 0)) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, std.mem.sliceTo(&path, 0)) catch {};
     fixture = @ptrCast(&path);
     mode = selected;
     if (mode == 2) {
@@ -74,7 +75,7 @@ fn micros() u64 {
 test "a summary delivered last is found beyond a forward scan batch" {
     var path = "op888-large-summary-XXXXXX".* ++ [_]u8{0};
     try std.testing.expect(c.mkdtemp(@ptrCast(&path)) != null);
-    defer std.fs.cwd().deleteTree(std.mem.sliceTo(&path, 0)) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, std.mem.sliceTo(&path, 0)) catch {};
     fixture = @ptrCast(&path);
     mode = 1;
     const filler = asl_msg_new(0);
