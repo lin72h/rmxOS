@@ -765,6 +765,7 @@ fn clockStep(_: [*c]const c.atf_tc_t) callconv(.c) void {
 }
 
 fn bounds(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    need(recovery.run(&.{"/usr/tests/usr.sbin/asl/syslog_transport_unit"}), "installed libc transport units");
     need(recovery.run(&.{"/usr/tests/sys/launchd/unload_completion_unit"}), "unload completion RPC");
     need(recovery.run(&.{"/usr/tests/usr.sbin/asl/cleanup_status_unit"}), "cleanup exit status");
     need(recovery.run(&.{"/usr/tests/usr.sbin/asl/mach_bound_unit"}), "Mach waiting and retry controls");

@@ -37,4 +37,9 @@ SCRIPTS+= cleanup_status_unit
 cleanup_status_unit: ${.CURDIR}/cleanup_status.zig ${.CURDIR}/asld_recovery.zig
 	${ZIG} test ${.CURDIR}/cleanup_status.zig --test-no-exec -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/lib/libasl -I${SRCTOP}/lib/liblaunch -I${SRCTOP}/lib/libxpc -I${SRCTOP}/include/apple -I${SRCTOP}/include -I${SRCTOP}/sys -femit-bin=${.TARGET}
 
+
+SCRIPTS+= syslog_transport_unit
+syslog_transport_unit: ${.CURDIR}/syslog_transport.zig syslog_transport_sender.o syslog_transport_adapter.o
+	${ZIG} test ${.CURDIR}/syslog_transport.zig syslog_transport_sender.o syslog_transport_adapter.o ${SYSROOT}/lib/libc.so.7 ${SYSROOT}/usr/lib/libasl.so.1 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/lib/libsys.so.7 --test-no-exec --gc-sections -rdynamic -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/sys -I${SYSROOT}/usr/include -femit-bin=${.TARGET}
+
 .include <bsd.test.mk>
