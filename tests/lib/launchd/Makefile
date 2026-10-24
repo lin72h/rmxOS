@@ -7,6 +7,20 @@ ZIG?= zig
 ZIG_SYSROOT?= ${SYSROOT}
 ATF_C_ARCHIVE?= /Users/me/wip-mach/rmx-implementer/build/op395/obj/Users/me/wip-mach/rmx-implementer/build/op395/source/amd64.amd64/lib/atf/libatf-c/libprivateatf-c.a
 MACH_SO?= ${SYSROOT}/usr/lib/libmach.so.5
+
+# This target owns the PID-1 fixture. Its object directory and installation
+# root are separate from the ordinary launchd and release overlay.
+.PHONY: fixture fixture-install
+fixture: coordination.o libop484_launchd.so
+	@mkdir -p ${.OBJDIR}/fixture-launchd
+	env -u MAKEOBJDIRPREFIX MAKEOBJDIR=${.OBJDIR}/fixture-launchd \
+	    ${MAKE} -C ${SRCTOP}/sbin/launchd \
+	    LAUNCHD_CONSUMER_FIXTURE=${.OBJDIR} all
+fixture-install: fixture
+	${INSTALL} -d ${DESTDIR}/sbin ${DESTDIR}${TESTSDIR}
+	${INSTALL} -m 0555 ${.OBJDIR}/fixture-launchd/launchd ${DESTDIR}/sbin/launchd
+	${INSTALL} -m 0555 libop484_launchd.so ${DESTDIR}${TESTSDIR}/libop484_launchd.so
+
 coordination.o: ${.CURDIR}/coordination.c
 	${CC} ${CFLAGS} -fPIC -c ${.ALLSRC} -o ${.TARGET}
 libop484_launchd.so: ${.CURDIR}/fixture.zig ${.CURDIR}/protocol.zig

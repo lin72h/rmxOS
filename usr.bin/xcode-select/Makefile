@@ -4,7 +4,6 @@ PACKAGE= developer-tools
 SCRIPTS= xcode-select
 SCRIPTSDIR= ${BINDIR}
 SCRIPTSMODE= 0555
-MAN_SUBPACKAGE= -man
 MAN= xcode-select.1
 ZIG?= zig
 ZIG_SYSROOT?= ${WORLDTMP:U${SYSROOT}}

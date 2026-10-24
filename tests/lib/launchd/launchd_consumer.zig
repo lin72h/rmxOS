@@ -19,6 +19,7 @@ const c = @cImport({
     @cInclude("stdio.h");
     @cInclude("stdlib.h");
     @cInclude("signal.h");
+    @cInclude("errno.h");
     @cInclude("mach/message.h");
 });
 fn request(op: p.Operation) p.Reply {
@@ -31,7 +32,12 @@ fn request(op: p.Operation) p.Reply {
     address.sun_len = @sizeOf(c.sockaddr_un);
     address.sun_family = c.AF_UNIX;
     @memcpy(address.sun_path[0..p.socket_path.len], p.socket_path);
-    if (c.connect(fd, @ptrCast(&address), @sizeOf(c.sockaddr_un)) != 0) c.atf_tc_fail("PID-1 test control unavailable");
+    if (c.connect(fd, @ptrCast(&address), @sizeOf(c.sockaddr_un)) != 0) {
+        const err = c.__error().*;
+        if (err == c.ENOENT or err == c.ECONNREFUSED)
+            c.atf_tc_skip("launchd PID-1 fixture absent");
+        c.atf_tc_fail("PID-1 test control connect errno=%d", err);
+    }
     const q = p.Request{ .operation = @intFromEnum(op) };
     if (c.send(fd, &q, @sizeOf(p.Request), 0) != @sizeOf(p.Request)) c.atf_tc_fail("launchd control request");
     var reply: p.Reply = undefined;

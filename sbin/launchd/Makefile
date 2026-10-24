@@ -83,6 +83,7 @@ LIBADD=	launch asl notify xpc dispatch osxsupport mach thr sys bsm auditd \
 .if defined(LAUNCHD_CONSUMER_FIXTURE)
 CFLAGS+= -DLAUNCHD_CONSUMER_TESTING
 LDADD+= ${LAUNCHD_CONSUMER_FIXTURE}/coordination.o ${LAUNCHD_CONSUMER_FIXTURE}/libop484_launchd.so
+LDFLAGS+= -Wl,-rpath,/usr/tests/lib/launchd
 LDFLAGS+= -rdynamic -Wl,--wrap=launchd_runtime_init2 -Wl,--wrap=calloc -Wl,--wrap=free
 LDFLAGS+= -Wl,--wrap=mach_msg -Wl,--wrap=mach_port_get_attributes
 LDFLAGS+= -Wl,--wrap=mach_port_move_member -Wl,--wrap=mach_port_mod_refs
