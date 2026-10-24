@@ -19,6 +19,8 @@ const c = @cImport({
     @cInclude("sys/socket.h");
     @cInclude("sys/un.h");
     @cInclude("sys/stat.h");
+    @cInclude("sys/sysctl.h");
+    @cInclude("asld_stop_abi.h");
     @cInclude("dirent.h");
     @cInclude("fcntl.h");
 });
@@ -151,6 +153,7 @@ fn flood(_: [*c]const c.atf_tc_t) callconv(.c) void {
             need(std.mem.startsWith(u8, bytes, "op956-numbered-"), "numbered message");
             const id = std.fmt.parseInt(usize, bytes["op956-numbered-".len..], 10) catch c.atf_tc_fail("number");
             need(id < seen.len and !seen[id], "no duplicate or invented number");
+            need(equal(m, "UID", "0") and equal(m, "GID", "0"), "queue-fill record keeps kernel audit identity");
             seen[id] = true;
             if (stored == 0 or !equal(m, "UID", "0") or !equal(m, "GID", "0")) identity("flood", m);
             identity_ok = identity_ok and equal(m, "UID", "0") and equal(m, "GID", "0");
@@ -309,6 +312,7 @@ fn fallback(_: [*c]const c.atf_tc_t) callconv(.c) void {
             if (!std.mem.startsWith(u8, text, "fallback-numbered-")) continue;
             const id = std.fmt.parseInt(usize, text["fallback-numbered-".len..], 10) catch c.atf_tc_fail("number");
             need(id < 100 and !seen[id], "unique fallback record");
+            need(equal(m, "UID", "0") and equal(m, "GID", "0"), "queue-fill record keeps kernel audit identity");
             seen[id] = true;
             identity("fallback", m);
             stored += 1;
@@ -361,6 +365,7 @@ fn prefillStored(tag: [:0]const u8, expected: usize) void {
             if (!std.mem.startsWith(u8, text, "prefill-")) continue;
             const id = std.fmt.parseInt(usize, text[8..], 10) catch c.atf_tc_fail("prefill number");
             need(id < expected and id < seen.len and !seen[id], "unique queue-fill record");
+            need(equal(m, "UID", "0") and equal(m, "GID", "0"), "queue-fill record keeps kernel audit identity");
             seen[id] = true;
             actual += 1;
         }
@@ -370,6 +375,13 @@ fn prefillStored(tag: [:0]const u8, expected: usize) void {
     }
     _ = c.printf("op045_prefill expected=%zu observed=%zu\n", expected, actual);
     need(actual == expected, "every successful queue-fill record stored after resume");
+}
+fn processState(pid: c_int) c_int {
+    var mib = [_]c_int{ c.CTL_KERN, c.KERN_PROC, c.KERN_PROC_PID, pid };
+    var info: [c.ASLD_KINFO_SIZE]u8 = undefined;
+    var size: usize = info.len;
+    if (c.sysctl(&mib, mib.len, &info, &size, null, 0) != 0 or size != info.len or @as(*align(1) const c.pid_t, @ptrCast(&info[c.ASLD_KINFO_PID])).* != pid) return -1;
+    return info[c.ASLD_KINFO_STAT];
 }
 fn bounded(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(recovery.health("waiting-before"), "initial asld serves");
@@ -398,10 +410,10 @@ fn bounded(_: [*c]const c.atf_tc_t) callconv(.c) void {
         _ = c.write(ready[1], &byte, 1);
         if (c.read(release[0], &byte, 1) != 1) c._exit(75);
         const began = now(c.CLOCK_MONOTONIC);
+        _ = c.write(ready[1], &byte, 1); // The one call is about to start.
         transport.record(c.LOG_NOTICE, "one waiting application");
-        _ = c.printf("op045_waiting elapsed_ns=%lld\n", @as(c_longlong, now(c.CLOCK_MONOTONIC) - began));
-        _ = c.fflush(null);
-        _ = c.write(ready[1], &byte, 1);
+        const elapsed: u64 = @intCast(now(c.CLOCK_MONOTONIC) - began);
+        _ = c.write(ready[1], &elapsed, @sizeOf(u64));
         if (c.read(release[0], &byte, 1) != 1) c._exit(75);
         const refused_before = transport.totals()[2];
         const unloaded_began = now(c.CLOCK_MONOTONIC);
@@ -422,16 +434,39 @@ fn bounded(_: [*c]const c.atf_tc_t) callconv(.c) void {
     defer _ = c.close(release[1]);
     var byte: u8 = 0;
     need(c.read(ready[0], &byte, 1) == 1, "child cached the service while asld was running");
-    var filled = fillQueue(port, tag, 0);
-    need(c.kill(old, c.SIGSTOP) == 0, "pause asld after observing the full queue");
-    // Close the race with a receiver that drained before SIGSTOP.
-    filled += fillQueue(port, tag, filled);
+    need(c.kill(old, c.SIGSTOP) == 0, "stop asld before filling its queue");
+    const stop_began = now(c.CLOCK_MONOTONIC);
+    var before_fill = processState(old);
+    while (before_fill != c.SSTOP and now(c.CLOCK_MONOTONIC) - stop_began < 2 * std.time.ns_per_s) {
+        _ = c.usleep(1000);
+        before_fill = processState(old);
+    }
+    if (before_fill != c.SSTOP) {
+        _ = c.kill(old, c.SIGCONT);
+        c.atf_tc_fail("asld did not report SSTOP within 2 s: pid=%d expected_ki_stat=%d observed_ki_stat=%d", old, c.SSTOP, before_fill);
+    }
+    const filled = fillQueue(port, tag, 0);
+    const before_release = processState(old);
+    _ = c.printf("op058_prepared pid=%d expected_ki_stat=%d before_fill=%d before_release=%d fill_count=%zu\n", old, c.SSTOP, before_fill, before_release, filled);
+    _ = c.fflush(null);
+    if (before_release != c.SSTOP) {
+        _ = c.kill(old, c.SIGCONT);
+        c.atf_tc_fail("asld left SSTOP before release: expected_ki_stat=%d observed_ki_stat=%d fill_count=%zu", c.SSTOP, before_release, filled);
+    }
     _ = c.write(release[1], &byte, 1);
     var poll = c.struct_pollfd{ .fd = ready[0], .events = c.POLLIN, .revents = 0 };
+    need(c.poll(&poll, 1, 2500) == 1 and c.read(ready[0], &byte, 1) == 1, "waiting child starts its one call");
     const stopped_result = c.poll(&poll, 1, 250);
     _ = c.kill(old, c.SIGCONT);
+    need(c.poll(&poll, 1, 2500) == 1, "waiting syslog completes after resume");
+    var wait_ns: u64 = 0;
+    need(c.read(ready[0], &wait_ns, @sizeOf(u64)) == @sizeOf(u64), "waiting child elapsed time");
+    _ = c.printf("op058_bounded pid=%d expected_ki_stat=%d before_fill=%d before_release=%d fill_count=%zu wait_ns=%ju stopped_poll=%d\n", old, c.SSTOP, before_fill, before_release, filled, wait_ns, stopped_result);
+    if (stopped_result == 1 and wait_ns < 250 * std.time.ns_per_ms) {
+        _ = c.printf("op058_product_finding before_fill=%d before_release=%d fill_count=%zu wait_ns=%ju\n", before_fill, before_release, filled, wait_ns);
+        _ = c.fflush(null);
+    }
     need(stopped_result == 0, "full-queue syslog must not return while asld is stopped");
-    need(c.poll(&poll, 1, 2500) == 1 and c.read(ready[0], &byte, 1) == 1, "waiting syslog completes after resume");
     prefillStored(tag, filled);
     var child_name: [64]u8 = undefined;
     const child_tag = std.fmt.bufPrintZ(&child_name, "op045-waiting-{d}", .{child}) catch unreachable;
