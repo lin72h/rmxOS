@@ -26,7 +26,7 @@ test "sender report increments telemetry and remains a stored record" {
 
 pub fn storedReport() !void {
     const before = rmx_manual_sender_dropped();
-    const m = rmx_manual_report("<44>1 - localhost syslog 42 - [rmxos-loss@0 count=\"37\"] syslog: local socket refused 37 messages") orelse return error.Parse;
+    const m = rmx_manual_native_report("[Sender syslog] [Message syslog: could not deliver 37 messages] [com.rmxos.syslog.sender_dropped 37]") orelse return error.Parse;
     defer asl_msg_release(m);
     try std.testing.expectEqual(before + 37, rmx_manual_sender_dropped());
     var path: [100]u8 = undefined;
@@ -43,8 +43,8 @@ pub fn storedReport() !void {
     var stored: ?*anyopaque = null;
     try std.testing.expectEqual(@as(u32, 0), asl_file_fetch_next(file.?, &stored));
     defer asl_msg_release(stored.?);
-    try std.testing.expectEqualStrings("37", std.mem.span(asl_msg_get_val_for_key(stored.?, "RFC5424.SD.12:rmxos-loss@0.count").?));
-    try std.testing.expectEqualStrings("syslog: local socket refused 37 messages", std.mem.span(asl_msg_get_val_for_key(stored.?, "Message").?));
+    try std.testing.expectEqualStrings("37", std.mem.span(asl_msg_get_val_for_key(stored.?, "com.rmxos.syslog.sender_dropped").?));
+    try std.testing.expectEqualStrings("syslog: could not deliver 37 messages", std.mem.span(asl_msg_get_val_for_key(stored.?, "Message").?));
 }
 
 test "invalid sender counts never change telemetry" {

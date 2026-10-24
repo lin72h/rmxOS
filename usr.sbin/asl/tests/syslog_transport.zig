@@ -8,6 +8,7 @@ const c = @cImport({
     @cInclude("stdio.h");
     @cInclude("syslog.h");
     @cInclude("dlfcn.h");
+    @cInclude("time.h");
 });
 const Port = *const fn () callconv(.c) c_uint;
 pub export fn task_self_trap() c_uint {
@@ -80,12 +81,19 @@ var refused: usize = 0;
 var before_mach: usize = 0;
 var before_socket: usize = 0;
 var request_id: c_int = 0;
+var logger_port: c_uint = 0;
+pub fn loggerPort() c_uint {
+    return logger_port;
+}
 var mock = false;
 var use_installed = false;
 var receive_failures: usize = 0;
 var mock_id: c_int = 0;
 pub export fn rmx_observe_trap(p: *c.mach_msg_header_t, options: c_uint, send_size: c_uint, recv_size: c_uint, recv_name: c_uint, timeout: c_uint, notify: c_uint) c_int {
-    if (options & c.MACH_SEND_MSG != 0) request_id = p.msgh_id;
+    if (options & c.MACH_SEND_MSG != 0) {
+        request_id = p.msgh_id;
+        if (request_id == 118) logger_port = p.msgh_remote_port;
+    }
     const id = request_id;
     const result = if (mock) mockTrap(p, options) else real(Trap, "mach_msg_trap")(p, options, send_size, recv_size, recv_name, timeout, notify);
     const err = c.__error().*;
@@ -133,18 +141,18 @@ fn mockTrap(p: *c.mach_msg_header_t, options: c_uint) c_int {
     }
     return 0;
 }
-test "a receive failure is visible and routes the same production record to the socket" {
+test "a failed Mach lookup leaves the record counted without socket delivery" {
     mock = true;
     rmx_observed_openlog("op982-host", c.LOG_PID, c.LOG_USER);
-    record(c.LOG_NOTICE, "test fallback");
+    record(c.LOG_NOTICE, "test unavailable Mach");
     const t = totals();
     try std.testing.expectEqual(@as(usize, 0), t[0]);
-    try std.testing.expectEqual(@as(usize, 1), t[1]);
-    try std.testing.expectEqual(@as(usize, 0), t[2]);
+    try std.testing.expectEqual(@as(usize, 0), t[1]);
+    try std.testing.expectEqual(@as(usize, 1), t[2]);
     rmx_observed_closelog();
 }
 
-test "the installed libc enters the observed Mach client before fallback" {
+test "the installed libc enters the observed Mach client" {
     mock = true;
     use_installed = true;
     const before = receive_failures;
@@ -152,6 +160,25 @@ test "the installed libc enters the observed Mach client before fallback" {
     record(c.LOG_NOTICE, "actual libc mock transport");
     try std.testing.expectEqual(before + 1, receive_failures);
     c.closelog();
+}
+test "undelivered applications count once and failed reports wait a second before retrying" {
+    mock = true;
+    use_installed = false;
+    setQuiet(true);
+    defer setQuiet(false);
+    const pending = rmx_observed_pending();
+    try std.testing.expect(pending > 0);
+    const before = receive_failures;
+    var began: c.struct_timespec = undefined;
+    var ended: c.struct_timespec = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.clock_gettime(c.CLOCK_MONOTONIC, &began));
+    for (0..20) |_| record(c.LOG_NOTICE, "undelivered application");
+    try std.testing.expectEqual(@as(c_int, 0), c.clock_gettime(c.CLOCK_MONOTONIC, &ended));
+    const elapsed = (ended.tv_sec - began.tv_sec) * std.time.ns_per_s + ended.tv_nsec - began.tv_nsec;
+    try std.testing.expect(elapsed < std.time.ns_per_s);
+    try std.testing.expectEqual(pending + 20, rmx_observed_pending());
+    // Twenty application lookups plus exactly one failed report attempt.
+    try std.testing.expectEqual(before + 21, receive_failures);
 }
 pub export fn __sys_task_self_trap() c_uint {
     return task_self_trap();

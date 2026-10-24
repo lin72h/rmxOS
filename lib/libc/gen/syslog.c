@@ -31,18 +31,14 @@
 
 #include "namespace.h"
 #include <sys/param.h>
-#include <sys/socket.h>
 #include <sys/syslog.h>
 #include <sys/time.h>
 #include <sys/uio.h>
-#include <sys/un.h>
-#include <netdb.h>
 
 #include <errno.h>
 #include <fcntl.h>
 #include <paths.h>
 #include <pthread.h>
-#include <stdbool.h>
 #include <stdint.h>
 #include <inttypes.h>
 #include <stdio.h>
@@ -57,12 +53,12 @@
 #include "libc_private.h"
 #include "asl_private.h"
 
+__attribute__((visibility("hidden"))) int __libc_asl_open(void);
+__attribute__((visibility("hidden"))) void __libc_asl_close(void);
+
 /* Maximum number of characters of syslog message */
 #define	MAXLINE		8192
 
-static int	LogFile = -1;		/* fd for log */
-static bool	connected;		/* have done connect */
-static int	opened;			/* have done openlog() */
 static int	LogStat = 0;		/* status bits, set by openlog() */
 static pid_t	LogPid = -1;		/* process id to tag the entry with */
 static const char *LogTag = NULL;	/* string to tag the entry with */
@@ -72,6 +68,7 @@ static int	LogMask = 0xff;		/* mask of priorities to be logged */
 /* Protected by syslog_mutex; inherited counts belong only to the parent. */
 static uint64_t LogRefused;
 static pid_t LogRefusedPid;
+static struct timespec LogReportTime;
 static pthread_mutex_t	syslog_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define	THREAD_LOCK()							\
@@ -86,8 +83,6 @@ static pthread_mutex_t	syslog_mutex = PTHREAD_MUTEX_INITIALIZER;
 /* RFC5424 defined value. */
 #define NILVALUE "-"
 
-static void	disconnectlog(void); /* disconnect from syslogd */
-static void	connectlog(void);	/* (re)connect to syslogd */
 static void	openlog_unlocked(const char *, int, int);
 static void	parse_tag(void);	/* parse ident[NNN] if needed */
 
@@ -138,28 +133,17 @@ syslog(int pri, const char *fmt, ...)
 
 static int
 log_send(int pri, const struct timeval *now, const char *host,
-    const char *sender, int pid, const char *message, const char *wire,
-    size_t length, uint64_t dropped)
+    const char *sender, int pid, const char *message, uint64_t dropped)
 {
-	char *record = __libc_asl_record(sender, pid, pri, now, host, message, dropped);
-	if (record != NULL) {
-		int result = __libc_asl_send(record);
-		free(record);
-		if (result == 0)
-			return (0);
-	}
-	if (!opened)
-		openlog_unlocked(LogTag, LogStat | LOG_NDELAY, 0);
-	connectlog();
-	if (send(LogFile, wire, length, 0) >= 0)
-		return (0);
-	if (errno != ENOBUFS) {
-		disconnectlog();
-		connectlog();
-		if (send(LogFile, wire, length, 0) >= 0)
-			return (0);
-	}
-	return (-1);
+	char *record;
+	int result;
+
+	record = __libc_asl_record(sender, pid, pri, now, host, message, dropped);
+	if (record == NULL)
+		return (-1);
+	result = __libc_asl_send(record);
+	free(record);
+	return (result);
 }
 
 static void
@@ -327,32 +311,32 @@ vsyslog1(int pri, const char *fmt, va_list ap)
 	int body_length = cnt > body_offset ? cnt - body_offset : 0;
 	memcpy(body, tbuf + body_offset, body_length);
 	body[body_length] = '\0';
+	if (LogRefusedPid != getpid()) {
+		LogRefusedPid = getpid();
+		LogRefused = 0;
+		LogReportTime = (struct timespec){0};
+	}
 	if (LogRefused != 0) {
-		char report[512];
-		int length;
+		struct timespec monotonic;
 		char report_body[128];
 
-		if (LogRefusedPid != getpid()) {
-			LogRefused = 0;
-		} else {
-			/* Try the report before each subsequent application send. A
-			 * refused report preserves the count and is not another loss.
-			 * Both transports are bounded, including a full Mach queue. */
-			length = snprintf(report, sizeof(report),
-			    "<%d>1 - %s syslog %d - [rmxos-loss@0 count=\"%" PRIu64 "\"] "
-			    "syslog: local socket refused %" PRIu64 " messages",
-			    LOG_SYSLOG | LOG_WARNING, hostname, (int)LogRefusedPid,
-			    LogRefused, LogRefused);
+		/* A failed report preserves the count and is not another loss.
+		 * Leave at least one monotonic second between attempts. */
+		if (clock_gettime(CLOCK_MONOTONIC, &monotonic) == 0 &&
+		    ((LogReportTime.tv_sec == 0 && LogReportTime.tv_nsec == 0) ||
+		    monotonic.tv_sec - LogReportTime.tv_sec > 1 ||
+		    (monotonic.tv_sec - LogReportTime.tv_sec == 1 &&
+		    monotonic.tv_nsec >= LogReportTime.tv_nsec))) {
+			LogReportTime = monotonic;
 			snprintf(report_body, sizeof(report_body),
-			    "syslog: local transports refused %" PRIu64 " messages", LogRefused);
-			if (length > 0 && length < (int)sizeof(report) &&
-			    log_send(LOG_SYSLOG | LOG_WARNING, &now, hostname, "syslog",
-			    LogRefusedPid, report_body, report, length, LogRefused) == 0)
+			    "syslog: could not deliver %" PRIu64 " messages", LogRefused);
+			if (log_send(LOG_SYSLOG | LOG_WARNING, &now, hostname, "syslog",
+			    LogRefusedPid, report_body, LogRefused) == 0)
 				LogRefused = 0;
 		}
 	}
 
-	if (log_send(pri, &now, hostname, sender, LogPid, body, tbuf, cnt, 0) == 0)
+	if (log_send(pri, &now, hostname, sender, LogPid, body, 0) == 0)
 		return;
 	{
 		pid_t pid = getpid();
@@ -403,59 +387,6 @@ vsyslog(int pri, const char *fmt, va_list ap)
 	pthread_cleanup_pop(1);
 }
 
-/* Should be called with mutex acquired */
-static void
-disconnectlog(void)
-{
-	/*
-	 * If the user closed the FD and opened another in the same slot,
-	 * that's their problem.  They should close it before calling on
-	 * system services.
-	 */
-	if (LogFile != -1) {
-		_close(LogFile);
-		LogFile = -1;
-	}
-	connected = false;			/* retry connect */
-}
-
-/* Should be called with mutex acquired */
-static void
-connectlog(void)
-{
-	struct sockaddr_un SyslogAddr;	/* AF_UNIX address of local logger */
-
-	if (LogFile == -1) {
-		socklen_t len;
-
-		if ((LogFile = _socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC,
-		    0)) == -1)
-			return;
-		if (_getsockopt(LogFile, SOL_SOCKET, SO_SNDBUF, &len,
-		    &(socklen_t){sizeof(len)}) == 0) {
-			if (len < MAXLINE) {
-				len = MAXLINE;
-				(void)_setsockopt(LogFile, SOL_SOCKET, SO_SNDBUF,
-				    &len, sizeof(len));
-			}
-		}
-	}
-	if (!connected) {
-		SyslogAddr.sun_len = sizeof(SyslogAddr);
-		SyslogAddr.sun_family = AF_UNIX;
-
-		(void)strncpy(SyslogAddr.sun_path, _PATH_LOG,
-		    sizeof SyslogAddr.sun_path);
-		if (_connect(LogFile, (struct sockaddr *)&SyslogAddr,
-		    sizeof(SyslogAddr)) != -1)
-			connected = true;
-		else {
-			(void)_close(LogFile);
-			LogFile = -1;
-		}
-	}
-}
-
 static void
 openlog_unlocked(const char *ident, int logstat, int logfac)
 {
@@ -469,9 +400,7 @@ openlog_unlocked(const char *ident, int logstat, int logfac)
 		LogFacility = logfac;
 
 	if (LogStat & LOG_NDELAY)	/* open immediately */
-		connectlog();
-
-	opened = 1;	/* ident and facility has been set */
+		(void)__libc_asl_open();
 }
 
 void
@@ -489,13 +418,9 @@ void
 closelog(void)
 {
 	THREAD_LOCK();
-	if (LogFile != -1) {
-		(void)_close(LogFile);
-		LogFile = -1;
-	}
+	__libc_asl_close();
 	LogTag = NULL;
 	LogTagLength = -1;
-	connected = false;
 	THREAD_UNLOCK();
 }
 

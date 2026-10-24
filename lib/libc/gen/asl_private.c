@@ -21,8 +21,9 @@ extern int __sys__kernelrpc_mach_port_destroy_trap(mach_port_t, mach_port_t);
 extern mach_msg_return_t __sys_mach_msg_trap(mach_msg_header_t *, mach_msg_option_t,
     mach_msg_size_t, mach_msg_size_t, mach_port_t, mach_msg_timeout_t, mach_port_t);
 
-/* Port discovery may wait at most 100 ms per phase. Log sends never wait. */
-#define ASL_RPC_TIMEOUT_MS 100
+/* Match the ASL client: discovery and sends wait without a timeout. */
+__attribute__((visibility("hidden"))) int __libc_asl_open(void);
+__attribute__((visibility("hidden"))) void __libc_asl_close(void);
 
 static pid_t owner;
 static mach_port_t server, reply, bootstrap, task;
@@ -73,12 +74,12 @@ port_rpc(mach_msg_header_t *request, size_t size, mach_port_t destination,
 	request->msgh_size = size;
 	request->msgh_local_port = reply;
 	request->msgh_id = id;
-	kr = __sys_mach_msg_trap(request, MACH_SEND_MSG | MACH_SEND_TIMEOUT,
-	    size, 0, 0, ASL_RPC_TIMEOUT_MS, 0);
+	kr = __sys_mach_msg_trap(request, MACH_SEND_MSG,
+	    size, 0, 0, 0, 0);
 	if (kr != MACH_MSG_SUCCESS)
 		return (-1);
-	kr = __sys_mach_msg_trap(&response.head, MACH_RCV_MSG | MACH_RCV_TIMEOUT,
-	    0, sizeof(response), reply, ASL_RPC_TIMEOUT_MS, 0);
+	kr = __sys_mach_msg_trap(&response.head, MACH_RCV_MSG,
+	    0, sizeof(response), reply, 0, 0);
 	if (kr != MACH_MSG_SUCCESS) {
 		/* A late reply must not satisfy a future lookup. */
 		(void)__sys__kernelrpc_mach_port_destroy_trap(task, reply);
@@ -118,13 +119,10 @@ lookup(void)
 	return (port_rpc(&request.head, sizeof(request), bootstrap, 404, &server));
 }
 
-int
-__libc_asl_send(const char *record)
+static void
+reset_owner(void)
 {
-	struct log_request request;
-	mach_msg_return_t kr;
 	pid_t pid = getpid();
-	size_t length = strlen(record) + 1;
 
 	if (owner != pid) {
 		task = __sys_task_self_trap();
@@ -137,6 +135,32 @@ __libc_asl_send(const char *record)
 		reply = MACH_PORT_NULL;
 		owner = pid;
 	}
+}
+
+int
+__libc_asl_open(void)
+{
+
+	reset_owner();
+	return (server != MACH_PORT_NULL ? 0 : lookup());
+}
+
+void
+__libc_asl_close(void)
+{
+
+	reset_owner();
+	release_port(&server);
+}
+
+int
+__libc_asl_send(const char *record)
+{
+	struct log_request request;
+	mach_msg_return_t kr;
+	size_t length = strlen(record) + 1;
+
+	reset_owner();
 	for (int attempt = 0; attempt < 2; attempt++) {
 		if (server == MACH_PORT_NULL && lookup() != 0)
 			return (-1);
@@ -156,11 +180,9 @@ __libc_asl_send(const char *record)
 		request.ndr = ndr;
 		request.count = length;
 		kr = __sys_mach_msg_trap(&request.head,
-		    MACH_SEND_MSG | MACH_SEND_TIMEOUT, sizeof(request), 0, 0, 0, 0);
+		    MACH_SEND_MSG, sizeof(request), 0, 0, 0, 0);
 		if (kr == MACH_MSG_SUCCESS)
 			return (0);
-		if (kr != MACH_SEND_INVALID_DEST)
-			return (-1);
 		release_port(&server);
 	}
 	return (-1);

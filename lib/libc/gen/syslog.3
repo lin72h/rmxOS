@@ -255,36 +255,32 @@ is given by the macro
 .Fn LOG_UPTO toppri ; .
 The default allows all priorities to be logged.
 .Ss Local delivery
-Messages normally use ASL over Mach IPC.
+Messages use ASL over Mach IPC, with no socket fallback.
 Sending waits without a timeout
 when the service queue is full; libc applies no sender quota.
-If lookup or delivery fails, the traditional local socket is tried.
-A socket refused with
-.Er ENOBUFS
-is not retried.
-A message refused by both transports is counted.
-Before a later message, at most once per second, it attempts a separate
-report over either transport.
-The Mach report carries the ASL key
-.Li com.rmxos.syslog.sender_dropped .
-The socket report uses RFC 5424 structured data
-.Li [rmxos-loss@0 count="N"]
+Service lookup also waits without a timeout.
+After a failed send, libc drops the cached service port, looks it up again,
+and retries once.
+A message that cannot be delivered because lookup or both sends failed
+is counted.
+Before a later message, at most once per second, libc attempts a separate
+report over Mach.
+The report carries the ASL key
+.Li com.rmxos.syslog.sender_dropped
 and text
-.Li "syslog: local socket refused N messages" .
-The local, private SD-ID
-.Li rmxos-loss@0
-identifies this report; the count is cleared only after the report is sent.
+.Li "syslog: could not deliver N messages" .
+The count is cleared only after the report is sent.
 The report uses application name
 .Li syslog
 and the sending process's process ID.
 A fork child starts with a zero count.
 Counts saturate at the largest unsigned 64-bit value.
 A process that exits before a later successful report cannot report its losses.
-The local socket cannot authenticate these reports;
+The report arrives over Mach with the kernel's audit identity;
 .Xr asld 8
-records their counts as
+uses the count only as
 .Li sender_dropped
-telemetry and does not use them for authorization or delivery policy.
+telemetry, not for authorization or delivery policy.
 .Sh RETURN VALUES
 The routines
 .Fn closelog ,

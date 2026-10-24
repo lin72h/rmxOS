@@ -1,6 +1,5 @@
 const std = @import("std");
 const recovery = @import("asld_recovery.zig");
-const sender = @import("syslog_sender.zig");
 const timing = @import("syslog_timing.zig");
 const transport = @import("syslog_transport.zig");
 const reports = @import("syslog_reports.zig");
@@ -15,11 +14,15 @@ const c = @cImport({
     @cInclude("time.h");
     @cInclude("errno.h");
     @cInclude("dlfcn.h");
+    @cInclude("poll.h");
+    @cInclude("sys/mach/message.h");
+    @cInclude("sys/socket.h");
+    @cInclude("sys/un.h");
+    @cInclude("sys/stat.h");
+    @cInclude("dirent.h");
+    @cInclude("fcntl.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-fn socketCase(_: [*c]const c.atf_tc_t) callconv(.c) void {
-    sender.fullSocket() catch |err| c.atf_tc_fail("socket accounting: %s", @errorName(err).ptr);
-}
 fn reportCase(_: [*c]const c.atf_tc_t) callconv(.c) void {
     reports.storedReport() catch |err| c.atf_tc_fail("stored report: %s", @errorName(err).ptr);
     reports.invalidCounts() catch |err| c.atf_tc_fail("invalid counts: %s", @errorName(err).ptr);
@@ -321,52 +324,95 @@ fn fallback(_: [*c]const c.atf_tc_t) callconv(.c) void {
     _ = c.close(readiness[0]);
     _ = c.close(release_pipe[1]);
 }
-extern fn __libc_asl_send([*:0]const u8) c_int;
+fn fillQueue(port: c_uint, tag: [:0]const u8, first: usize) usize {
+    var count: usize = 0;
+    while (count < 8192) : (count += 1) {
+        var text: [256]u8 = undefined;
+        const record = std.fmt.bufPrintZ(&text, "[Sender {s}] [Level 5] [Facility user] [Message prefill-{d}]", .{ tag, first + count }) catch unreachable;
+        var request: [56]u8 align(8) = @splat(0);
+        const h: *c.mach_msg_header_t = @ptrCast(&request);
+        h.msgh_bits = c.MACH_MSGH_BITS_COMPLEX | c.MACH_MSG_TYPE_COPY_SEND;
+        h.msgh_size = request.len;
+        h.msgh_remote_port = port;
+        h.msgh_id = 118;
+        std.mem.writeInt(u32, request[24..28], 1, .little);
+        std.mem.writeInt(u64, request[28..36], @intFromPtr(record.ptr), .little);
+        request[37] = c.MACH_MSG_VIRTUAL_COPY;
+        request[39] = c.MACH_MSG_OOL_DESCRIPTOR;
+        std.mem.writeInt(u32, request[40..44], @intCast(record.len + 1), .little);
+        request[48] = 1; // NDR little-endian integer representation.
+        std.mem.writeInt(u32, request[52..56], @intCast(record.len + 1), .little);
+        // Only the test fixture uses a zero-timeout send to observe a full queue.
+        const rc = c.mach_msg_trap(h, c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, request.len, 0, 0, 0, 0);
+        if (rc == c.MACH_SEND_TIMED_OUT) return count;
+        need(rc == 0, "fixture queue-fill send");
+    }
+    c.atf_tc_fail("fixture did not observe a full queue while filling");
+}
+fn prefillStored(tag: [:0]const u8, expected: usize) void {
+    var actual: usize = 0;
+    for (0..100) |_| {
+        const found = query("Sender", tag, expected + 2);
+        var seen: [16384]bool = @splat(false);
+        actual = 0;
+        while (c.asl_next(found)) |m| {
+            const raw = c.asl_get(m, "Message") orelse continue;
+            const text = std.mem.span(raw);
+            if (!std.mem.startsWith(u8, text, "prefill-")) continue;
+            const id = std.fmt.parseInt(usize, text[8..], 10) catch c.atf_tc_fail("prefill number");
+            need(id < expected and id < seen.len and !seen[id], "unique queue-fill record");
+            seen[id] = true;
+            actual += 1;
+        }
+        c.asl_release(found);
+        if (actual == expected) break;
+        _ = c.usleep(10000);
+    }
+    _ = c.printf("op045_prefill expected=%zu observed=%zu\n", expected, actual);
+    need(actual == expected, "every successful queue-fill record stored after resume");
+}
 fn bounded(_: [*c]const c.atf_tc_t) callconv(.c) void {
-    need(recovery.health("bounded-before"), "initial asld serves");
+    need(recovery.health("waiting-before"), "initial asld serves");
+    const before = status();
     const old = recovery.pid();
+    var tag_buf: [64]u8 = undefined;
+    const tag = std.fmt.bufPrintZ(&tag_buf, "op045-prefill-{d}", .{c.getpid()}) catch unreachable;
+    transport.openlog(tag, c.LOG_PID, c.LOG_USER);
+    transport.record(c.LOG_NOTICE, "prime queue-fill port");
+    const port = transport.loggerPort();
+    need(port != 0, "observed Mach logger port");
     var ready: [2]c_int = undefined;
     var release: [2]c_int = undefined;
-    need(c.pipe(&ready) == 0 and c.pipe(&release) == 0, "bounded pipes");
+    need(c.pipe(&ready) == 0 and c.pipe(&release) == 0, "waiting pipes");
     const child = c.fork();
-    need(child >= 0, "bounded child");
+    need(child >= 0, "waiting child");
     if (child == 0) {
         _ = c.alarm(20);
         _ = c.close(ready[0]);
         _ = c.close(release[1]);
-        c.openlog("op021-bounded", c.LOG_PID, c.LOG_USER);
-        c.syslog(c.LOG_NOTICE, "op021 prime");
-        var byte: u8 = 0;
-        _ = c.write(ready[1], &byte, 1);
-        if (c.read(release[0], &byte, 1) != 1) c._exit(75);
-        // Raw protocol sends fill the stopped daemon's queue without changing
-        // syslog's application-loss counter. A refused raw fixture is not a log.
-        var filled: usize = 0;
-        while (filled < 1024 and __libc_asl_send("[Sender op021-prefill] [Message fixture]") == 0) filled += 1;
-        if (filled == 1024) c._exit(71);
-        const began = now(c.CLOCK_MONOTONIC);
-        transport.setVerbose(false);
+        var name: [64]u8 = undefined;
+        const child_tag = std.fmt.bufPrintZ(&name, "op045-waiting-{d}", .{c.getpid()}) catch unreachable;
+        transport.openlog(child_tag, c.LOG_PID | c.LOG_NDELAY, c.LOG_USER);
         transport.setQuiet(true);
-        const refused_before = transport.totals()[2];
-        for (0..1000) |_| transport.record(c.LOG_NOTICE, "op021 refused application");
-        const refused_full = transport.totals()[2] - refused_before;
-        if (refused_full == 0) c._exit(74);
-        const elapsed = now(c.CLOCK_MONOTONIC) - began;
-        _ = c.printf("syslog_mach_full sends=1000 queued_fixture=%zu elapsed_ns=%lld bound_ns=2000000000\n", filled, @as(c_longlong, elapsed));
-        _ = c.fflush(null);
-        if (elapsed >= 2 * std.time.ns_per_s) c._exit(72);
+        var byte: u8 = 1;
         _ = c.write(ready[1], &byte, 1);
         if (c.read(release[0], &byte, 1) != 1) c._exit(75);
-        const unloaded_began = now(c.CLOCK_MONOTONIC);
-        for (0..20) |_| transport.record(c.LOG_NOTICE, "op021 unloaded application");
-        const refused_total: u64 = @intCast(transport.totals()[2] - refused_before);
-        _ = c.printf("syslog_unloaded sends=20 elapsed_ns=%lld bound_ns=2000000000\n", @as(c_longlong, now(c.CLOCK_MONOTONIC) - unloaded_began));
+        const began = now(c.CLOCK_MONOTONIC);
+        transport.record(c.LOG_NOTICE, "one waiting application");
+        _ = c.printf("op045_waiting elapsed_ns=%lld\n", @as(c_longlong, now(c.CLOCK_MONOTONIC) - began));
         _ = c.fflush(null);
-        if (now(c.CLOCK_MONOTONIC) - unloaded_began >= 2 * std.time.ns_per_s) c._exit(73);
+        _ = c.write(ready[1], &byte, 1);
+        if (c.read(release[0], &byte, 1) != 1) c._exit(75);
+        const refused_before = transport.totals()[2];
+        const unloaded_began = now(c.CLOCK_MONOTONIC);
+        for (0..20) |_| transport.record(c.LOG_NOTICE, "op045 unloaded application");
+        const refused_total: u64 = @intCast(transport.totals()[2] - refused_before);
+        _ = c.printf("syslog_unloaded sends=20 elapsed_ns=%lld\n", @as(c_longlong, now(c.CLOCK_MONOTONIC) - unloaded_began));
+        _ = c.fflush(null);
         _ = c.write(ready[1], &refused_total, @sizeOf(u64));
         if (c.read(release[0], &byte, 1) != 1) c._exit(75);
         _ = c.sleep(1);
-        c.syslog(c.LOG_NOTICE, "op021 bounded flush");
+        c.syslog(c.LOG_NOTICE, "op045 waiting flush");
         c.closelog();
         c._exit(0);
     }
@@ -375,18 +421,31 @@ fn bounded(_: [*c]const c.atf_tc_t) callconv(.c) void {
     defer _ = c.close(ready[0]);
     defer _ = c.close(release[1]);
     var byte: u8 = 0;
-    need(c.read(ready[0], &byte, 1) == 1, "bounded child primed");
-    need(c.kill(old, c.SIGSTOP) == 0, "pause asld receiver");
+    need(c.read(ready[0], &byte, 1) == 1, "child cached the service while asld was running");
+    var filled = fillQueue(port, tag, 0);
+    need(c.kill(old, c.SIGSTOP) == 0, "pause asld after observing the full queue");
+    // Close the race with a receiver that drained before SIGSTOP.
+    filled += fillQueue(port, tag, filled);
     _ = c.write(release[1], &byte, 1);
-    // Poll proves completion while the receiver is still stopped.
-    const Poll = @cImport({
-        @cInclude("poll.h");
-    });
-    var poll = Poll.struct_pollfd{ .fd = ready[0], .events = Poll.POLLIN, .revents = 0 };
-    need(Poll.poll(&poll, 1, 2500) == 1 and c.read(ready[0], &byte, 1) == 1, "full-queue syslog returns before receiver resumes");
-    // The full-queue measurement is complete. Unload now waits for exit,
-    // so resume the receiver before asking launchd to remove it.
+    var poll = c.struct_pollfd{ .fd = ready[0], .events = c.POLLIN, .revents = 0 };
+    const stopped_result = c.poll(&poll, 1, 250);
     _ = c.kill(old, c.SIGCONT);
+    need(stopped_result == 0, "full-queue syslog must not return while asld is stopped");
+    need(c.poll(&poll, 1, 2500) == 1 and c.read(ready[0], &byte, 1) == 1, "waiting syslog completes after resume");
+    prefillStored(tag, filled);
+    var child_name: [64]u8 = undefined;
+    const child_tag = std.fmt.bufPrintZ(&child_name, "op045-waiting-{d}", .{child}) catch unreachable;
+    const application = awaitSender(child_tag);
+    identity("waiting", application);
+    need(equal(application, "Message", "one waiting application"), "blocked application stored after resume");
+    need(equal(application, "UID", "0") and equal(application, "GID", "0"), "waiting application keeps kernel audit identity");
+    c.asl_release(application);
+    const all_applications = query("Sender", child_tag, 2);
+    var application_count: usize = 0;
+    while (c.asl_next(all_applications) != null) application_count += 1;
+    c.asl_release(all_applications);
+    need(application_count == 1, "single blocked call stored exactly once");
+    need(status() == before, "a full Mach queue is not counted as a loss");
     command("/bin/launchctl", "unload", recovery.plist);
     for (0..100) |_| {
         if (c.kill(old, 0) != 0) break;
@@ -395,38 +454,208 @@ fn bounded(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(c.kill(old, 0) != 0, "unloaded receiver exits");
     _ = c.write(release[1], &byte, 1);
     var expected: u64 = 0;
-    need(Poll.poll(&poll, 1, 2500) == 1 and c.read(ready[0], &expected, @sizeOf(u64)) == @sizeOf(u64), "unloaded syslog returns before reload");
-    need(expected >= 20, "unloaded transports refuse and count messages");
-    need(recovery.restore(), "reload serves after bounded sends");
+    need(c.poll(&poll, 1, 2500) == 1 and c.read(ready[0], &expected, @sizeOf(u64)) == @sizeOf(u64), "unloaded syslog returns before reload");
+    need(expected == 20, "each undelivered unloaded record is counted");
+    need(recovery.restore(), "reload serves after unloaded sends");
     _ = c.write(release[1], &byte, 1);
     var result: c_int = 0;
-    need(c.waitpid(child, &result, 0) == child and result == 0, "bounded child result");
-    const dropped = status();
+    need(c.waitpid(child, &result, 0) == child and result == 0, "waiting child result");
+    var dropped = status();
+    for (0..50) |_| {
+        if (dropped >= expected) break;
+        _ = c.usleep(20000);
+        dropped = status();
+    }
     _ = c.printf("syslog_mach_loss expected=%ju observed=%ju\n", expected, dropped);
-    need(dropped == expected, "every refused application counted on next successful report");
+    need(dropped == expected, "every undelivered application counted on next successful report");
     need(status() == dropped, "loss report not duplicated");
+}
+
+const private_pidfile = "/tmp/op045-private-child";
+fn cleanupPrivate() void {
+    const f = c.fopen(private_pidfile, "r") orelse return;
+    var pid: c_int = 0;
+    var root: [256:0]u8 = @splat(0);
+    _ = c.fscanf(f, "%d %255s", &pid, &root);
+    _ = c.fclose(f);
+    if (pid > 1) {
+        _ = c.kill(pid, c.SIGCONT);
+        _ = c.kill(pid, c.SIGTERM);
+        var status_value: c_int = 0;
+        _ = c.waitpid(pid, &status_value, 0);
+        for (0..100) |_| {
+            if (c.kill(pid, 0) != 0) break;
+            _ = c.usleep(10000);
+        }
+    }
+    if (std.mem.startsWith(u8, std.mem.span(@as([*:0]const u8, @ptrCast(&root))), "/tmp/op045-shed.")) std.fs.cwd().deleteTree(std.mem.span(@as([*:0]const u8, @ptrCast(&root)))) catch {};
+    _ = c.unlink(private_pidfile);
+}
+fn numeric(m: c.asl_object_t, key: [*:0]const u8) u64 {
+    const value = c.asl_get(m, key) orelse return 0;
+    return std.fmt.parseInt(u64, std.mem.span(value), 10) catch 0;
+}
+fn shedding(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    var root = "/tmp/op045-shed.XXXXXX".* ++ [_]u8{0};
+    need(c.mkdtemp(@ptrCast(&root)) != null, "private shedding directory");
+    var path: [512]u8 = undefined;
+    const kernel = std.fmt.bufPrintZ(&path, "{s}/kernel", .{std.mem.sliceTo(&root, 0)}) catch unreachable;
+    need(c.mkfifo(kernel, 0o600) == 0, "private kernel fixture");
+    for ([_][]const u8{ "asl.conf", "syslog.conf" }) |name| {
+        const p = std.fmt.bufPrintZ(&path, "{s}/{s}", .{ std.mem.sliceTo(&root, 0), name }) catch unreachable;
+        const file = c.fopen(p, "w") orelse c.atf_tc_fail("private config");
+        need(c.fclose(file) == 0, "private config close");
+    }
+    const child = c.fork();
+    need(child >= 0, "private asld fork");
+    if (child == 0) {
+        const log = std.fmt.bufPrintZ(&path, "{s}/daemon.log", .{std.mem.sliceTo(&root, 0)}) catch unreachable;
+        const fd = c.open(log, c.O_WRONLY | c.O_CREAT | c.O_TRUNC, @as(c.mode_t, 0o600));
+        if (fd < 0) c._exit(127);
+        _ = c.dup2(fd, 1);
+        _ = c.dup2(fd, 2);
+        _ = c.close(fd);
+        _ = c.execl("/usr/sbin/asld", "asld", "-private", &root, "-wq_max_bytes", "1", "-mps_limit", "500", "-dup_delay", "0", "-d", log.ptr, @as(?*anyopaque, null));
+        c._exit(127);
+    }
+    const file = c.fopen(private_pidfile, "w") orelse c.atf_tc_fail("private cleanup record");
+    _ = c.fprintf(file, "%d %s\n", child, &root);
+    _ = c.fclose(file);
+    defer cleanupPrivate();
+    var ready = false;
+    for (0..400) |_| {
+        const p = std.fmt.bufPrintZ(&path, "{s}/daemon.log", .{std.mem.sliceTo(&root, 0)}) catch unreachable;
+        if (c.fopen(p, "r")) |log| {
+            var line: [4096]u8 = undefined;
+            while (c.fgets(&line, line.len, log) != null) {
+                if (std.mem.indexOf(u8, std.mem.span(@as([*:0]const u8, @ptrCast(&line))), "asld_ready pid=") != null) ready = true;
+            }
+            _ = c.fclose(log);
+        }
+        if (ready) break;
+        var wait_status: c_int = 0;
+        need(c.waitpid(child, &wait_status, c.WNOHANG) == 0, "private asld alive");
+        _ = c.usleep(10000);
+    }
+    need(ready, "private shedding asld ready");
+    const fd = c.socket(c.AF_UNIX, c.SOCK_DGRAM, 0);
+    need(fd >= 0, "private fixture socket");
+    defer _ = c.close(fd);
+    var address = std.mem.zeroes(c.struct_sockaddr_un);
+    address.sun_family = c.AF_UNIX;
+    address.sun_len = @sizeOf(c.struct_sockaddr_un);
+    _ = c.snprintf(&address.sun_path, address.sun_path.len, "%s/syslog", &root);
+    for (0..100) |_| {
+        const payload = "<14>payload op045 shedding";
+        need(c.sendto(fd, payload.ptr, payload.len, 0, @ptrCast(&address), address.sun_len) == payload.len, "private shedding datagram");
+    }
+    // Let the one input burst complete before a requested flush can end it.
+    _ = c.usleep(250000);
+    var notices: usize = 0;
+    var drops: u64 = 0;
+    var drained: u64 = 0;
+    var data: usize = 0;
+    for (0..100) |_| {
+        need(c.kill(child, c.SIGUSR1) == 0, "private status request");
+        _ = c.usleep(20000);
+        const store_path = std.fmt.bufPrintZ(&path, "{s}/store", .{std.mem.sliceTo(&root, 0)}) catch unreachable;
+        const store = c.asl_open_path(store_path, 0) orelse continue;
+        var last: usize = 0;
+        const result = c.asl_match(store, null, &last, std.math.maxInt(usize), 1024, 100000, -1);
+        notices = 0;
+        drops = 0;
+        drained = 0;
+        data = 0;
+        while (c.asl_next(result)) |m| {
+            if (equal(m, "Message", "Internal work queue size limit exceeded - dropping messages")) {
+                need(equal(m, "Sender", "syslogd") and equal(m, "Level", "2"), "Apple shedding notice identity and severity");
+                notices += 1;
+            }
+            if (equal(m, "com.rmxos.asld.record", "status")) drops = @max(drops, numeric(m, "dropped_wq"));
+            if (equal(m, "com.rmxos.asld.record", "work queue drained")) drained += numeric(m, "dropped_wq");
+            if (equal(m, "Message", "payload op045 shedding")) data += 1;
+        }
+        c.asl_release(result);
+        c.asl_release(store);
+        if (drops == 100 and drained == 100) break;
+    }
+    _ = c.printf("op045_shedding expected_notice=1 observed_notice=%zu expected_drops=100 observed_drops=%ju drain_count=%ju stored_input=%zu\n", notices, drops, drained, data);
+    need(notices == 1 and drops == 100 and drained == 100 and data == 0, "one Level 2 notice and exact drain drop count");
+}
+fn loggerCase(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    var buffer: [128]u8 = undefined;
+    const message = std.fmt.bufPrintZ(&buffer, "op045.logger.{d}.{d}", .{ c.getpid(), now(c.CLOCK_MONOTONIC) }) catch unreachable;
+    need(recovery.run(&.{ "/usr/bin/logger", "-p", "user.notice", message }), "logger command");
+    var found: usize = 0;
+    for (0..100) |_| {
+        const result = query("Message", message, 2);
+        found = 0;
+        while (c.asl_next(result)) |_| found += 1;
+        c.asl_release(result);
+        if (found != 0) break;
+        _ = c.usleep(20000);
+    }
+    need(found == 1, "logger stores exactly one token line");
+}
+
+fn clockStep(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    var real: c.struct_timespec = undefined;
+    var monotonic: c.struct_timespec = undefined;
+    var after: c.struct_timespec = undefined;
+    need(c.clock_gettime(c.CLOCK_REALTIME, &real) == 0 and c.clock_gettime(c.CLOCK_MONOTONIC, &monotonic) == 0, "save clocks");
+    var stepped = real;
+    stepped.tv_sec -= 1;
+    need(c.clock_settime(c.CLOCK_REALTIME, &stepped) == 0, "step guest wall clock back one second");
+    const sampled = c.clock_gettime(c.CLOCK_MONOTONIC, &after) == 0;
+    const delta = if (sampled) timing.nanoseconds(after.tv_sec - monotonic.tv_sec, after.tv_nsec - monotonic.tv_nsec) else 0;
+    const restore_ns = timing.nanoseconds(real.tv_sec, real.tv_nsec) + delta;
+    const restored = c.struct_timespec{ .tv_sec = @divFloor(restore_ns, std.time.ns_per_s), .tv_nsec = @mod(restore_ns, std.time.ns_per_s) };
+    need(c.clock_settime(c.CLOCK_REALTIME, &restored) == 0 and sampled, "restore guest wall clock");
+    const began = now(c.CLOCK_MONOTONIC);
+    const child = c.fork();
+    need(child >= 0, "clock-step manager child");
+    if (child == 0) {
+        _ = c.execl("/usr/sbin/aslmanager", "aslmanager", "-once", "-wait-for-filesystems", "-s", "/var/log/asl", @as(?*anyopaque, null));
+        c._exit(127);
+    }
+    var status_value: c_int = 0;
+    while (now(c.CLOCK_MONOTONIC) - began < 2 * std.time.ns_per_s) {
+        const result = c.waitpid(child, &status_value, c.WNOHANG);
+        if (result == child) {
+            const elapsed = now(c.CLOCK_MONOTONIC) - began;
+            _ = c.printf("op045_clock_step expected_status=0 observed_status=%d elapsed_ns=%lld bound_ns=2000000000\n", status_value, @as(c_longlong, elapsed));
+            need(status_value == 0 and elapsed < 2 * std.time.ns_per_s, "manager returns zero within two seconds after a restored wall-clock step");
+            return;
+        }
+        need(result == 0, "clock-step manager wait");
+        _ = c.usleep(1000);
+    }
+    _ = c.kill(child, c.SIGKILL);
+    _ = c.waitpid(child, &status_value, 0);
+    c.atf_tc_fail("manager did not return within two seconds after clock restore");
 }
 
 fn bounds(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(recovery.run(&.{"/usr/tests/sys/launchd/unload_completion_unit"}), "unload completion RPC");
     need(recovery.run(&.{"/usr/tests/usr.sbin/asl/cleanup_status_unit"}), "cleanup exit status");
-    need(recovery.run(&.{"/usr/tests/usr.sbin/asl/mach_bound_unit"}), "Mach timeout controls");
+    need(recovery.run(&.{"/usr/tests/usr.sbin/asl/mach_bound_unit"}), "Mach waiting and retry controls");
     need(recovery.run(&.{"/usr/tests/usr.sbin/asl/filesystems_unit"}), "filesystem boot identity controls");
 }
 fn timingCase(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(timing.nanoseconds(9, 50000000) - timing.nanoseconds(8, 950000000) == 100000000, "nanoseconds across second boundary");
 }
 fn cleanup(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    cleanupPrivate();
     recovery.cleanupResult(recovery.restore(), "sender");
 }
 fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(tc, "timeout", "%s", "120");
     _ = c.alarm(110);
 }
-var cases: [8]c.atf_tc_t = undefined;
+var cases: [10]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "timing", "socket", "report", "transport", "flood", "fallback", "bounded", "bounds" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ timingCase, socketCase, reportCase, nativeCase, flood, fallback, bounded, bounds };
+    const names = [_][*:0]const u8{ "timing", "report", "transport", "flood", "fallback", "bounded", "bounds", "shedding", "logger", "clock_step" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ timingCase, reportCase, nativeCase, flood, fallback, bounded, bounds, shedding, loggerCase, clockStep };
     for (&cases, names, bodies) |*tc, name, body| {
         var err = c.atf_tc_init(tc, name, head, body, cleanup, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;

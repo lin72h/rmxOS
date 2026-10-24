@@ -769,15 +769,32 @@ process_message(asl_msg_t *msg, uint32_t source)
  pthread_mutex_lock(&admission_lock);
  uint64_t size = __atomic_load_n(&global.work_queue_size, __ATOMIC_RELAXED);
  if (!is_control && (wq_draining || (size + msize >= global.max_work_queue_size))) {
+  bool first = !wq_draining;
+  char notice[256];
   wq_draining = true;
   wq_dropped++;
   ASLD_COUNT(dropped_wq);
-  pthread_mutex_unlock(&admission_lock);
   asl_msg_release(msg);
-  return;
+  if (!first) { pthread_mutex_unlock(&admission_lock); return; }
+  /* Admit Apple's single episode notice even when ordinary input is shed. */
+  snprintf(notice, sizeof(notice), "[Sender syslogd] [Level 2] [PID %u] "
+      "[Message Internal work queue size limit exceeded - dropping messages] "
+      "[UID 0] [GID 0] [Facility syslog]", global.pid);
+  msg = asl_msg_from_string(notice);
+  if (msg == NULL) {
+   pthread_mutex_unlock(&admission_lock);
+   ASLD_COUNT(store_failed);
+   return;
+  }
+  source = SOURCE_INTERNAL;
+  msize = 0;
+  for (x = msg; x != NULL; x = x->next) msize += x->mem_size;
+  __atomic_fetch_add(&global.work_queue_size, msize, __ATOMIC_RELAXED);
+  pthread_mutex_unlock(&admission_lock);
+ } else {
+  __atomic_fetch_add(&global.work_queue_size, msize, __ATOMIC_RELAXED);
+  pthread_mutex_unlock(&admission_lock);
  }
- __atomic_fetch_add(&global.work_queue_size, msize, __ATOMIC_RELAXED);
- pthread_mutex_unlock(&admission_lock);
 	OSAtomicIncrement32(&global.work_queue_count);
 	dispatch_async(global.work_queue, ^{
 		int32_t kplevel;
