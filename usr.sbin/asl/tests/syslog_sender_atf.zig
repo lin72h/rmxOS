@@ -33,6 +33,15 @@ fn need(ok: bool, message: [*:0]const u8) void {
     if (!ok) c.atf_tc_fail("%s", message);
 }
 fn query(key: [*:0]const u8, value: [*:0]const u8, limit: usize) c.asl_object_t {
+    return queryBudget(key, value, limit, 2000000);
+}
+fn queryBefore(key: [*:0]const u8, value: [*:0]const u8, limit: usize, deadline: i64) ?c.asl_object_t {
+    const remaining = deadline - now(c.CLOCK_MONOTONIC);
+    if (remaining <= 0) return null;
+    const usec: u32 = @intCast(@min(2000000, @max(1, @divTrunc(remaining, 1000))));
+    return queryBudget(key, value, limit, usec);
+}
+fn queryBudget(key: [*:0]const u8, value: [*:0]const u8, limit: usize, usec: u32) c.asl_object_t {
     const store = c.asl_open_path("/var/log/asl", 0);
     need(store != null, "open store");
     defer c.asl_release(store);
@@ -43,7 +52,7 @@ fn query(key: [*:0]const u8, value: [*:0]const u8, limit: usize) c.asl_object_t 
     defer c.asl_release(list);
     c.asl_append(list, q);
     var last: usize = 0;
-    return c.asl_match(store, list, &last, std.math.maxInt(usize), limit, 2000000, -1);
+    return c.asl_match(store, list, &last, std.math.maxInt(usize), limit, usec, -1);
 }
 fn status() u64 {
     var pid: c_int = 0;
@@ -69,6 +78,30 @@ fn status() u64 {
         }
     }
     c.atf_tc_fail("fresh status");
+}
+// Unlike status(), this observation shares the reconciliation deadline with
+// store reads, so a missing reply cannot add a separate wait to each pass.
+fn statusBefore(deadline: i64) ?u64 {
+    const pid = recovery.pid();
+    need(pid > 1, "status logger pid");
+    const old = queryBefore("com.rmxos.asld.record", "status", 1, deadline) orelse return null;
+    const old_msg = c.asl_next(old);
+    const old_id = if (old_msg != null) numeric(old_msg, "ASLMessageID") else 0;
+    c.asl_release(old);
+    need(c.kill(pid, c.SIGUSR1) == 0, "fresh reconciliation status signal");
+    while (now(c.CLOCK_MONOTONIC) < deadline) {
+        const fresh = queryBefore("com.rmxos.asld.record", "status", 1, deadline) orelse return null;
+        const m = c.asl_next(fresh);
+        if (m != null and numeric(m, "ASLMessageID") > old_id) {
+            need(c.asl_get(m, "sender_dropped") != null, "fresh sender count present");
+            const count = numeric(m, "sender_dropped");
+            c.asl_release(fresh);
+            return count;
+        }
+        c.asl_release(fresh);
+        _ = c.usleep(1000);
+    }
+    return null;
 }
 fn now(clock: c.clockid_t) i64 {
     var t: c.struct_timespec = undefined;
@@ -137,12 +170,12 @@ fn flood(_: [*c]const c.atf_tc_t) callconv(.c) void {
     _ = c.printf("op956_sender sent=10001 send_wall_ns=%lld send_cpu_ns=%lld blocked_estimate_ns=%lld\n", @as(c_longlong, wall), @as(c_longlong, cpu), @as(c_longlong, @max(0, wall - cpu)));
     _ = c.fflush(null);
     phase("status_after", began);
-    const dropped = status() - before;
+    var dropped: u64 = 0;
     phase("store_query", began);
     var identity_ok = true;
     var native_fields_ok = true;
     var stored: usize = 0;
-    for (0..50) |_| {
+    for (0..50) |pass| {
         const result = query("Sender", tag, 10002);
         var seen: [10001]bool = @splat(false);
         stored = 0;
@@ -162,6 +195,8 @@ fn flood(_: [*c]const c.atf_tc_t) callconv(.c) void {
             stored += 1;
         }
         c.asl_release(result);
+        dropped = status() - before;
+        _ = c.printf("op063_flood_reconcile pass=%zu stored=%zu reported=%ju\n", pass + 1, stored, dropped);
         if (stored + dropped >= 10001) break;
         _ = c.usleep(10000);
     }
@@ -269,7 +304,11 @@ fn fallback(_: [*c]const c.atf_tc_t) callconv(.c) void {
         _ = c.printf("op982_unavailable sends=100 elapsed_ns=%lld\n", @as(c_longlong, now(c.CLOCK_MONOTONIC) - began));
         _ = c.write(readiness[1], &byte, 1);
         if (c.read(release_pipe[0], &byte, 1) != 1) c._exit(75);
+        const before_flush = transport.totals();
         transport.record(c.LOG_NOTICE, "flush after restart");
+        const after_flush = transport.totals();
+        const delivered = [3]u64{ @intCast(after_flush[0] - before_flush[0]), @intCast(after_flush[1] - before_flush[1]), @intCast(after_flush[2] - before_flush[2]) };
+        _ = c.write(readiness[1], &delivered, @sizeOf(@TypeOf(delivered)));
         _ = c.printf("op982_after_restart flush_completed=1\n");
         _ = c.fflush(null);
         c._exit(0);
@@ -299,10 +338,22 @@ fn fallback(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(c.waitpid(child, &result, 0) == child and result == 0, "fallback child finished");
     var name: [64]u8 = undefined;
     const tag = std.fmt.bufPrintZ(&name, "op982-fallback-{d}", .{child}) catch unreachable;
-    const dropped = status(); // Fresh asld; flush/report precede the status snapshot.
+    var delivered: [3]u64 = undefined;
+    need(c.read(readiness[0], &delivered, @sizeOf(@TypeOf(delivered))) == @sizeOf(@TypeOf(delivered)), "post-restore transport counts");
+    _ = c.printf("op063_fallback_transport expected_mach=2 observed_mach=%ju socket=%ju refused=%ju\n", delivered[0], delivered[1], delivered[2]);
+    var pid_buf: [32]u8 = undefined;
+    const child_pid = std.fmt.bufPrintZ(&pid_buf, "{d}", .{child}) catch unreachable;
+    var dropped: u64 = 0;
     var stored: usize = 0;
-    for (0..100) |_| {
-        const found = query("Sender", tag, 110);
+    var report_count: usize = 0;
+    var report: c.asl_object_t = null;
+    defer c.asl_release(report);
+    var fresh_samples: usize = 0;
+    var pass: usize = 0;
+    const began = now(c.CLOCK_MONOTONIC);
+    const deadline = began + 10 * std.time.ns_per_s;
+    while (now(c.CLOCK_MONOTONIC) < deadline) : (pass += 1) {
+        const found = queryBefore("Sender", tag, 110, deadline) orelse break;
         var seen: [100]bool = @splat(false);
         stored = 0;
         while (c.asl_next(found)) |m| {
@@ -318,13 +369,46 @@ fn fallback(_: [*c]const c.atf_tc_t) callconv(.c) void {
             stored += 1;
         }
         c.asl_release(found);
-        if (stored + dropped >= 100) break;
-        _ = c.usleep(20000);
+        dropped = statusBefore(deadline) orelse {
+            _ = c.printf("op063_fallback_reconcile pass=%zu stored=%zu reported=%ju fresh=0 report_records=%zu elapsed_ns=%lld\n", pass + 1, stored, dropped, report_count, @as(c_longlong, now(c.CLOCK_MONOTONIC) - began));
+            break;
+        };
+        fresh_samples += 1;
+        const records = queryBefore("PID", child_pid, 128, deadline) orelse break;
+        report_count = 0;
+        c.asl_release(report);
+        report = null;
+        while (c.asl_next(records)) |m| {
+            if (c.asl_get(m, "com.rmxos.syslog.sender_dropped") == null) continue;
+            report_count += 1;
+            c.asl_release(report);
+            report = c.asl_retain(m);
+        }
+        c.asl_release(records);
+        _ = c.printf("op063_fallback_reconcile pass=%zu stored=%zu reported=%ju report_records=%zu elapsed_ns=%lld\n", pass + 1, stored, dropped, report_count, @as(c_longlong, now(c.CLOCK_MONOTONIC) - began));
+        _ = c.fflush(null);
+        if (stored + dropped == 100 and report_count != 0) break;
+        if (stored + dropped > 100) break;
+        _ = c.usleep(1000);
     }
     _ = c.printf("op982_fallback sent=100 stored=%zu sender_dropped=%ju accounted=%ju\n", stored, dropped, stored + dropped);
-    _ = c.fflush(null);
-    need(stored + dropped == 100, "fallback stored plus reported equals sent exactly");
-    need(status() == dropped, "no second loss report");
+    if (now(c.CLOCK_MONOTONIC) >= deadline and fresh_samples != 0 and report_count == 0) {
+        _ = c.printf("op063_product_finding stored=%zu reported=%ju report_records=%zu fresh_samples=%zu elapsed_ns=%lld\n", stored, dropped, report_count, fresh_samples, @as(c_longlong, now(c.CLOCK_MONOTONIC) - began));
+        _ = c.fflush(null);
+    }
+    need(stored + dropped == 100, "fresh stored plus reported equals 100 within ten seconds");
+    need(report_count == 1 and report != null, "exactly one native sender drop report");
+    need(equal(report, "Sender", "syslog") and equal(report, "PID", child_pid), "report belongs to child syslog sender");
+    var uid_buf: [32]u8 = undefined;
+    var gid_buf: [32]u8 = undefined;
+    const uid = std.fmt.bufPrintZ(&uid_buf, "{d}", .{c.getuid()}) catch unreachable;
+    const gid = std.fmt.bufPrintZ(&gid_buf, "{d}", .{c.getgid()}) catch unreachable;
+    need(equal(report, "UID", uid) and equal(report, "GID", gid), "report retains child's kernel UID and GID");
+    need(equal(report, "com.rmxos.syslog.sender_dropped", "100") and equal(report, "Message", "syslog: could not deliver 100 messages"), "report carries the exact undelivered count");
+    need(c.asl_get(report, "RFC5424.Timestamp") == null and c.asl_get(report, "RFC5424.StructuredData") == null, "native Mach report has no socket parse fields");
+    need(delivered[0] == 2 and delivered[1] == 0 and delivered[2] == 0, "report and flush sent only over Mach");
+    identity("fallback-report", report);
+    need(status() == dropped, "fresh status shows no duplicate loss report");
     _ = c.close(readiness[0]);
     _ = c.close(release_pipe[1]);
 }
