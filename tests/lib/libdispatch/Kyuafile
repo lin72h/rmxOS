@@ -5,3 +5,4 @@ atf_test_program{name="workqueue_lane_test"}
 atf_test_program{name="activation_test"}
 atf_test_program{name="time_clocks_test"}
 atf_test_program{name="swift_exports_test"}
+atf_test_program{name="root_setup_test"}

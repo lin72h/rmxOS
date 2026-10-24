@@ -28,3 +28,7 @@ time_clocks_test: ${.CURDIR}/time_clocks.zig
 
 swift_exports_test: ${.CURDIR}/swift_exports.zig
 	${ZIG} build-exe ${.CURDIR}/swift_exports.zig ${DISPATCH_SO} ${SYSROOT}/usr/lib/libmach.so.5 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET} -rdynamic
+
+SCRIPTS+= root_setup_test
+root_setup_test: ${.CURDIR}/root_setup.zig
+	${ZIG} build-exe ${.CURDIR}/root_setup.zig ${DISPATCH_SO} ${SYSROOT}/usr/lib/libasl.so.1 ${SYSROOT}/usr/lib/libnotify.so.5 ${SYSROOT}/usr/lib/libmach.so.5 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET} -rdynamic
