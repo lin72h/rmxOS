@@ -908,8 +908,6 @@ _dispatch_root_queues_init(void *context DISPATCH_UNUSED)
 		DISPATCH_CRASH("Root queue initialization failed");
 #endif // DISPATCH_ENABLE_THREAD_POOL
 	}
-	_dispatch_log("libdispatch concurrency engine: %s",
-			use_workq ? "twq kernel workqueue" : "pthread pool");
 }
 
 #define countof(x) (sizeof(x) / sizeof(x[0]))

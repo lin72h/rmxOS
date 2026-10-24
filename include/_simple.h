@@ -126,7 +126,9 @@ void _simple_sfree(_SIMPLE_STRING __b);
 
 /*
  * Simplified ASL log interface; does not use malloc.  Unfortunately, this
- * requires knowledge of the format used by ASL.
+ * requires knowledge of the format used by ASL. The platform implementation
+ * uses bounded Mach discovery and one nonblocking send, without libdispatch,
+ * libnotify or libasl. Unavailable/full endpoints and oversized records drop.
  */
 void _simple_asl_log(int __level, const char *__facility, const char *__message);
 void _simple_asl_log_prog(int level, const char *facility, const char *message, const char *progname);

@@ -371,10 +371,11 @@ fn compatibilityService(_: [*c]const c.atf_tc_t) callconv(.c) void {
 fn retention(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const jobs = run(&.{ "/bin/launchctl", "list" });
     need(std.mem.indexOf(u8, jobs, "com.rmxos.aslmanager.once") != null, "retention job loaded");
+    _ = c.unlink("/tmp/op040-retention-times");
     const path = "/tmp/op767-interval.plist";
     const f = c.fopen(path, "w");
     need(f != null, "interval fixture plist");
-    _ = c.fputs("<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>Label</key><string>com.rmxos.op767.interval</string><key>ProgramArguments</key><array><string>/usr/sbin/aslmanager</string><string>-once</string><string>-wait-for-filesystems</string><string>-s</string><string>/var/log/asl</string></array><key>ThrottleInterval</key><integer>0</integer><key>StartInterval</key><integer>2</integer></dict></plist>", f);
+    _ = c.fputs("<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>Label</key><string>com.rmxos.op767.interval</string><key>ProgramArguments</key><array><string>/usr/tests/lib/libasl/retention_observer</string></array><key>ThrottleInterval</key><integer>0</integer><key>StartInterval</key><integer>2</integer></dict></plist>", f);
     need(c.fclose(f) == 0, "close interval fixture");
     const marker = "[com.rmxos.aslmanager.record summary]";
     const before = count(scope.query("com.rmxos.aslmanager.record", "summary", false, false), marker);
@@ -387,6 +388,9 @@ fn retention(_: [*c]const c.atf_tc_t) callconv(.c) void {
     }
     _ = run(&.{ "/bin/launchctl", "unload", path });
     _ = c.unlink(path);
+    _ = c.printf("op040_retention summary_before=%zu summary_after=%zu delta=%zu\n", before, observed, observed - before);
+    const times = command(&.{ "/bin/cat", "/tmp/op040-retention-times" });
+    _ = c.printf("%.*s", @as(c_int, @intCast(times.text.len)), times.text.ptr);
     need(observed >= before + 2, "launchd StartInterval ran the same retention command twice");
 }
 fn cleanup(_: [*c]const c.atf_tc_t) callconv(.c) void {

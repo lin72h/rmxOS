@@ -7,9 +7,16 @@ const c = @cImport({
     @cInclude("signal.h");
     @cInclude("sys/wait.h");
     @cInclude("time.h");
+    @cInclude("asl.h");
+    @cInclude("dlfcn.h");
 });
 extern fn dispatch_queue_create([*:0]const u8, ?*anyopaque) ?*anyopaque;
 extern fn dispatch_source_create(*const anyopaque, usize, usize, ?*anyopaque) ?*anyopaque;
+// Retained relocations load both clients without initializing either client.
+extern fn asl_open(?[*:0]const u8, ?[*:0]const u8, u32) ?*anyopaque;
+extern fn notify_register_plain([*:0]const u8, *c_int) u32;
+pub export var root_setup_asl: *const @TypeOf(asl_open) = &asl_open;
+pub export var root_setup_notify: *const @TypeOf(notify_register_plain) = &notify_register_plain;
 extern const _dispatch_source_type_timer: u8;
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 var executable: [*c]u8 = undefined;
@@ -51,8 +58,42 @@ fn no(_: [*c]const c.atf_tc_t) callconv(.c) void {
 fn stderr(_: [*c]const c.atf_tc_t) callconv(.c) void {
     run("stderr");
 }
-const names = [_][*:0]const u8{ "unset", "no", "stderr" };
-const bodies = .{ &unset, &no, &stderr };
+fn delivery(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const Logger = *const fn (c_int, [*:0]const u8, [*:0]const u8, [*:0]const u8) callconv(.c) void;
+    const log: Logger = @ptrCast(c.dlsym(c.RTLD_DEFAULT, "_simple_asl_log_prog") orelse c.atf_tc_fail("missing platform logger"));
+    var token: [128]u8 = undefined;
+    const message = std.fmt.bufPrintZ(&token, "op040_simple_{d}_{d}", .{ c.getpid(), now() }) catch unreachable;
+    // Send before initializing either ASL or dispatch in this fresh ATF process.
+    log(5, "com.apple.libsystem.libdispatch", message, "op040-fixture");
+    const q = c.asl_new(c.ASL_TYPE_QUERY) orelse c.atf_tc_fail("query allocation");
+    defer c.asl_release(q);
+    if (c.asl_set_query(q, "Message", message, c.ASL_QUERY_OP_EQUAL) != 0) c.atf_tc_fail("query");
+    for (0..40) |_| {
+        const store = c.asl_open_path("/var/log/asl", 0) orelse c.atf_tc_fail("open store");
+        const list = c.asl_new(c.ASL_TYPE_LIST) orelse c.atf_tc_fail("list allocation");
+        c.asl_append(list, q);
+        var last: usize = 0;
+        const result = c.asl_match(store, list, &last, std.math.maxInt(usize), 2, 100000, -1);
+        var count: usize = 0;
+        while (c.asl_next(result)) |m| {
+            inline for (.{ .{ "Sender", "op040-fixture" }, .{ "Facility", "com.apple.libsystem.libdispatch" }, .{ "Level", "5" } }) |pair| {
+                const value = c.asl_get(m, pair[0]) orelse c.atf_tc_fail("missing record field");
+                if (!std.mem.eql(u8, std.mem.span(value), pair[1])) c.atf_tc_fail("incorrect record field");
+            }
+            count += 1;
+        }
+        c.asl_release(result);
+        c.asl_release(list);
+        c.asl_release(store);
+        if (count > 1) c.atf_tc_fail("duplicate simple diagnostic");
+        if (count == 1) return;
+        _ = c.usleep(50000);
+    }
+    c.atf_tc_fail("simple diagnostic did not reach asld");
+}
+const names =
+    [_][*:0]const u8{ "unset", "no", "stderr", "simple_delivery" };
+const bodies = .{ &unset, &no, &stderr, &delivery };
 var cases: [names.len]c.atf_tc_t = undefined;
 fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(tc, "timeout", "%s", "5");

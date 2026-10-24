@@ -454,6 +454,8 @@ FBSD_1.7 {
 };
 
 FBSD_1.8 {
+	_simple_asl_log;
+	_simple_asl_log_prog;
 	aio_read2;
 	aio_write2;
 	execvpe;
