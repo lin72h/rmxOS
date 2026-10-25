@@ -184,6 +184,7 @@ fn assertConsole() void {
     need(std.mem.indexOf(u8, observed, "-clocal") == null and std.mem.indexOf(u8, observed, "clocal") != null, "stty reports clocal");
 }
 fn bootReady(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    _ = scope.bootWindow();
     const f = c.fopen("/var/run/asld.boot-service.log", "r");
     need(f != null, "compatibility service preserves its boot readiness result");
     defer _ = c.fclose(f);
@@ -195,6 +196,7 @@ fn bootReady(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(ok, "asld served before dependent rc services with no readiness warning");
 }
 fn oneOwner(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    _ = scope.bootWindow();
     awaitOwner("asld");
     const list = run(&.{ "/bin/ps", "-axo", "comm=" });
     var processes = std.mem.tokenizeAny(u8, list, "\r\n");
@@ -338,6 +340,7 @@ fn counters(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(observations.statusMatches(fresh, baseline), "idle snapshot changes no counter: exact baseline values and zero deltas");
 }
 fn compatibilityService(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    _ = scope.bootWindow();
     awaitOwner("asld");
     need(c.access("/usr/sbin/syslogd", c.F_OK) != 0 and c.__error().* == c.ENOENT, "FreeBSD syslogd binary is not installed");
     const defaults = run(&.{ "/bin/cat", "/etc/defaults/rc.conf" });

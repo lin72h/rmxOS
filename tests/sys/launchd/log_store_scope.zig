@@ -121,6 +121,13 @@ pub fn bootWindow() BootWindow {
     }
     var ready: c.struct_stat = undefined;
     if (c.ferror(fp) != 0 or observations != 1 or c.stat("/var/run/asld.service-ready", &ready) != 0) @panic("first asld readiness unavailable");
+    var marker: c.struct_stat = undefined;
+    if (c.stat("/var/run/asld.filesystems-ready", &marker) != 0) @panic("asld filesystem readiness");
+    const proof: ReadyProof = .{ .boot_sec = started.tv_sec, .boot_usec = started.tv_usec, .marker_sec = marker.st_mtim.tv_sec, .marker_nsec = marker.st_mtim.tv_nsec, .ready_sec = ready.st_mtim.tv_sec, .ready_nsec = ready.st_mtim.tv_nsec };
+    const saved = c.fopen("/var/run/op942-first-asld-ready", "wbx") orelse @panic("capture first asld readiness");
+    const written = c.fwrite(&proof, @sizeOf(ReadyProof), 1, saved);
+    const closed = c.fclose(saved);
+    if (written != 1 or closed != 0) @panic("save first asld readiness");
     return .{ .started = started.tv_sec, .ready = ready.st_mtim.tv_sec, .ready_nsec = ready.st_mtim.tv_nsec };
 }
 
