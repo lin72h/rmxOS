@@ -16,6 +16,7 @@ const c = @cImport({
     @cInclude("sys/wait.h");
     @cInclude("signal.h");
     @cInclude("stdio.h");
+    @cInclude("stdlib.h");
     @cInclude("asl.h");
     @cInclude("launch.h");
 });
@@ -60,9 +61,20 @@ pub fn stored(message: [:0]const u8) bool {
     return c.asl_next(result) != null;
 }
 pub fn fileHas(message: []const u8) bool {
-    const raw = std.Io.Dir.cwd().readFileAlloc(io, "/var/log/messages", a, .limited(32 * 1024 * 1024)) catch return false;
-    defer a.free(raw);
-    return std.mem.indexOf(u8, raw, message) != null;
+    return fileHasPath("/var/log/messages", message);
+}
+fn fileHasPath(path: [*:0]const u8, message: []const u8) bool {
+    const file = c.fopen(path, "r") orelse return false;
+    defer _ = c.fclose(file);
+    // getline grows for long records; neither total size nor line size is capped.
+    var line: [*c]u8 = null;
+    var capacity: usize = 0;
+    defer c.free(line);
+    while (true) {
+        const size = c.getline(&line, &capacity, file);
+        if (size < 0) return false;
+        if (std.mem.indexOf(u8, line[0..@intCast(size)], message) != null) return true;
+    }
 }
 pub fn health(label: []const u8) bool {
     const message = std.fmt.allocPrintSentinel(a, "op021.health.{s}.{d}.{d}", .{ label, c.getpid(), std.Io.Clock.real.now(io).nanoseconds }, 0) catch unreachable;
@@ -212,4 +224,20 @@ pub fn stopTrace() void {
     _ = c.asl_set(message, "Option", "control");
     _ = c.asl_set(message, "Message", "= debug 0");
     _ = c.asl_send(null, message);
+}
+
+test "cleanup finds a marker after an 80 MiB text log and rejects an absent marker" {
+    var path = "op129-recovery-XXXXXX".* ++ [_]u8{0};
+    const fd = c.mkstemp(@ptrCast(&path));
+    try std.testing.expect(fd >= 0);
+    const fp = c.fdopen(fd, "w") orelse return error.Open;
+    defer _ = c.unlink(@ptrCast(&path));
+    var line: [1024 * 1024]u8 = @splat('x');
+    line[line.len - 1] = '\n';
+    for (0..80) |_| try std.testing.expect(c.fwrite(&line, 1, line.len, fp) == line.len);
+    const marker = "op129-cleanup-tail\n";
+    try std.testing.expect(c.fwrite(marker, 1, marker.len, fp) == marker.len);
+    try std.testing.expect(c.fclose(fp) == 0);
+    try std.testing.expect(fileHasPath(@ptrCast(&path), "op129-cleanup-tail"));
+    try std.testing.expect(!fileHasPath(@ptrCast(&path), "absent-marker"));
 }

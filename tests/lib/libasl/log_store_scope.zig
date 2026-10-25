@@ -102,6 +102,7 @@ pub const BootRead = struct {
     retained: bool,
     oldest: ?Timestamp,
     window: BootWindow,
+    class_gap: ?ClassStart,
 
     // A missing startup window alone cannot distinguish retention from loss.
     // Return a reason only when the day-file history demonstrably starts later.
@@ -110,10 +111,17 @@ pub const BootRead = struct {
         const oldest = self.oldest orelse return error.EmptyStore;
         if (oldest.sec < self.window.ready or
             (oldest.sec == self.window.ready and oldest.nsec <= self.window.ready_nsec))
-            return error.StartupRecordsMissing;
+            return self.missingCheck(reason);
         return std.fmt.bufPrintZ(reason, "the store's oldest record ({d}.{d:0>9}) is newer than the boot's first readiness ({d}.{d:0>9})", .{
             oldest.sec, @as(u32, @intCast(oldest.nsec)), self.window.ready, @as(u32, @intCast(self.window.ready_nsec)),
         }) catch unreachable;
+    }
+    // Called only when an expected record is absent, even when other classes
+    // retained startup records. A gap can belong to just one access class.
+    pub fn missingCheck(self: BootRead, reason: *[256]u8) error{ StartupRecordsMissing, EmptyStore }!?[:0]const u8 {
+        if (self.oldest == null) return error.EmptyStore;
+        if (self.class_gap) |gap| return std.fmt.bufPrintZ(reason, "class {s}'s oldest record ({d}.{d:0>9}) is newer than the boot's start ({d})", .{ gap.name[0..gap.len], gap.time.sec, @as(u32, @intCast(gap.time.nsec)), self.window.started }) catch unreachable;
+        return error.StartupRecordsMissing;
     }
 };
 const ReadyProof = extern struct { boot_sec: i64, boot_usec: i64, marker_sec: i64, marker_nsec: i64, ready_sec: i64, ready_nsec: i64 };
@@ -223,80 +231,133 @@ fn since(window: BootWindow) c.asl_object_t {
     if (c.asl_set_query(q, "Time", stamp, c.ASL_QUERY_OP_NUMERIC | c.ASL_QUERY_OP_GREATER_EQUAL) != 0) unreachable;
     return q;
 }
-fn startupRetained(files: ?*anyopaque, window: BootWindow) bool {
-    const q = since(window);
-    defer c.asl_release(q);
-    const list = c.asl_new(c.ASL_TYPE_LIST) orelse unreachable;
-    defer c.asl_release(list);
-    c.asl_append(list, q);
-    var start: u64 = 0;
-    while (true) {
-        var last: u64 = 0;
-        const result = asl_file_list_match(files, list, &last, start, 1024, 100000, 1);
-        defer c.asl_release(result);
-        while (c.asl_next(result)) |message| {
-            const time = c.asl_get(message, "Time") orelse @panic("boot record time");
-            const sec = std.fmt.parseInt(i64, std.mem.span(time), 10) catch unreachable;
-            const nsec = if (c.asl_get(message, "TimeNanoSec")) |n| std.fmt.parseInt(i64, std.mem.span(n), 10) catch unreachable else 0;
-            if (sec < window.ready or (sec == window.ready and nsec <= window.ready_nsec)) return true;
+const ClassStart = struct { name: [64]u8, len: usize, time: Timestamp };
+const Boundary = struct { oldest: ?Timestamp = null, gap: ?ClassStart = null };
+fn timestamp(message: c.asl_object_t) Timestamp {
+    const sec = c.asl_get(message, "Time") orelse @panic("record time");
+    const nsec = if (c.asl_get(message, "TimeNanoSec")) |n| std.fmt.parseInt(i64, std.mem.span(n), 10) catch unreachable else 0;
+    if (nsec < 0 or nsec >= 1000000000) @panic("record nanoseconds");
+    return .{ .sec = std.fmt.parseInt(i64, std.mem.span(sec), 10) catch unreachable, .nsec = nsec };
+}
+fn earlier(x: Timestamp, y: Timestamp) bool {
+    return x.sec < y.sec or (x.sec == y.sec and x.nsec < y.nsec);
+}
+fn accessClass(name: []const u8) []const u8 {
+    var end: usize = 10;
+    // Date.U<uid>.G<gid>.<split time>.asl; size suffix is not a class.
+    for ([_]u8{ 'U', 'G' }) |tag| {
+        if (name.len > end + 2 and name[end] == '.' and name[end + 1] == tag and std.ascii.isDigit(name[end + 2])) {
+            end += 2;
+            while (end < name.len and std.ascii.isDigit(name[end])) end += 1;
         }
-        if (last == 0 or last < start or last == std.math.maxInt(u64)) return false;
-        start = last + 1;
     }
+    return if (end == 10) "plain" else name[10..end];
 }
-fn oldestRecord() ?Timestamp {
-    const files = selectedFiles(null);
-    defer asl_file_list_close(files);
-    var last: u64 = 0;
-    // Size retention removes day files before BB buckets, so only day files
-    // establish whether ordinary boot history still reaches back this far.
-    const result = asl_file_list_match(files, null, &last, 0, 1, 0, 1);
-    defer c.asl_release(result);
-    const message = c.asl_next(result) orelse return null;
-    const time = c.asl_get(message, "Time") orelse @panic("oldest record time");
-    const nsec = if (c.asl_get(message, "TimeNanoSec")) |n| std.fmt.parseInt(i64, std.mem.span(n), 10) catch @panic("invalid oldest record nanoseconds") else 0;
-    if (nsec < 0 or nsec >= 1000000000) @panic("invalid oldest record nanoseconds");
-    return .{
-        .sec = std.fmt.parseInt(i64, std.mem.span(time), 10) catch @panic("invalid oldest record time"),
-        .nsec = nsec,
-    };
+fn dayBoundary(window: BootWindow) Boundary {
+    const dir = c.opendir(storePath()) orelse @panic("open day boundary directory");
+    defer _ = c.closedir(dir);
+    var classes: std.StringHashMap(Timestamp) = .init(a);
+    defer {
+        var keys = classes.keyIterator();
+        while (keys.next()) |key| a.free(key.*);
+        classes.deinit();
+    }
+    while (true) {
+        c.__error().* = 0;
+        const entry = c.readdir(dir) orelse {
+            if (c.__error().* != 0) @panic("read day boundary directory");
+            break;
+        };
+        const name = entry.*.d_name[0..entry.*.d_namlen];
+        if (!isDayFile(name)) continue;
+        const path = std.fmt.allocPrintSentinel(a, "{s}/{s}", .{ std.mem.span(storePath()), name }, 0) catch unreachable;
+        defer a.free(path);
+        var file: ?*anyopaque = null;
+        if (asl_file_open_read(path, &file) != 0) continue;
+        const files = asl_file_list_add(null, file);
+        if (files == null) {
+            _ = asl_file_close(file);
+            continue;
+        }
+        defer asl_file_list_close(files);
+        var last: u64 = 0;
+        const result = asl_file_list_match(files, null, &last, 0, 1, 0, 1);
+        defer c.asl_release(result);
+        const message = c.asl_next(result) orelse continue;
+        const first = timestamp(message);
+        const class = accessClass(name);
+        if (classes.getPtr(class)) |old| {
+            if (earlier(first, old.*)) old.* = first;
+        } else classes.put(a.dupe(u8, class) catch unreachable, first) catch unreachable;
+    }
+    var boundary: Boundary = .{};
+    var entries = classes.iterator();
+    while (entries.next()) |entry| {
+        const time = entry.value_ptr.*;
+        if (boundary.oldest == null or earlier(time, boundary.oldest.?)) boundary.oldest = time;
+        if (time.sec <= window.started) continue;
+        // Pick deterministically if multiple classes have a gap.
+        const name = entry.key_ptr.*;
+        if (boundary.gap == null or std.mem.lessThan(u8, name, boundary.gap.?.name[0..boundary.gap.?.len])) {
+            var gap: ClassStart = .{ .name = undefined, .len = name.len, .time = time };
+            if (name.len > gap.name.len) @panic("access class length");
+            @memcpy(gap.name[0..name.len], name);
+            boundary.gap = gap;
+        }
+    }
+    return boundary;
 }
+
 pub fn readBoot(key: []const u8, value: []const u8, prefix: bool, window: BootWindow) BootRead {
     if (window.ready < window.started or window.ready_nsec < 0 or window.ready_nsec >= 1000000000) @panic("invalid boot readiness window");
     const files = bootFiles(window.started);
     defer asl_file_list_close(files);
-    const retained = startupRetained(files, window);
+    const boundary = dayBoundary(window);
     const q = since(window);
     defer c.asl_release(q);
-    const key_z = z(key);
-    defer a.free(key_z);
-    const value_z = z(value);
-    defer a.free(value_z);
-    if (c.asl_set_query(q, key_z, value_z, @intCast(c.ASL_QUERY_OP_EQUAL | @as(c_int, if (prefix) c.ASL_QUERY_OP_PREFIX else 0))) != 0) @panic("boot query key");
     const list = c.asl_new(c.ASL_TYPE_LIST) orelse unreachable;
     defer c.asl_release(list);
     c.asl_append(list, q);
+    // Locate the first ID from this boot once. A key-filtered query would
+    // walk the whole storm to prove an absent key; only Time is used here.
     var last: u64 = 0;
-    const result = asl_file_list_match(files, list, &last, std.math.maxInt(u64), 0, 0, -1);
-    defer c.asl_release(result);
-    var strings: std.ArrayList([]const u8) = .empty;
-    defer {
-        for (strings.items) |s| a.free(s);
-        strings.deinit(a);
+    const first = asl_file_list_match(files, list, &last, 0, 1, 0, 1);
+    var start: u64 = 0;
+    if (c.asl_next(first)) |message| {
+        const id = c.asl_get(message, "ASLMessageID") orelse unreachable;
+        start = std.fmt.parseInt(u64, std.mem.span(id), 10) catch unreachable;
     }
-    while (c.asl_next(result)) |message| {
-        const raw = c.asl_format(message, "raw", "sec", 0) orelse @panic("format boot ASL");
-        defer c.free(raw);
-        strings.append(a, a.dupe(u8, std.mem.span(raw)) catch unreachable) catch unreachable;
-    }
+    c.asl_release(first);
     var out: std.ArrayList(u8) = .empty;
-    var i = strings.items.len;
-    while (i > 0) {
-        i -= 1;
-        out.appendSlice(a, strings.items[i]) catch unreachable;
-        out.append(a, '\n') catch unreachable;
-    }
-    return .{ .bytes = out.toOwnedSlice(a) catch unreachable, .retained = retained, .oldest = if (retained) null else oldestRecord(), .window = window };
+    var retained = false;
+    if (start != 0) while (true) {
+        // Small unfiltered batches bound work even when no requested key
+        // survives. Message IDs order the startup window before later churn.
+        const result = asl_file_list_match(files, null, &last, start, 32, 0, 1);
+        defer c.asl_release(result);
+        var passed_window = false;
+        while (c.asl_next(result)) |message| {
+            const time = timestamp(message);
+            if (time.sec < window.started) continue;
+            if (time.sec > window.ready or (time.sec == window.ready and time.nsec > window.ready_nsec)) {
+                passed_window = true;
+                continue;
+            }
+            retained = true;
+            const key_z = z(key);
+            defer a.free(key_z);
+            const field = c.asl_get(message, key_z) orelse continue;
+            const bytes = std.mem.span(field);
+            if (!(if (prefix) std.mem.startsWith(u8, bytes, value) else std.mem.eql(u8, bytes, value))) continue;
+            const raw = c.asl_format(message, "raw", "sec", 0) orelse @panic("format boot ASL");
+            defer c.free(raw);
+            out.appendSlice(a, std.mem.span(raw)) catch unreachable;
+            out.append(a, '\n') catch unreachable;
+        }
+        if (passed_window or last < start or last == 0 or last == std.math.maxInt(u64)) break;
+        start = last + 1;
+    };
+    return .{ .bytes = out.toOwnedSlice(a) catch unreachable, .retained = retained, .oldest = boundary.oldest, .window = window, .class_gap = boundary.gap };
 }
 
 extern fn asl_store_open_write([*:0]const u8, *?*anyopaque) u32;
@@ -527,7 +588,7 @@ test "split files next day and BB records preserve global message ID order" {
     try std.testing.expect(renamed);
     try testSave(2000086400, "ordered second", null);
     try testSave(2000000001, "ordered third", 2100000000);
-    const history = readBoot("Message", "ordered", true, .{ .started = 2000000000, .ready = 2000000002 });
+    const history = readBoot("Message", "ordered", true, .{ .started = 2000000000, .ready = 2000086401 });
     defer a.free(history.bytes);
     try std.testing.expect(history.retained);
     const first = std.mem.indexOf(u8, history.bytes, "ordered first") orelse return error.First;
@@ -577,4 +638,104 @@ test "calendar selection handles DST and year boundaries" {
     const year = dayPrefixes(c.mktime(&local));
     try std.testing.expectEqualStrings("2026.12.31", year[0][0..10]);
     try std.testing.expectEqualStrings("2027.01.01", year[1][0..10]);
+}
+
+// Reusable real-shape fixture for host timing; callers may provide its directory.
+fn stormFixture(path: [:0]const u8) !void {
+    const done = try std.fmt.allocPrintSentinel(a, "{s}/fixture.complete", .{path}, 0);
+    defer a.free(done);
+    if (c.access(done, 0) == 0) return;
+    var id: u64 = 1;
+    const started: i64 = 2000000000;
+    const dates = dayPrefixes(started);
+    const m = c.asl_new(c.ASL_TYPE_MSG);
+    defer c.asl_release(m);
+    for ([_][]const u8{ "", ".G80", ".U0.G80", ".U501" }, 0..) |class, class_index| {
+        // Each class has a pre-boot file, an initial boot file, and a size split.
+        for (0..3) |part| {
+            const suffix = if (part == 2) ".2000000100" else if (part == 0) ".1999999900" else "";
+            const name = try std.fmt.allocPrintSentinel(a, "{s}/{s}{s}{s}.asl", .{ path, dates[0][0..10], class, suffix }, 0);
+            defer a.free(name);
+            var file: ?*anyopaque = null;
+            try std.testing.expectEqual(@as(u32, 0), asl_file_open_write(name, 0o600, c.getuid(), c.getgid(), &file));
+            id = if (part == 0) class_index + 1 else if (part == 1) class_index + 5 else 9 + class_index * 300000;
+            const count: usize = if (part == 2) 300000 else 1;
+            for (0..count) |_| {
+                const time = if (part == 0) "1999999900" else if (part == 1) "2000000000" else "2000000100";
+                try std.testing.expect(c.asl_set(m, "Time", time) == 0);
+                try std.testing.expect(c.asl_set(m, "Message", if (part == 1) "banner" else "storm-padding-0123456789-0123456789-0123456789") == 0);
+                try std.testing.expectEqual(@as(u32, 0), asl_file_save(file, m, &id));
+                id += 1;
+            }
+            try std.testing.expectEqual(@as(u32, 0), asl_file_close(file));
+        }
+    }
+    const fp = c.fopen(done, "w") orelse return error.Fixture;
+    try std.testing.expect(c.fclose(fp) == 0);
+}
+test "real-shape same-day 1.2M-record store reads only startup records" {
+    const fixture = try TestStore.init();
+    defer fixture.deinit();
+    const path = if (c.getenv("RMX_SCOPE_STORM_STORE")) |p| try a.dupeZ(u8, std.mem.span(p)) else try a.dupeZ(u8, fixture.path);
+    defer a.free(path);
+    try std.testing.expect(c.setenv("RMX_ASL_TEST_STORE", path, 1) == 0);
+    try stormFixture(path);
+    var before: c.struct_timespec = undefined;
+    var after: c.struct_timespec = undefined;
+    try std.testing.expect(c.clock_gettime(c.CLOCK_MONOTONIC, &before) == 0);
+    const history = readBoot("Message", "banner", false, .{ .started = 2000000000, .ready = 2000000001 });
+    try std.testing.expect(c.clock_gettime(c.CLOCK_MONOTONIC, &after) == 0);
+    defer a.free(history.bytes);
+    const ns = (after.tv_sec - before.tv_sec) * std.time.ns_per_s + after.tv_nsec - before.tv_nsec;
+    std.debug.print("storm_read records=1200000 classes=plain,G80,U0.G80,U501 elapsed_ms={d}\n", .{@divTrunc(ns, std.time.ns_per_ms)});
+    try std.testing.expect(history.retained);
+    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, history.bytes, "[Message banner]"));
+    if (c.getenv("RMX_SCOPE_BASELINE") == null) try std.testing.expect(ns < 2 * std.time.ns_per_s);
+}
+
+fn testClassRecord(suffix: []const u8, at: i64, message: [*:0]const u8, number: u64) !void {
+    const dates = dayPrefixes(2000000000);
+    const path = try std.fmt.allocPrintSentinel(a, "{s}/{s}{s}.asl", .{ std.mem.span(storePath()), dates[0][0..10], suffix }, 0);
+    defer a.free(path);
+    var file: ?*anyopaque = null;
+    try std.testing.expectEqual(@as(u32, 0), asl_file_open_write(path, 0o600, c.getuid(), c.getgid(), &file));
+    defer _ = asl_file_close(file);
+    const m = c.asl_new(c.ASL_TYPE_MSG);
+    defer c.asl_release(m);
+    var buf: [32]u8 = undefined;
+    const stamp = try std.fmt.bufPrintZ(&buf, "{d}", .{at});
+    try std.testing.expect(c.asl_set(m, "Time", stamp) == 0);
+    try std.testing.expect(c.asl_set(m, "Message", message) == 0);
+    var id = number;
+    try std.testing.expectEqual(@as(u32, 0), asl_file_save(file, m, &id));
+}
+test "adx01 shape skips missing launchd records only for the truncated G80 class" {
+    const fixture = try TestStore.init();
+    defer fixture.deinit();
+    const window: BootWindow = .{ .started = 2000000000, .ready = 2000000001 };
+    try testClassRecord("", window.started - 100, "before boot", 1);
+    try testClassRecord(".U501", window.started, "other startup", 2);
+    try testClassRecord(".U0.G80", window.started, "other startup", 3);
+    try testClassRecord(".G80.2000001200", window.started + 1200, "surviving split", 4);
+    try testSave(window.started, "BB startup", 2200000000);
+    const history = readBoot("Message", "launchd banner", false, window);
+    defer a.free(history.bytes);
+    try std.testing.expect(history.retained and history.bytes.len == 0);
+    var reason: [256]u8 = undefined;
+    const removed = (try history.missingCheck(&reason)) orelse return error.MissingReason;
+    try std.testing.expectEqualStrings("class .G80's oldest record (2000001200.000000000) is newer than the boot's start (2000000000)", removed);
+}
+test "missing expected startup records fail when every access class reaches back" {
+    const fixture = try TestStore.init();
+    defer fixture.deinit();
+    const window: BootWindow = .{ .started = 2000000000, .ready = 2000000001 };
+    for ([_][]const u8{ "", ".G80", ".U0.G80", ".U501" }, 0..) |class, i| {
+        try testClassRecord(class, window.started - 1, "before boot", i + 1);
+    }
+    try testClassRecord(".G80.2000000000", window.started, "other startup", 5);
+    const history = readBoot("Message", "launchd banner", false, window);
+    defer a.free(history.bytes);
+    try std.testing.expect(history.retained and history.bytes.len == 0);
+    var reason: [256]u8 = undefined;
+    try std.testing.expectError(error.StartupRecordsMissing, history.missingCheck(&reason));
 }

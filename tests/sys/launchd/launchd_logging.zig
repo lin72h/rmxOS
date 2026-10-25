@@ -112,15 +112,19 @@ fn early() void {
     const second = "*** Shutdown logging is enabled. ***";
     const history = scope.readBoot("Sender", "com.apple.launchd", false, scope.bootWindow());
     defer a.free(history.bytes);
-    var reason: [256]u8 = undefined;
-    const removed = history.startupCheck(&reason) catch |err| switch (err) {
-        error.StartupRecordsMissing => c.atf_tc_fail("startup records missing although the store reaches back to the boot"),
-        error.EmptyStore => c.atf_tc_fail("startup records missing and the store is empty"),
-    };
-    if (removed) |why| c.atf_tc_skip("%s", why.ptr);
     const bytes = history.bytes;
-    const x = std.mem.indexOf(u8, bytes, first) orelse c.atf_tc_fail("early startup record absent");
-    const y = std.mem.indexOf(u8, bytes, second) orelse c.atf_tc_fail("early shutdown logging record absent");
+    const first_at = std.mem.indexOf(u8, bytes, first);
+    const second_at = std.mem.indexOf(u8, bytes, second);
+    if (first_at == null or second_at == null) {
+        var reason: [256]u8 = undefined;
+        const removed = history.missingCheck(&reason) catch |err| switch (err) {
+            error.StartupRecordsMissing => c.atf_tc_fail("startup records missing although the store reaches back to the boot"),
+            error.EmptyStore => c.atf_tc_fail("startup records missing and the store is empty"),
+        };
+        if (removed) |why| c.atf_tc_skip("%s", why.ptr);
+    }
+    const x = first_at orelse unreachable;
+    const y = second_at orelse unreachable;
     need(x < y, "early launchd messages preserve order");
     need(occurrences(bytes, first) == 1 and occurrences(bytes, second) == 1, "early records stored once");
     need(std.mem.indexOf(u8, bytes, "[PID 1]") != null, "launchd sender pid");

@@ -93,7 +93,7 @@ fn body(tc: [*c]const c.atf_tc_t) callconv(.c) void {
         defer _ = c.rmdir(bin);
         var path_buffer: [256]u8 = undefined;
         const hello = std.fmt.bufPrintZ(&path_buffer, "{s}/hello", .{bin}) catch unreachable;
-        need(c.link(executable, hello) == 0, "hello executable fixture");
+        copyExecutable(executable, hello) catch c.atf_tc_fail("copy hello executable fixture");
         defer _ = c.unlink(hello);
         if (std.mem.eql(u8, name, "run")) {
             const r = run(&.{ "/usr/bin/xcrun", "hello", null }, @ptrCast(&directory));
@@ -106,6 +106,25 @@ fn body(tc: [*c]const c.atf_tc_t) callconv(.c) void {
         }
     }
 }
+fn copyExecutable(source: [*:0]const u8, destination: [*:0]const u8) !void {
+    const input = c.fopen(source, "rb") orelse return error.OpenSource;
+    defer _ = c.fclose(input);
+    const output = c.fopen(destination, "wb") orelse return error.OpenDestination;
+    var ok = true;
+    var bytes: [65536]u8 = undefined;
+    while (true) {
+        const size = c.fread(&bytes, 1, bytes.len, input);
+        if (c.fwrite(&bytes, 1, size, output) != size) {
+            ok = false;
+            break;
+        }
+        if (size < bytes.len) break;
+    }
+    if (c.ferror(input) != 0) ok = false;
+    if (c.fclose(output) != 0) ok = false;
+    if (!ok) return error.Copy;
+    if (c.chmod(destination, 0o755) != 0) return error.Mode;
+}
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     for ([_][*:0]const u8{ "sdk", "selection", "run", "find", "swift" }, 0..) |name, i| {
         var e = c.atf_tc_init(&cases[i], name, null, body, null, c.atf_tp_get_config(tp));
@@ -115,11 +134,45 @@ fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     }
     return c.atf_no_error();
 }
-pub export fn main(argc: c_int, argv: [*c][*c]u8) c_int {
+comptime {
+    if (!@import("builtin").is_test) @export(&main, .{ .name = "main" });
+}
+pub fn main(argc: c_int, argv: [*c][*c]u8) callconv(.c) c_int {
     if (std.mem.eql(u8, std.fs.path.basename(std.mem.span(argv[0])), "hello")) {
         _ = c.puts("op065 hello");
         return 0;
     }
     executable = @ptrCast(argv[0]);
     return atf_tp_main(argc, argv, add);
+}
+
+test "hello fixture is a separate executable copy" {
+    var directory = "/tmp/op129-copy-XXXXXX".* ++ [_]u8{0};
+    try std.testing.expect(c.mkdtemp(@ptrCast(&directory)) != null);
+    defer _ = c.rmdir(@ptrCast(&directory));
+    var from_buf: [256]u8 = undefined;
+    var to_buf: [256]u8 = undefined;
+    const from = try std.fmt.bufPrintZ(&from_buf, "{s}/source", .{std.mem.sliceTo(&directory, 0)});
+    const to = try std.fmt.bufPrintZ(&to_buf, "{s}/hello", .{std.mem.sliceTo(&directory, 0)});
+    defer _ = c.unlink(from);
+    defer _ = c.unlink(to);
+    const fp = c.fopen(from, "w") orelse return error.Open;
+    const text = "#!/bin/sh\nexit 0\n";
+    try std.testing.expect(c.fwrite(text, 1, text.len, fp) == text.len);
+    try std.testing.expect(c.fclose(fp) == 0);
+    try copyExecutable(from, to);
+    var original: c.struct_stat = undefined;
+    var copied: c.struct_stat = undefined;
+    try std.testing.expect(c.stat(from, &original) == 0 and c.stat(to, &copied) == 0);
+    try std.testing.expect(original.st_ino != copied.st_ino or original.st_dev != copied.st_dev);
+    try std.testing.expectEqual(original.st_size, copied.st_size);
+    try std.testing.expectEqual(@as(c.mode_t, 0o755), copied.st_mode & 0o777);
+    const pid = c.fork();
+    try std.testing.expect(pid >= 0);
+    if (pid == 0) {
+        _ = c.execl(to, to, @as(?[*:0]const u8, null));
+        c._exit(127);
+    }
+    var status: c_int = 0;
+    try std.testing.expect(c.waitpid(pid, &status, 0) == pid and status == 0);
 }
