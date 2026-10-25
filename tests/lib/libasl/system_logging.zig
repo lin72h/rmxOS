@@ -279,13 +279,18 @@ fn kernel(_: [*c]const c.atf_tc_t) callconv(.c) void {
     // startup ASL files. Only the ASL banner assertion depends on retention.
     const history = scope.readBoot("Message", boot, false, scope.bootWindow());
     defer std.heap.page_allocator.free(history.bytes);
+    var reason: [256]u8 = undefined;
+    const removed = history.startupCheck(&reason) catch |err| switch (err) {
+        error.StartupRecordsMissing => c.atf_tc_fail("startup records missing although the store reaches back to the boot"),
+        error.EmptyStore => c.atf_tc_fail("startup records missing and the store is empty"),
+    };
     const boot_stored = count(history.bytes, boot);
     const boot_current = fileCount("/var/log/messages", boot);
     _ = c.printf("kernel_boot current_text=%zu stored=%zu expected_stored=1\n", boot_current, boot_stored);
-    if (history.retained) {
+    if (removed == null) {
         need(observations.kernelBoot(boot_current, boot_stored), "boot banner retained exactly once in ASL across text rotations");
     } else {
-        _ = c.printf("kernel_boot ASL banner-once check omitted: boot records removed by the store's size limit; current_text=%zu\n", boot_current);
+        _ = c.printf("kernel_boot ASL banner-once check omitted: %s; current_text=%zu\n", removed.?.ptr, boot_current);
     }
     const text_load = fileCount("/var/log/messages", load);
     const text_unload = fileCount("/var/log/messages", unload);

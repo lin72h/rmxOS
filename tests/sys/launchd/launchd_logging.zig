@@ -112,7 +112,12 @@ fn early() void {
     const second = "*** Shutdown logging is enabled. ***";
     const history = scope.readBoot("Sender", "com.apple.launchd", false, scope.bootWindow());
     defer a.free(history.bytes);
-    if (!history.retained) c.atf_tc_skip("boot records removed by the store's size limit");
+    var reason: [256]u8 = undefined;
+    const removed = history.startupCheck(&reason) catch |err| switch (err) {
+        error.StartupRecordsMissing => c.atf_tc_fail("startup records missing although the store reaches back to the boot"),
+        error.EmptyStore => c.atf_tc_fail("startup records missing and the store is empty"),
+    };
+    if (removed) |why| c.atf_tc_skip("%s", why.ptr);
     const bytes = history.bytes;
     const x = std.mem.indexOf(u8, bytes, first) orelse c.atf_tc_fail("early startup record absent");
     const y = std.mem.indexOf(u8, bytes, second) orelse c.atf_tc_fail("early shutdown logging record absent");
