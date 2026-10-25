@@ -104,7 +104,7 @@ pub const BootRead = struct {
     window: BootWindow,
 
     // A missing startup window alone cannot distinguish retention from loss.
-    // Return a reason only when the whole store demonstrably starts later.
+    // Return a reason only when the day-file history demonstrably starts later.
     pub fn startupCheck(self: BootRead, reason: *[256]u8) error{ StartupRecordsMissing, EmptyStore }!?[:0]const u8 {
         if (self.retained) return null;
         const oldest = self.oldest orelse return error.EmptyStore;
@@ -173,7 +173,19 @@ fn dayPrefixes(started: i64) [2][11]u8 {
     return dates;
 }
 fn bootFiles(started: i64) ?*anyopaque {
-    const dates = dayPrefixes(started);
+    return selectedFiles(started);
+}
+fn isDayFile(name: []const u8) bool {
+    if (name.len < 10 or name[4] != '.' or name[7] != '.') return false;
+    for (name[0..10], 0..) |ch, i| {
+        if (i == 4 or i == 7) continue;
+        if (!std.ascii.isDigit(ch)) return false;
+    }
+    return true;
+}
+// A boot selects its dates plus BB; null selects all day files, without BB.
+fn selectedFiles(started: ?i64) ?*anyopaque {
+    const dates = if (started) |time| dayPrefixes(time) else null;
     const dir = c.opendir(storePath()) orelse @panic("open boot ASL directory");
     defer _ = c.closedir(dir);
     var files: ?*anyopaque = null;
@@ -184,7 +196,9 @@ fn bootFiles(started: i64) ?*anyopaque {
             break;
         };
         const name = entry.*.d_name[0..entry.*.d_namlen];
-        if (!std.mem.startsWith(u8, name, dates[0][0..10]) and !std.mem.startsWith(u8, name, dates[1][0..10]) and !std.mem.startsWith(u8, name, "BB.")) continue;
+        if (dates) |days| {
+            if (!std.mem.startsWith(u8, name, days[0][0..10]) and !std.mem.startsWith(u8, name, days[1][0..10]) and !std.mem.startsWith(u8, name, "BB.")) continue;
+        } else if (!isDayFile(name)) continue;
         const path = std.fmt.allocPrintSentinel(a, "{s}/{s}", .{ std.mem.span(storePath()), name }, 0) catch unreachable;
         defer a.free(path);
         var file: ?*anyopaque = null;
@@ -231,11 +245,12 @@ fn startupRetained(files: ?*anyopaque, window: BootWindow) bool {
     }
 }
 fn oldestRecord() ?Timestamp {
-    const store = c.asl_open_path(storePath(), 0) orelse @panic("open ASL store for oldest record");
-    defer c.asl_release(store);
-    var last: usize = 0;
-    // All store files, no Time predicate: one forward match from the start.
-    const result = c.asl_match(store, null, &last, 0, 1, 0, 1);
+    const files = selectedFiles(null);
+    defer asl_file_list_close(files);
+    var last: u64 = 0;
+    // Size retention removes day files before BB buckets, so only day files
+    // establish whether ordinary boot history still reaches back this far.
+    const result = asl_file_list_match(files, null, &last, 0, 1, 0, 1);
     defer c.asl_release(result);
     const message = c.asl_next(result) orelse return null;
     const time = c.asl_get(message, "Time") orelse @panic("oldest record time");
@@ -420,7 +435,7 @@ test "pre-boot history plus post-readiness records fails rather than hiding star
     defer fixture.deinit();
     const window: BootWindow = .{ .started = 2000000000, .ready = 2000000001 };
     // The pre-boot file is outside bootFiles' date selection. The fallback
-    // must inspect the whole store to see that it still reaches back.
+    // must inspect all day files to see that history still reaches back.
     try testSave(window.started - 86400, "older day", null);
     try testSave(window.ready + 1, "after readiness", null);
     const missing = readBoot("Message", "banner", false, window);
@@ -443,6 +458,51 @@ test "an empty store cannot prove removal and never skips" {
     defer a.free(history.bytes);
     var reason: [256]u8 = undefined;
     try std.testing.expectError(error.EmptyStore, history.startupCheck(&reason));
+}
+test "old BB history does not block skipping when day files start after readiness" {
+    const fixture = try TestStore.init();
+    defer fixture.deinit();
+    const window: BootWindow = .{ .started = 2000000000, .ready = 2000000001 };
+    try testSave(window.started - 86400, "old BB", 2200000000);
+    try testSave(window.ready + 10, "later day", null);
+    const history = readBoot("Message", "banner", false, window);
+    defer a.free(history.bytes);
+    try std.testing.expect(!history.retained and history.bytes.len == 0);
+    try std.testing.expectEqual(window.ready + 10, history.oldest.?.sec);
+    var reason: [256]u8 = undefined;
+    const removed = (try history.startupCheck(&reason)) orelse return error.MissingReason;
+    try std.testing.expectEqualStrings("the store's oldest record (2000000011.000000000) is newer than the boot's first readiness (2000000001.999999999)", removed);
+}
+test "old BB history plus a pre-boot day record still fails on missing startup records" {
+    const fixture = try TestStore.init();
+    defer fixture.deinit();
+    const window: BootWindow = .{ .started = 2000000000, .ready = 2000000001 };
+    try testSave(window.started - 172800, "old BB", 2200000000);
+    try testSave(window.started - 86400, "old day", null);
+    try testSave(window.ready + 10, "later day", null);
+    const history = readBoot("Message", "banner", false, window);
+    defer a.free(history.bytes);
+    try std.testing.expect(!history.retained and history.bytes.len == 0);
+    try std.testing.expectEqual(window.started - 86400, history.oldest.?.sec);
+    var reason: [256]u8 = undefined;
+    try std.testing.expectError(error.StartupRecordsMissing, history.startupCheck(&reason));
+}
+test "a BB-only store is empty for the day boundary but retains BB startup records" {
+    const fixture = try TestStore.init();
+    defer fixture.deinit();
+    const window: BootWindow = .{ .started = 2000000000, .ready = 2000000001 };
+    try testSave(window.started - 86400, "old BB", 2200000000);
+    const missing = readBoot("Message", "banner", false, window);
+    defer a.free(missing.bytes);
+    try std.testing.expect(missing.oldest == null and !missing.retained);
+    var reason: [256]u8 = undefined;
+    try std.testing.expectError(error.EmptyStore, missing.startupCheck(&reason));
+    try testSave(window.started, "banner", 2200000000);
+    const retained = readBoot("Message", "banner", false, window);
+    defer a.free(retained.bytes);
+    try std.testing.expect(retained.retained);
+    try std.testing.expect(try retained.startupCheck(&reason) == null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, retained.bytes, "[Message banner]"));
 }
 test "split files next day and BB records preserve global message ID order" {
     const fixture = try TestStore.init();
