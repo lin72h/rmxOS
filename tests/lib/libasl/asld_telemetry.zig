@@ -504,7 +504,7 @@ fn grammarInstalled(_: [*c]const c.atf_tc_t) callconv(.c) void {
     _ = c.printf("asld_installed_routes routes=%zu inputs=192 fixed_table=validator1-ef725c0\n", installed_table.len);
 }
 fn routeFence() bool {
-    return fileMatches("actual.1", "route_fence") == 1;
+    return fileMatches("actual.0", "route_fence") == 1;
 }
 fn cleanup(_: [*c]const c.atf_tc_t) callconv(.c) void {
     for ([_][*:0]const u8{ "op766-child", "op766-reference" }) |name| {
