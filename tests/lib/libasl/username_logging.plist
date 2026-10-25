@@ -10,7 +10,5 @@
         <string>@MARKER@</string>
     </array>
     <key>RunAtLoad</key><true/>
-    <key>StandardOutPath</key><string>/tmp/op118-username.out</string>
-    <key>StandardErrorPath</key><string>/tmp/op118-username.out</string>
 </dict>
 </plist>

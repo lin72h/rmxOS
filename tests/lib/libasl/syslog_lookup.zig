@@ -161,7 +161,6 @@ fn setuidRootChild(_: [*c]const c.atf_tc_t) callconv(.c) void {
     run(.setuid_root_child, 501);
 }
 const daemon_plist = "/tmp/op118-username.plist";
-const daemon_output = "/tmp/op118-username.out";
 fn launchctl(verb: [*:0]const u8) bool {
     const pid = c.fork();
     need(pid >= 0, "fork launchctl");
@@ -190,15 +189,15 @@ fn usernameDaemon(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const written = c.fwrite(plist.ptr, 1, plist.len, fp);
     const closed = c.fclose(fp);
     need(written == plist.len and closed == 0, "complete fixture plist");
-    _ = c.unlink(daemon_output);
     scope.begin();
     need(launchctl("load"), "load UserName daemon");
     defer need(launchctl("unload"), "unload UserName daemon");
-    awaitRecord(marker, 501);
-    const output = std.Io.Dir.cwd().readFileAlloc(io, daemon_output, a, .limited(4096)) catch c.atf_tc_fail("read daemon identity");
-    defer a.free(output);
-    need(std.mem.indexOf(u8, output, "kind=username_daemon uid=501 euid=501 ") != null, "daemon ran as test user");
-    _ = c.printf("%.*s", @as(c_int, @intCast(output.len)), output.ptr);
+    var expected_buf: [192]u8 = undefined;
+    const expected = std.fmt.bufPrintZ(&expected_buf, "{s} uid=501 euid=501", .{marker}) catch unreachable;
+    awaitRecord(expected, 501);
+    // These fields were formatted by the daemon from getuid/geteuid and
+    // checked in the one stored record, independent of launchd stdout setup.
+    _ = c.printf("op118 kind=username_daemon stored_identity=%s\n", expected.ptr);
 }
 fn cleanup(tc: [*c]const c.atf_tc_t) callconv(.c) void {
     if (std.mem.eql(u8, std.mem.span(c.atf_tc_get_ident(tc)), "username_daemon")) {
@@ -225,10 +224,10 @@ fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
 pub export fn main(argc: c_int, argv: [*c][*c]u8) c_int {
     if (argc == 3 and std.mem.eql(u8, std.mem.span(argv[1]), "--username-daemon")) {
         childNeed(c.getuid() == 501 and c.geteuid() == 501);
-        _ = c.printf("op118 kind=username_daemon uid=%u euid=%u gid=%u egid=%u\n", c.getuid(), c.geteuid(), c.getgid(), c.getegid());
-        _ = c.fflush(null);
+        var record_buf: [192]u8 = undefined;
+        const record = std.fmt.bufPrintZ(&record_buf, "{s} uid={d} euid={d}", .{ std.mem.span(argv[2]), c.getuid(), c.geteuid() }) catch unreachable;
         c.openlog("op103", c.LOG_PID, c.LOG_USER);
-        c.syslog(c.LOG_NOTICE, "%s", argv[2]);
+        c.syslog(c.LOG_NOTICE, "%s", record.ptr);
         c.closelog();
         return 0;
     }
