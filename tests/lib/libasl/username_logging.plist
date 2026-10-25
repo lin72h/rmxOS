@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.rmxos.op118.username</string>
+    <key>UserName</key><string>@USER@</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/tests/lib/libasl/syslog_lookup_test</string>
+        <string>--username-daemon</string>
+        <string>@MARKER@</string>
+    </array>
+    <key>RunAtLoad</key><true/>
+    <key>StandardOutPath</key><string>/tmp/op118-username.out</string>
+    <key>StandardErrorPath</key><string>/tmp/op118-username.out</string>
+</dict>
+</plist>

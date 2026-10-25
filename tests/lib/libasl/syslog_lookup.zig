@@ -63,9 +63,8 @@ fn firstLookup() void {
     _ = c.fflush(null);
     childNeed(h.msgh_id == 504 and h.msgh_bits & c.MACH_MSGH_BITS_COMPLEX == 0 and h.msgh_size == 36 and code == 1099);
 }
-const Kind = enum { logger, syslog, simple };
-fn run(kind: Kind, uid: c.uid_t) void {
-    need(c.geteuid() == 0, "run as root");
+const Kind = enum { logger, syslog, simple, setgid_child, setuid_root_child };
+fn ensureUser() void {
     if (c.getpwuid(501) == null) {
         const p = c.fork();
         need(p >= 0, "fork account setup");
@@ -76,22 +75,34 @@ fn run(kind: Kind, uid: c.uid_t) void {
         var status: c_int = 0;
         need(c.waitpid(p, &status, 0) == p and status == 0, "create uid 501");
     }
+}
+fn run(kind: Kind, uid: c.uid_t) void {
+    need(c.geteuid() == 0, "run as root");
+    ensureUser();
     var marker_buf: [128]u8 = undefined;
     const marker = std.fmt.bufPrintZ(&marker_buf, "op103-{s}-{d}-{d}", .{ @tagName(kind), uid, c.getpid() }) catch unreachable;
     scope.begin();
     const pid = c.fork();
     need(pid >= 0, "fork logging child");
     if (pid == 0) {
-        if (uid != 0) {
+        if (kind == .setgid_child) {
+            childNeed(c.setgroups(0, null) == 0 and c.setresgid(501, 65533, 65533) == 0 and c.setuid(501) == 0);
+            childNeed(c.getuid() == 501 and c.geteuid() == 501 and c.getgid() == 501 and c.getegid() == 65533);
+        } else if (kind == .setuid_root_child) {
+            childNeed(c.setgroups(0, null) == 0 and c.setgid(65533) == 0 and c.setresuid(501, 0, 0) == 0);
+            childNeed(c.getuid() == 501 and c.geteuid() == 0);
+        } else if (uid != 0) {
             childNeed(c.setgroups(0, null) == 0 and c.setgid(65533) == 0 and c.setuid(uid) == 0);
             firstLookup();
         }
+        _ = c.printf("op118 kind=%s uid=%u euid=%u gid=%u egid=%u\n", @tagName(kind).ptr, c.getuid(), c.geteuid(), c.getgid(), c.getegid());
+        _ = c.fflush(null);
         switch (kind) {
             .logger => {
                 _ = c.execl("/usr/bin/logger", "logger", "-t", "op103", "-p", "user.notice", marker.ptr, @as(?[*:0]const u8, null));
                 c._exit(92);
             },
-            .syslog => {
+            .syslog, .setgid_child, .setuid_root_child => {
                 c.openlog("op103", c.LOG_PID, c.LOG_USER);
                 c.syslog(c.LOG_NOTICE, "%s", marker.ptr);
                 c.closelog();
@@ -102,6 +113,9 @@ fn run(kind: Kind, uid: c.uid_t) void {
     }
     var status: c_int = 0;
     need(c.waitpid(pid, &status, 0) == pid and status == 0, "logging child exited successfully");
+    awaitRecord(marker, if (kind == .setuid_root_child) 0 else uid);
+}
+fn awaitRecord(marker: [:0]const u8, uid: c.uid_t) void {
     var start: c.struct_timespec = undefined;
     need(c.clock_gettime(c.CLOCK_MONOTONIC, &start) == 0, "monotonic start");
     while (true) {
@@ -119,7 +133,7 @@ fn run(kind: Kind, uid: c.uid_t) void {
             const final = scope.query("Message", marker, false, false);
             defer std.heap.page_allocator.free(final);
             need(std.mem.count(u8, final, "[Message ") == 1, "exactly once after delivery settles");
-            _ = c.printf("op103 kind=%s uid=%u stored=1 expected=1\n", @tagName(kind).ptr, uid);
+            _ = c.printf("op103 kind=%s uid=%u stored=1 expected=1\n", "observed", uid);
             return;
         }
         var now: c.struct_timespec = undefined;
@@ -140,15 +154,66 @@ fn nonrootSimple(_: [*c]const c.atf_tc_t) callconv(.c) void {
 fn rootLogger(_: [*c]const c.atf_tc_t) callconv(.c) void {
     run(.logger, 0);
 }
-fn cleanup(_: [*c]const c.atf_tc_t) callconv(.c) void {}
+fn setgidChild(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    run(.setgid_child, 501);
+}
+fn setuidRootChild(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    run(.setuid_root_child, 501);
+}
+const daemon_plist = "/tmp/op118-username.plist";
+const daemon_output = "/tmp/op118-username.out";
+fn launchctl(verb: [*:0]const u8) bool {
+    const pid = c.fork();
+    need(pid >= 0, "fork launchctl");
+    if (pid == 0) {
+        _ = c.execl("/bin/launchctl", "launchctl", verb, daemon_plist, @as(?[*:0]const u8, null));
+        c._exit(93);
+    }
+    var status: c_int = 0;
+    return c.waitpid(pid, &status, 0) == pid and status == 0;
+}
+fn usernameDaemon(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    need(c.geteuid() == 0, "run as root");
+    ensureUser();
+    const user = c.getpwuid(501) orelse unreachable;
+    const a = std.heap.page_allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const template = std.Io.Dir.cwd().readFileAlloc(io, "/usr/tests/lib/libasl/username_logging.plist", a, .limited(8192)) catch c.atf_tc_fail("read fixture plist");
+    defer a.free(template);
+    var marker_buf: [128]u8 = undefined;
+    const marker = std.fmt.bufPrintZ(&marker_buf, "op118-username-{d}", .{c.getpid()}) catch unreachable;
+    const named = std.mem.replaceOwned(u8, a, template, "@USER@", std.mem.span(user.*.pw_name)) catch unreachable;
+    defer a.free(named);
+    const plist = std.mem.replaceOwned(u8, a, named, "@MARKER@", marker) catch unreachable;
+    defer a.free(plist);
+    const fp = c.fopen(daemon_plist, "w") orelse c.atf_tc_fail("write fixture plist");
+    const written = c.fwrite(plist.ptr, 1, plist.len, fp);
+    const closed = c.fclose(fp);
+    need(written == plist.len and closed == 0, "complete fixture plist");
+    _ = c.unlink(daemon_output);
+    scope.begin();
+    need(launchctl("load"), "load UserName daemon");
+    defer need(launchctl("unload"), "unload UserName daemon");
+    awaitRecord(marker, 501);
+    const output = std.Io.Dir.cwd().readFileAlloc(io, daemon_output, a, .limited(4096)) catch c.atf_tc_fail("read daemon identity");
+    defer a.free(output);
+    need(std.mem.indexOf(u8, output, "kind=username_daemon uid=501 euid=501 ") != null, "daemon ran as test user");
+    _ = c.printf("%.*s", @as(c_int, @intCast(output.len)), output.ptr);
+}
+fn cleanup(tc: [*c]const c.atf_tc_t) callconv(.c) void {
+    if (std.mem.eql(u8, std.mem.span(c.atf_tc_get_ident(tc)), "username_daemon")) {
+        _ = launchctl("unload");
+        _ = c.unlink(daemon_plist);
+    }
+}
 fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(tc, "require.user", "root");
     _ = c.atf_tc_set_md_var(tc, "timeout", "20");
 }
-var cases: [4]c.atf_tc_t = undefined;
+var cases: [7]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "nonroot_logger", "nonroot_syslog", "nonroot_simple", "root_logger" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ nonrootLogger, nonrootSyslog, nonrootSimple, rootLogger };
+    const names = [_][*:0]const u8{ "nonroot_logger", "nonroot_syslog", "nonroot_simple", "root_logger", "setgid_child", "setuid_root_child", "username_daemon" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ nonrootLogger, nonrootSyslog, nonrootSimple, rootLogger, setgidChild, setuidRootChild, usernameDaemon };
     for (&cases, names, bodies) |*tc, name, body| {
         var err = c.atf_tc_init(tc, name, head, body, cleanup, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
@@ -158,5 +223,14 @@ fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     return c.atf_no_error();
 }
 pub export fn main(argc: c_int, argv: [*c][*c]u8) c_int {
+    if (argc == 3 and std.mem.eql(u8, std.mem.span(argv[1]), "--username-daemon")) {
+        childNeed(c.getuid() == 501 and c.geteuid() == 501);
+        _ = c.printf("op118 kind=username_daemon uid=%u euid=%u gid=%u egid=%u\n", c.getuid(), c.geteuid(), c.getgid(), c.getegid());
+        _ = c.fflush(null);
+        c.openlog("op103", c.LOG_PID, c.LOG_USER);
+        c.syslog(c.LOG_NOTICE, "%s", argv[2]);
+        c.closelog();
+        return 0;
+    }
     return atf_tp_main(argc, argv, add);
 }

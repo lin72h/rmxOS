@@ -46,6 +46,8 @@ retention_observer: ${.CURDIR}/retention_observer.zig
 
 
 SCRIPTS+= syslog_lookup_test
+FILES+= username_logging.plist
+FILESDIR= ${TESTSDIR}
 syslog_lookup_test: ${.CURDIR}/syslog_lookup.zig ${.CURDIR}/log_store_scope.zig
 	${ZIG} build-exe ${.CURDIR}/syslog_lookup.zig ${SYSROOT}/usr/lib/libasl.so.1 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/lib/libsys.so.7 ${SYSROOT}/lib/libthr.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET} -rdynamic
 
