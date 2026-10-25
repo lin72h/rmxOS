@@ -39,6 +39,11 @@ struct simple_port_reply {
 	mach_msg_port_descriptor_t port;
 	unsigned char trailer[256];
 };
+struct simple_error_reply {
+	mach_msg_header_t head;
+	NDR_record_t ndr;
+	kern_return_t code;
+};
 struct simple_lookup {
 	mach_msg_header_t head;
 	NDR_record_t ndr;
@@ -56,11 +61,12 @@ struct simple_log {
 };
 #pragma pack(pop)
 
-static mach_port_t
+static int
 simple_rpc(mach_msg_header_t *request, size_t size, mach_port_t destination,
-    mach_port_t reply, int id)
+    mach_port_t reply, int id, mach_port_t *result)
 {
 	struct simple_port_reply response = {0};
+	const struct simple_error_reply *error = (const void *)&response;
 	mach_msg_return_t kr;
 
 	request->msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND,
@@ -72,18 +78,25 @@ simple_rpc(mach_msg_header_t *request, size_t size, mach_port_t destination,
 	kr = __sys_mach_msg_trap(request, MACH_SEND_MSG | MACH_SEND_TIMEOUT,
 	    size, 0, 0, 100, 0);
 	if (kr != MACH_MSG_SUCCESS)
-		return (MACH_PORT_NULL);
+		return (-1);
 	kr = __sys_mach_msg_trap(&response.head, MACH_RCV_MSG | MACH_RCV_TIMEOUT,
 	    0, sizeof(response), reply, 100, 0);
-	if (kr != MACH_MSG_SUCCESS || response.head.msgh_id != id + 100 ||
-	    !(response.head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    response.head.msgh_size != sizeof(mach_msg_header_t) +
+	if (kr != MACH_MSG_SUCCESS || response.head.msgh_id != id + 100)
+		return (-1);
+	if (!(response.head.msgh_bits & MACH_MSGH_BITS_COMPLEX)) {
+		if (response.head.msgh_size != sizeof(*error) ||
+		    error->code == 0)
+			return (-1);
+		return (error->code);
+	}
+	if (response.head.msgh_size != sizeof(mach_msg_header_t) +
 	    sizeof(mach_msg_body_t) + sizeof(mach_msg_port_descriptor_t) ||
 	    response.body.msgh_descriptor_count != 1 ||
 	    response.port.type != MACH_MSG_PORT_DESCRIPTOR ||
 	    response.port.disposition != MACH_MSG_TYPE_PORT_SEND)
-		return (MACH_PORT_NULL);
-	return (response.port.name);
+		return (-1);
+	*result = response.port.name;
+	return (*result == MACH_PORT_NULL ? -1 : 0);
 }
 
 static void
@@ -95,20 +108,36 @@ simple_send(const char *record)
 		int which;
 	} special = { .ndr = simple_ndr, .which = TASK_BOOTSTRAP_PORT };
 	struct simple_lookup lookup = { .ndr = simple_ndr };
+	/* job.defs: lookup_per_user_context (418), as in libbootstrap.c. */
+	struct {
+		mach_msg_header_t head;
+		NDR_record_t ndr;
+		uid_t uid;
+	} context = { .ndr = simple_ndr, .uid = 0 };
 	struct simple_log request = {0};
 	mach_port_t task, reply, bootstrap = MACH_PORT_NULL, server = MACH_PORT_NULL;
+	mach_port_t per_user = MACH_PORT_NULL;
+	int kr;
 	size_t length;
 
 	task = __sys_task_self_trap();
 	reply = __sys_mach_reply_port();
 	if (reply == MACH_PORT_NULL)
 		return;
-	bootstrap = simple_rpc(&special.head, sizeof(special), task, reply, 3409);
-	if (bootstrap == MACH_PORT_NULL)
+	if (simple_rpc(&special.head, sizeof(special), task, reply, 3409,
+	    &bootstrap) != 0)
 		goto out;
 	strlcpy(lookup.name, "com.apple.system.logger", sizeof(lookup.name));
-	server = simple_rpc(&lookup.head, sizeof(lookup), bootstrap, reply, 404);
-	if (server == MACH_PORT_NULL)
+	kr = simple_rpc(&lookup.head, sizeof(lookup), bootstrap, reply, 404,
+	    &server);
+	if (kr == 1099) { /* VPROC_ERR_TRY_PER_USER */
+		if (simple_rpc(&context.head, sizeof(context), bootstrap, reply,
+		    418, &per_user) != 0)
+			goto out;
+		kr = simple_rpc(&lookup.head, sizeof(lookup), per_user, reply,
+		    404, &server);
+	}
+	if (kr != 0)
 		goto out;
 	length = strlen(record) + 1;
 	request.head.msgh_bits = MACH_MSGH_BITS_COMPLEX |
@@ -126,6 +155,8 @@ simple_send(const char *record)
 	(void)__sys_mach_msg_trap(&request.head, MACH_SEND_MSG | MACH_SEND_TIMEOUT,
 	    sizeof(request), 0, 0, 0, 0);
 out:
+	if (per_user != MACH_PORT_NULL)
+		(void)__sys__kernelrpc_mach_port_deallocate_trap(task, per_user);
 	if (server != MACH_PORT_NULL)
 		(void)__sys__kernelrpc_mach_port_deallocate_trap(task, server);
 	if (bootstrap != MACH_PORT_NULL)

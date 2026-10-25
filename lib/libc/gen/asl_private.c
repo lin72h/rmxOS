@@ -36,6 +36,11 @@ struct port_reply {
 	mach_msg_port_descriptor_t port;
 	unsigned char trailer[256];
 };
+struct error_reply {
+	mach_msg_header_t head;
+	NDR_record_t ndr;
+	kern_return_t code;
+};
 struct lookup_request {
 	mach_msg_header_t head;
 	NDR_record_t ndr;
@@ -66,6 +71,7 @@ port_rpc(mach_msg_header_t *request, size_t size, mach_port_t destination,
     int id, mach_port_t *result)
 {
 	struct port_reply response = {0};
+	const struct error_reply *error = (const void *)&response;
 	mach_msg_return_t kr;
 
 	request->msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND,
@@ -86,9 +92,15 @@ port_rpc(mach_msg_header_t *request, size_t size, mach_port_t destination,
 		reply = MACH_PORT_NULL;
 		return (-1);
 	}
-	if (kr != MACH_MSG_SUCCESS || response.head.msgh_id != id + 100 ||
-	    !(response.head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    response.head.msgh_size != sizeof(mach_msg_header_t) +
+	if (response.head.msgh_id != id + 100)
+		return (-1);
+	if (!(response.head.msgh_bits & MACH_MSGH_BITS_COMPLEX)) {
+		if (response.head.msgh_size != sizeof(*error) ||
+		    error->code == 0)
+			return (-1);
+		return (error->code);
+	}
+	if (response.head.msgh_size != sizeof(mach_msg_header_t) +
 	    sizeof(mach_msg_body_t) + sizeof(mach_msg_port_descriptor_t) ||
 	    response.body.msgh_descriptor_count != 1 ||
 	    response.port.type != MACH_MSG_PORT_DESCRIPTOR ||
@@ -107,6 +119,14 @@ lookup(void)
 		int which;
 	} special = { .ndr = ndr, .which = TASK_BOOTSTRAP_PORT };
 	struct lookup_request request = { .ndr = ndr };
+	/* job.defs: lookup_per_user_context (418), as in libbootstrap.c. */
+	struct {
+		mach_msg_header_t head;
+		NDR_record_t ndr;
+		uid_t uid;
+	} context = { .ndr = ndr, .uid = 0 };
+	mach_port_t per_user = MACH_PORT_NULL;
+	int kr;
 
 	if (reply == MACH_PORT_NULL)
 		reply = __sys_mach_reply_port();
@@ -116,7 +136,15 @@ lookup(void)
 	    sizeof(special), task, 3409, &bootstrap) != 0)
 		return (-1);
 	strlcpy(request.name, "com.apple.system.logger", sizeof(request.name));
-	return (port_rpc(&request.head, sizeof(request), bootstrap, 404, &server));
+	kr = port_rpc(&request.head, sizeof(request), bootstrap, 404, &server);
+	if (kr != 1099) /* VPROC_ERR_TRY_PER_USER */
+		return (kr);
+	kr = port_rpc(&context.head, sizeof(context), bootstrap, 418, &per_user);
+	if (kr != 0)
+		return (kr);
+	kr = port_rpc(&request.head, sizeof(request), per_user, 404, &server);
+	release_port(&per_user);
+	return (kr);
 }
 
 static void
