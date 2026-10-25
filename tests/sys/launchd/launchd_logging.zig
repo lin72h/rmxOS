@@ -110,7 +110,10 @@ fn waitEmpty() void {
 fn early() void {
     const first = "*** launchd[1] has started up. ***";
     const second = "*** Shutdown logging is enabled. ***";
-    const bytes = scope.query("Sender", "com.apple.launchd", false, true);
+    const history = scope.readBoot("Sender", "com.apple.launchd", false, scope.bootWindow());
+    defer a.free(history.bytes);
+    if (!history.retained) c.atf_tc_skip("boot records removed by the store's size limit");
+    const bytes = history.bytes;
     const x = std.mem.indexOf(u8, bytes, first) orelse c.atf_tc_fail("early startup record absent");
     const y = std.mem.indexOf(u8, bytes, second) orelse c.atf_tc_fail("early shutdown logging record absent");
     need(x < y, "early launchd messages preserve order");

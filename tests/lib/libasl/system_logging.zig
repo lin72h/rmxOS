@@ -273,13 +273,18 @@ fn kernel(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const unload = "op767 kernel fixture unloaded";
     const before_load = count(store(load), load);
     const before_unload = count(store(unload), unload);
-    // Rotation can precede even the first fixture load. The persistent store
-    // must still contain the boot banner exactly once.
-    const boot_records = scope.query("Message", boot, false, true);
-    const boot_stored = count(boot_records, boot);
+    // Rotation may remove the text banner; size retention may remove the
+    // startup ASL files. Only the ASL banner assertion depends on retention.
+    const history = scope.readBoot("Message", boot, false, scope.bootWindow());
+    defer std.heap.page_allocator.free(history.bytes);
+    const boot_stored = count(history.bytes, boot);
     const boot_current = fileCount("/var/log/messages", boot);
     _ = c.printf("kernel_boot current_text=%zu stored=%zu expected_stored=1\n", boot_current, boot_stored);
-    need(observations.kernelBoot(boot_current, boot_stored), "boot banner retained exactly once in ASL across text rotations");
+    if (history.retained) {
+        need(observations.kernelBoot(boot_current, boot_stored), "boot banner retained exactly once in ASL across text rotations");
+    } else {
+        _ = c.printf("kernel_boot ASL banner-once check omitted: boot records removed by the store's size limit; current_text=%zu\n", boot_current);
+    }
     const text_load = fileCount("/var/log/messages", load);
     const text_unload = fileCount("/var/log/messages", unload);
     _ = run(&.{ "/sbin/kldload", "/usr/tests/lib/launchd/op767_logger.ko" });
