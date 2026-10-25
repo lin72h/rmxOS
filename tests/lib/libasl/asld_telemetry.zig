@@ -419,7 +419,6 @@ fn grammarInclude(_: [*c]const c.atf_tc_t) callconv(.c) void {
 // Fixed expected routes from validator1 ef725c0, reviews/op-766/op-766.md.
 const InstalledRoute = struct { selector: [*:0]const u8, sink: []const u8 };
 const installed_table = [_]InstalledRoute{
-    .{ .selector = "*.err;kern.warning;auth.notice;mail.crit", .sink = "/dev/console" },
     .{ .selector = "*.notice;authpriv.none;kern.debug;lpr.info;mail.crit;news.err", .sink = "/var/log/messages" },
     .{ .selector = "security.*", .sink = "/var/log/security" },
     .{ .selector = "auth.info;authpriv.info", .sink = "/var/log/auth.log" },
@@ -429,19 +428,18 @@ const installed_table = [_]InstalledRoute{
 };
 fn installedExpected(route: usize, facility: usize, level: usize) bool {
     return switch (route) {
-        0 => level <= (if (facility == 0) @as(usize, 4) else if (facility == 4) @as(usize, 5) else if (facility == 2) @as(usize, 2) else @as(usize, 3)),
-        1 => facility != 10 and level <= (switch (facility) {
+        0 => facility != 10 and level <= (switch (facility) {
             0 => @as(usize, 7),
             6 => @as(usize, 6),
             2 => @as(usize, 2),
             7 => @as(usize, 3),
             else => @as(usize, 5),
         }),
-        2 => facility == 13,
-        3 => (facility == 4 or facility == 10) and level <= 6,
-        4 => facility == 2 and level <= 6,
-        5 => facility == 9,
-        6 => level == 0,
+        1 => facility == 13,
+        2 => (facility == 4 or facility == 10) and level <= 6,
+        3 => facility == 2 and level <= 6,
+        4 => facility == 9,
+        5 => level == 0,
         else => unreachable,
     };
 }

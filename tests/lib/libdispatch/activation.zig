@@ -7,6 +7,7 @@ const c = @cImport({
     @cInclude("stdio.h");
     @cInclude("dlfcn.h");
     @cInclude("sys/wait.h");
+    @cInclude("errno.h");
 });
 const Object = ?*anyopaque;
 extern fn dispatch_queue_create([*:0]const u8, Object) Object;
@@ -222,9 +223,21 @@ fn resumeActivation(_: [*c]const c.atf_tc_t) callconv(.c) void {
     finishSource(&s, src, q);
 }
 fn logging(want_file: bool) void {
+    var gate: [2]c_int = undefined;
+    if (c.pipe(&gate) != 0) c.atf_tc_fail("logging pipe");
     const pid = c.fork();
-    if (pid < 0) c.atf_tc_fail("fork");
+    if (pid < 0) {
+        _ = c.close(gate[0]);
+        _ = c.close(gate[1]);
+        c.atf_tc_fail("fork");
+    }
     if (pid == 0) {
+        _ = c.close(gate[1]);
+        var token: u8 = 0;
+        var received = c.read(gate[0], &token, 1);
+        while (received < 0 and c.__error().* == c.EINTR) received = c.read(gate[0], &token, 1);
+        _ = c.close(gate[0]);
+        if (received != 1 or token != 1) c._exit(2);
         if (want_file) {
             _ = c.setenv("LIBDISPATCH_LOG", "file", 1);
         } else {
@@ -234,10 +247,20 @@ fn logging(want_file: bool) void {
         dispatch_debug(q, "%s", @as([*:0]const u8, "release logging fixture"));
         c._exit(0);
     }
-    var status: c_int = 0;
-    if (c.waitpid(pid, &status, 0) != pid or status != 0) c.atf_tc_fail("logging child failed");
+    _ = c.close(gate[0]);
     var buf: [128]u8 = undefined;
     const path = std.fmt.bufPrintZ(&buf, "/var/tmp/libdispatch.{d}.log", .{pid}) catch unreachable;
+    // PID reuse must not make either logging mode depend on an earlier run.
+    const removed = c.unlink(path.ptr) == 0 or c.__error().* == c.ENOENT;
+    const token: u8 = 1;
+    var released = if (removed) c.write(gate[1], &token, 1) else -1;
+    while (released < 0 and removed and c.__error().* == c.EINTR) released = c.write(gate[1], &token, 1);
+    _ = c.close(gate[1]);
+    var status: c_int = 0;
+    const waited = c.waitpid(pid, &status, 0);
+    if (!removed) c.atf_tc_fail("remove stale logging file");
+    if (released != 1) c.atf_tc_fail("release logging child");
+    if (waited != pid or status != 0) c.atf_tc_fail("logging child failed");
     const exists = c.access(path.ptr, c.F_OK) == 0;
     _ = c.unlink(path.ptr);
     if (exists != want_file) c.atf_tc_fail("default logging must be off; explicit file logging must work");
