@@ -8,6 +8,12 @@ const c = @cImport({
 });
 extern fn _simple_asl_log(c_int, ?[*:0]const u8, ?[*:0]const u8) void;
 extern fn _simple_asl_log_prog(c_int, ?[*:0]const u8, ?[*:0]const u8, ?[*:0]const u8) void;
+var error_code: c_int = 0;
+var retry_error: c_int = 0;
+var destination: c_uint = 0;
+var contexts: usize = 0;
+var short_reply = false;
+var wrong_id = false;
 var id: c_int = 0;
 var sends: usize = 0;
 var released: usize = 0;
@@ -24,7 +30,7 @@ pub export fn __sys_mach_reply_port() c_uint {
     return 17;
 }
 pub export fn __sys__kernelrpc_mach_port_deallocate_trap(task: c_uint, port: c_uint) c_int {
-    std.debug.assert(task == 16 and (port == 100 or port == 101));
+    std.debug.assert(task == 16 and (port == 100 or port == 101 or port == 102));
     released += 1;
     return 0;
 }
@@ -39,6 +45,12 @@ pub export fn __sys_mach_msg_trap(h: *c.mach_msg_header_t, options: c_uint, size
     const descriptor_offset = @sizeOf(c.mach_msg_header_t) + @sizeOf(c.mach_msg_body_t);
     if (options & c.MACH_SEND_MSG != 0) {
         id = h.msgh_id;
+        destination = h.msgh_remote_port;
+        if (id == 418) {
+            contexts += 1;
+            std.debug.assert(size == 36 and destination == 100);
+            std.debug.assert(std.mem.readInt(u32, bytes[32..36], .little) == 0);
+        }
         std.debug.assert(size == h.msgh_size and options & c.MACH_SEND_TIMEOUT != 0);
         if (id == 118) {
             std.debug.assert(timeout == 0 and h.msgh_remote_port == 101);
@@ -53,13 +65,23 @@ pub export fn __sys_mach_msg_trap(h: *c.mach_msg_header_t, options: c_uint, size
             sends += 1;
             return send_result;
         }
-        std.debug.assert(timeout == 100 and (id == 3409 or id == 404));
+        std.debug.assert(timeout == 100 and (id == 3409 or id == 404 or id == 418));
         return 0;
     }
     std.debug.assert(options == c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT and timeout == 100 and port == 17 and capacity >= 40);
     if (receive_timeout) return c.MACH_RCV_TIMED_OUT;
     h.* = std.mem.zeroes(c.mach_msg_header_t);
     h.msgh_id = id + 100;
+    if (id == 404 and error_code != 0) {
+        const code = if (destination == 102) retry_error else error_code;
+        if (code != 0) {
+            h.msgh_size = if (short_reply) 32 else 36;
+            if (wrong_id) h.msgh_id += 1;
+            @memcpy(bytes[24..32], &[_]u8{ 0, 0, 0, 0, 1, 0, 0, 0 });
+            std.mem.writeInt(i32, bytes[32..36], code, .little);
+            return 0;
+        }
+    }
     if (unavailable) return 0; // MIG error reply without a port.
     h.msgh_bits = c.MACH_MSGH_BITS_COMPLEX;
     h.msgh_size = @intCast(descriptor_offset + 12);
@@ -67,12 +89,17 @@ pub export fn __sys_mach_msg_trap(h: *c.mach_msg_header_t, options: c_uint, size
     body.msgh_descriptor_count = 1;
     const desc = bytes + descriptor_offset;
     @memset(desc[0..12], 0);
-    std.mem.writeInt(u32, desc[0..4], if (id == 3409) 100 else 101, .little);
+    std.mem.writeInt(u32, desc[0..4], if (id == 3409) 100 else if (id == 418) 102 else 101, .little);
     desc[10] = c.MACH_MSG_TYPE_PORT_SEND;
     desc[11] = c.MACH_MSG_PORT_DESCRIPTOR;
     return 0;
 }
 fn reset() void {
+    error_code = 0;
+    retry_error = 0;
+    contexts = 0;
+    short_reply = false;
+    wrong_id = false;
     sends = 0;
     released = 0;
     destroyed = 0;
@@ -121,4 +148,30 @@ test "invalid and oversized input drop; default program entry point sends" {
     _simple_asl_log(5, null, "default");
     try std.testing.expectEqual(@as(usize, 1), sends);
     try std.testing.expect(std.mem.indexOf(u8, wire[0..wire_len], "[Facility user]") != null);
+}
+
+test "MIG errors trigger only one per-user retry and malformed replies never do" {
+    for ([_]c_int{ 0, 1099, 1102 }) |code| {
+        reset();
+        error_code = 1099;
+        retry_error = code;
+        _simple_asl_log(5, null, "per user");
+        try std.testing.expectEqual(@as(usize, 1), contexts);
+        try std.testing.expectEqual(@as(usize, 2) + @as(usize, if (code == 0) 1 else 0), released);
+        try std.testing.expectEqual(@as(usize, if (code == 0) 1 else 0), sends);
+    }
+    reset();
+    error_code = 1102;
+    _simple_asl_log(5, null, "other error");
+    try std.testing.expectEqual(@as(usize, 0), contexts);
+    try std.testing.expectEqual(@as(usize, 0), sends);
+    for ([_]bool{ true, false }) |short| {
+        reset();
+        error_code = 1099;
+        short_reply = short;
+        wrong_id = !short;
+        _simple_asl_log(5, null, "malformed");
+        try std.testing.expectEqual(@as(usize, 0), contexts);
+        try std.testing.expectEqual(@as(usize, 0), sends);
+    }
 }

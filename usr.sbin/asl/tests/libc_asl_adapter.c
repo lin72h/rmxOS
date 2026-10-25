@@ -8,6 +8,14 @@
 #define RMX_LIBC_ASL_SOURCE "../../../lib/libc/gen/asl_private.c"
 #endif
 #include RMX_LIBC_ASL_SOURCE
+int rmx_test_rpc(void)
+{
+ mach_msg_header_t request = {0};
+ mach_port_t result = MACH_PORT_NULL;
+ task = 16;
+ reply = 19;
+ return port_rpc(&request, sizeof(request), 20, 404, &result);
+}
 const char *rmx_asl_bytes(void *p) { return ((struct log_request *)p)->bytes.address; }
 unsigned rmx_asl_size(void *p) { return ((struct log_request *)p)->bytes.size; }
 unsigned rmx_asl_deallocate(void *p) { return ((struct log_request *)p)->bytes.deallocate; }

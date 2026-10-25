@@ -44,4 +44,9 @@ SCRIPTS+= retention_observer
 retention_observer: ${.CURDIR}/retention_observer.zig
 	${ZIG} build-exe ${.CURDIR}/retention_observer.zig -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -femit-bin=${.TARGET}
 
+
+SCRIPTS+= syslog_lookup_test
+syslog_lookup_test: ${.CURDIR}/syslog_lookup.zig ${.CURDIR}/log_store_scope.zig
+	${ZIG} build-exe ${.CURDIR}/syslog_lookup.zig ${SYSROOT}/usr/lib/libasl.so.1 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/lib/libsys.so.7 ${SYSROOT}/lib/libthr.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET} -rdynamic
+
 .include <bsd.test.mk>

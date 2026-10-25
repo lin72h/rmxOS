@@ -4,3 +4,4 @@ atf_test_program{name="asl_input_store_test"}
 atf_test_program{name="asld_telemetry_test"}
 atf_test_program{name="system_logging_test"}
 atf_test_program{name="atomic_contract_test"}
+atf_test_program{name="syslog_lookup_test"}
