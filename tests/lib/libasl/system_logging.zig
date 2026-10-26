@@ -269,29 +269,26 @@ fn native(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const raw = awaitStore(&message, 1);
     need(std.mem.indexOf(u8, raw, "Telemetry.Kind op767") != null and std.mem.indexOf(u8, raw, "Telemetry.Value intact structured value") != null, "aslutil reads every native key intact");
 }
-fn kernel(_: [*c]const c.atf_tc_t) callconv(.c) void {
+// Fresh boots only: long-lived-host plans omit kernel_boot by name.
+fn kernelBoot(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const boot = "FreeBSD is a registered trademark of The FreeBSD Foundation.";
+    const history = scope.readBoot("Message", boot, false, scope.bootWindow());
+    defer history.deinit();
+    history.requireRecords(&.{boot}) catch {
+        const why = history.failure();
+        defer std.heap.page_allocator.free(why);
+        c.atf_tc_fail("%s", why.ptr);
+    };
+    const boot_stored = count(history.bytes, boot);
+    const boot_current = fileCount("/var/log/messages", boot);
+    _ = c.printf("kernel_boot current_text=%zu stored=%zu expected_stored=1\n", boot_current, boot_stored);
+    need(observations.kernelBoot(boot_current, boot_stored), "boot banner stored exactly once in ASL across text rotations");
+}
+fn kernel(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const load = "op767 kernel fixture loaded";
     const unload = "op767 kernel fixture unloaded";
     const before_load = count(store(load), load);
     const before_unload = count(store(unload), unload);
-    // Rotation may remove the text banner; size retention may remove the
-    // startup ASL files. Only the ASL banner assertion depends on retention.
-    const history = scope.readBoot("Message", boot, false, scope.bootWindow());
-    defer std.heap.page_allocator.free(history.bytes);
-    const boot_stored = count(history.bytes, boot);
-    var reason: [256]u8 = undefined;
-    const removed = if (boot_stored != 0) null else history.missingCheck(&reason) catch |err| switch (err) {
-        error.StartupRecordsMissing => c.atf_tc_fail("startup records missing although the store reaches back to the boot"),
-        error.EmptyStore => c.atf_tc_fail("startup records missing and the store is empty"),
-    };
-    const boot_current = fileCount("/var/log/messages", boot);
-    _ = c.printf("kernel_boot current_text=%zu stored=%zu expected_stored=1\n", boot_current, boot_stored);
-    if (removed == null) {
-        need(observations.kernelBoot(boot_current, boot_stored), "boot banner retained exactly once in ASL across text rotations");
-    } else {
-        _ = c.printf("kernel_boot ASL banner-once check omitted: %s; current_text=%zu\n", removed.?.ptr, boot_current);
-    }
     const text_load = fileCount("/var/log/messages", load);
     const text_unload = fileCount("/var/log/messages", unload);
     _ = run(&.{ "/sbin/kldload", "/usr/tests/lib/launchd/op767_logger.ko" });
@@ -433,10 +430,10 @@ fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.alarm(85);
     scope.begin();
 }
-var cases: [10]c.atf_tc_t = undefined;
+var cases: [11]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "boot_ready", "one_owner", "routes", "native", "kernel", "rotation", "counters", "retention", "compat_service", "retention_unavailable" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ bootReady, oneOwner, routes, native, kernel, rotation, counters, retention, compatibilityService, retentionUnavailable };
+    const names = [_][*:0]const u8{ "boot_ready", "one_owner", "routes", "native", "kernel_boot", "kernel", "rotation", "counters", "retention", "compat_service", "retention_unavailable" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ bootReady, oneOwner, routes, native, kernelBoot, kernel, rotation, counters, retention, compatibilityService, retentionUnavailable };
     for (&cases, names, bodies) |*tc, name, body| {
         var err = c.atf_tc_init(tc, name, head, body, cleanup, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;

@@ -22,6 +22,8 @@ const c = @cImport({
     @cInclude("dirent.h");
     @cInclude("unistd.h");
     @cInclude("errno.h");
+    @cInclude("sys/mman.h");
+    @cInclude("fcntl.h");
 });
 const a = std.heap.page_allocator;
 var floor: usize = 0;
@@ -40,7 +42,11 @@ pub fn begin() void {
     floor = last;
 }
 pub fn query(key: []const u8, value: []const u8, prefix: bool, boot: bool) []const u8 {
-    if (boot) return readBoot(key, value, prefix, bootWindow()).bytes;
+    if (boot) {
+        const history = readBoot(key, value, prefix, bootWindow());
+        a.free(history.files);
+        return history.bytes;
+    }
     const store = c.asl_open_path(storePath(), 0) orelse @panic("open scoped ASL reader");
     defer c.asl_release(store);
     const q = c.asl_new(c.ASL_TYPE_QUERY) orelse unreachable;
@@ -99,29 +105,21 @@ pub const BootWindow = struct { started: i64, ready: i64, ready_nsec: i64 = 9999
 const Timestamp = struct { sec: i64, nsec: i64 };
 pub const BootRead = struct {
     bytes: []const u8,
-    retained: bool,
+    files: []const u8,
     oldest: ?Timestamp,
-    window: BootWindow,
-    class_gap: ?ClassStart,
 
-    // A missing startup window alone cannot distinguish retention from loss.
-    // Return a reason only when the day-file history demonstrably starts later.
-    pub fn startupCheck(self: BootRead, reason: *[256]u8) error{ StartupRecordsMissing, EmptyStore }!?[:0]const u8 {
-        if (self.retained) return null;
-        const oldest = self.oldest orelse return error.EmptyStore;
-        if (oldest.sec < self.window.ready or
-            (oldest.sec == self.window.ready and oldest.nsec <= self.window.ready_nsec))
-            return self.missingCheck(reason);
-        return std.fmt.bufPrintZ(reason, "the store's oldest record ({d}.{d:0>9}) is newer than the boot's first readiness ({d}.{d:0>9})", .{
-            oldest.sec, @as(u32, @intCast(oldest.nsec)), self.window.ready, @as(u32, @intCast(self.window.ready_nsec)),
-        }) catch unreachable;
+    pub fn deinit(self: BootRead) void {
+        a.free(self.bytes);
+        a.free(self.files);
     }
-    // Called only when an expected record is absent, even when other classes
-    // retained startup records. A gap can belong to just one access class.
-    pub fn missingCheck(self: BootRead, reason: *[256]u8) error{ StartupRecordsMissing, EmptyStore }!?[:0]const u8 {
-        if (self.oldest == null) return error.EmptyStore;
-        if (self.class_gap) |gap| return std.fmt.bufPrintZ(reason, "class {s}'s oldest record ({d}.{d:0>9}) is newer than the boot's start ({d})", .{ gap.name[0..gap.len], gap.time.sec, @as(u32, @intCast(gap.time.nsec)), self.window.started }) catch unreachable;
-        return error.StartupRecordsMissing;
+    pub fn requireRecords(self: BootRead, records: []const []const u8) error{StartupRecordsMissing}!void {
+        for (records) |record| {
+            if (std.mem.indexOf(u8, self.bytes, record) == null) return error.StartupRecordsMissing;
+        }
+    }
+    pub fn failure(self: BootRead) [:0]const u8 {
+        if (self.oldest) |oldest| return std.fmt.allocPrintSentinel(a, "startup records missing; files read: [{s}]; store's oldest record: {d}.{d:0>9}", .{ self.files, oldest.sec, @as(u32, @intCast(oldest.nsec)) }, 0) catch unreachable;
+        return std.fmt.allocPrintSentinel(a, "startup records missing; files read: [{s}]; store's oldest record: none (empty store)", .{self.files}, 0) catch unreachable;
     }
 };
 const ReadyProof = extern struct { boot_sec: i64, boot_usec: i64, marker_sec: i64, marker_nsec: i64, ready_sec: i64, ready_nsec: i64 };
@@ -159,10 +157,7 @@ pub fn bootWindow() BootWindow {
 }
 
 extern fn asl_file_open_read([*:0]const u8, *?*anyopaque) u32;
-extern fn asl_file_list_add(?*anyopaque, ?*anyopaque) ?*anyopaque;
-extern fn asl_file_list_close(?*anyopaque) void;
 extern fn asl_file_close(?*anyopaque) u32;
-extern fn asl_file_list_match(?*anyopaque, c.asl_object_t, *u64, u64, u32, u32, i32) c.asl_object_t;
 fn dayPrefixes(started: i64) [2][11]u8 {
     var stamp: c.time_t = @intCast(started);
     var local: c.struct_tm = undefined;
@@ -180,23 +175,95 @@ fn dayPrefixes(started: i64) [2][11]u8 {
     if (stamp == -1 or c.localtime_r(&stamp, &local) == null or c.strftime(&dates[1], dates[1].len, "%Y.%m.%d", &local) != 10) @panic("next boot date prefix");
     return dates;
 }
-fn bootFiles(started: i64) ?*anyopaque {
-    return selectedFiles(started);
+extern fn asl_file_fetch(?*anyopaque, u64, *c.asl_object_t) u32;
+fn timestamp(message: c.asl_object_t) Timestamp {
+    const sec = c.asl_get(message, "Time") orelse @panic("record time");
+    const nsec = if (c.asl_get(message, "TimeNanoSec")) |n| std.fmt.parseInt(i64, std.mem.span(n), 10) catch unreachable else 0;
+    if (nsec < 0 or nsec >= 1000000000) @panic("record nanoseconds");
+    return .{ .sec = std.fmt.parseInt(i64, std.mem.span(sec), 10) catch unreachable, .nsec = nsec };
 }
-fn isDayFile(name: []const u8) bool {
-    if (name.len < 10 or name[4] != '.' or name[7] != '.') return false;
-    for (name[0..10], 0..) |ch, i| {
-        if (i == 4 or i == 7) continue;
-        if (!std.ascii.isDigit(ch)) return false;
+fn oldestRecord() ?Timestamp {
+    const store = c.asl_open_path(storePath(), 0) orelse @panic("open oldest-record reader");
+    defer c.asl_release(store);
+    var last: usize = 0;
+    const result = c.asl_match(store, null, &last, 0, 1, 0, 1);
+    defer c.asl_release(result);
+    return if (c.asl_next(result)) |m| timestamp(m) else null;
+}
+const BootRecord = struct { id: u64, raw: []const u8 };
+fn byID(_: void, x: BootRecord, y: BootRecord) bool {
+    return x.id < y.id;
+}
+fn inWindow(time: Timestamp, window: BootWindow) bool {
+    return time.sec >= window.started and (time.sec < window.ready or
+        (time.sec == window.ready and time.nsec <= window.ready_nsec));
+}
+// ASL v2's fixed record header is documented in lib/libasl/asl_file.h.
+// Scan every linked MSG header, including records appended after later times.
+// Decode only window records through libasl; storm records need no ASL objects.
+fn scanFile(path: [:0]const u8, file: ?*anyopaque, key: [:0]const u8, value: []const u8, prefix: bool, window: BootWindow, records: *std.ArrayList(BootRecord)) void {
+    const fd = c.open(path, c.O_RDONLY);
+    if (fd < 0) @panic("open boot header reader");
+    defer _ = c.close(fd);
+    var st: c.struct_stat = undefined;
+    if (c.fstat(fd, &st) != 0 or st.st_size < 80) @panic("ASL header size");
+    const size: usize = @intCast(st.st_size);
+    const mapping = c.mmap(null, size, c.PROT_READ, c.MAP_PRIVATE, fd, 0);
+    if (mapping == c.MAP_FAILED) @panic("map boot ASL headers");
+    defer _ = c.munmap(mapping, size);
+    const data: []const u8 = @as([*]const u8, @ptrCast(mapping))[0..size];
+    scanHeaders(data, file, key, value, prefix, window, records) catch @panic("malformed boot ASL headers");
+}
+fn scanHeaders(data: []const u8, file: ?*anyopaque, key: [:0]const u8, value: []const u8, prefix: bool, window: BootWindow, records: *std.ArrayList(BootRecord)) error{Malformed}!void {
+    if (data.len < 80 or !std.mem.eql(u8, data[0..6], "ASL DB") or
+        std.mem.readInt(u32, data[12..16], .big) != 2) return error.Malformed;
+    var offset = std.mem.readInt(u64, data[16..24], .big);
+    while (offset != 0) {
+        if (offset < 80 or offset > data.len or data.len - @as(usize, @intCast(offset)) < 122) return error.Malformed;
+        const pos: usize = @intCast(offset);
+        const head = data[pos..][0..122];
+        const len = std.mem.readInt(u32, head[2..6], .big);
+        if (std.mem.readInt(u16, head[0..2], .big) != 0 or len < 116 or len > data.len - pos - 6) return error.Malformed;
+        const next = std.mem.readInt(u64, head[6..14], .big);
+        if (next != 0 and next <= offset) return error.Malformed;
+        const seconds = std.mem.readInt(u64, head[22..30], .big);
+        const nano = std.mem.readInt(u32, head[30..34], .big);
+        if (seconds > std.math.maxInt(i64) or nano >= 1000000000) return error.Malformed;
+        const time: Timestamp = .{ .sec = @intCast(seconds), .nsec = nano };
+        if (inWindow(time, window)) {
+            const id = std.mem.readInt(u64, head[14..22], .big);
+            var message: c.asl_object_t = null;
+            if (asl_file_fetch(file, id, &message) != 0 or message == null) @panic("decode boot record");
+            defer c.asl_release(message);
+            if (c.asl_get(message, key)) |field| {
+                const bytes = std.mem.span(field);
+                if (if (prefix) std.mem.startsWith(u8, bytes, value) else std.mem.eql(u8, bytes, value)) {
+                    const raw = c.asl_format(message, "raw", "sec", 0) orelse @panic("format boot ASL");
+                    defer c.free(raw);
+                    records.append(a, .{ .id = id, .raw = a.dupe(u8, std.mem.span(raw)) catch unreachable }) catch unreachable;
+                }
+            }
+        }
+        offset = next;
     }
-    return true;
 }
-// A boot selects its dates plus BB; null selects all day files, without BB.
-fn selectedFiles(started: ?i64) ?*anyopaque {
-    const dates = if (started) |time| dayPrefixes(time) else null;
+pub fn readBoot(key: []const u8, value: []const u8, prefix: bool, window: BootWindow) BootRead {
+    if (window.ready < window.started or window.ready_nsec < 0 or window.ready_nsec >= 1000000000) @panic("invalid boot readiness window");
+    const dates = dayPrefixes(window.started);
     const dir = c.opendir(storePath()) orelse @panic("open boot ASL directory");
     defer _ = c.closedir(dir);
-    var files: ?*anyopaque = null;
+    var names: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (names.items) |name| a.free(name);
+        names.deinit(a);
+    }
+    var records: std.ArrayList(BootRecord) = .empty;
+    defer {
+        for (records.items) |record| a.free(record.raw);
+        records.deinit(a);
+    }
+    const key_z = z(key);
+    defer a.free(key_z);
     while (true) {
         c.__error().* = 0;
         const entry = c.readdir(dir) orelse {
@@ -204,162 +271,30 @@ fn selectedFiles(started: ?i64) ?*anyopaque {
             break;
         };
         const name = entry.*.d_name[0..entry.*.d_namlen];
-        if (dates) |days| {
-            if (!std.mem.startsWith(u8, name, days[0][0..10]) and !std.mem.startsWith(u8, name, days[1][0..10]) and !std.mem.startsWith(u8, name, "BB.")) continue;
-        } else if (!isDayFile(name)) continue;
+        if (!std.mem.startsWith(u8, name, dates[0][0..10]) and
+            !std.mem.startsWith(u8, name, dates[1][0..10]) and !std.mem.startsWith(u8, name, "BB.")) continue;
         const path = std.fmt.allocPrintSentinel(a, "{s}/{s}", .{ std.mem.span(storePath()), name }, 0) catch unreachable;
         defer a.free(path);
         var file: ?*anyopaque = null;
-        // Like Apple's store reader, ignore non-ASL files and files removed
-        // by retention between directory enumeration and open.
+        // Ignore non-ASL directory entries, as Apple's file reader does.
         if (asl_file_open_read(path, &file) != 0) continue;
-        const next = asl_file_list_add(files, file);
-        if (next == files) {
-            _ = asl_file_close(file); // Legacy files are not added.
-        } else if (next == null) {
-            _ = asl_file_close(file);
-            asl_file_list_close(files);
-            @panic("boot ASL file list");
-        } else files = next;
+        defer _ = asl_file_close(file);
+        names.append(a, a.dupe(u8, name) catch unreachable) catch unreachable;
+        scanFile(path, file, key_z, value, prefix, window, &records);
     }
-    return files;
-}
-fn since(window: BootWindow) c.asl_object_t {
-    const q = c.asl_new(c.ASL_TYPE_QUERY) orelse unreachable;
-    var buf: [32]u8 = undefined;
-    const stamp = std.fmt.bufPrintZ(&buf, "{d}", .{window.started}) catch unreachable;
-    if (c.asl_set_query(q, "Time", stamp, c.ASL_QUERY_OP_NUMERIC | c.ASL_QUERY_OP_GREATER_EQUAL) != 0) unreachable;
-    return q;
-}
-const ClassStart = struct { name: [64]u8, len: usize, time: Timestamp };
-const Boundary = struct { oldest: ?Timestamp = null, gap: ?ClassStart = null };
-fn timestamp(message: c.asl_object_t) Timestamp {
-    const sec = c.asl_get(message, "Time") orelse @panic("record time");
-    const nsec = if (c.asl_get(message, "TimeNanoSec")) |n| std.fmt.parseInt(i64, std.mem.span(n), 10) catch unreachable else 0;
-    if (nsec < 0 or nsec >= 1000000000) @panic("record nanoseconds");
-    return .{ .sec = std.fmt.parseInt(i64, std.mem.span(sec), 10) catch unreachable, .nsec = nsec };
-}
-fn earlier(x: Timestamp, y: Timestamp) bool {
-    return x.sec < y.sec or (x.sec == y.sec and x.nsec < y.nsec);
-}
-fn accessClass(name: []const u8) []const u8 {
-    var end: usize = 10;
-    // Date.U<uid>.G<gid>.<split time>.asl; size suffix is not a class.
-    for ([_]u8{ 'U', 'G' }) |tag| {
-        if (name.len > end + 2 and name[end] == '.' and name[end + 1] == tag and std.ascii.isDigit(name[end + 2])) {
-            end += 2;
-            while (end < name.len and std.ascii.isDigit(name[end])) end += 1;
+    std.mem.sort(BootRecord, records.items, {}, byID);
+    std.mem.sort([]const u8, names.items, {}, struct {
+        fn less(_: void, x: []const u8, y: []const u8) bool {
+            return std.mem.lessThan(u8, x, y);
         }
-    }
-    return if (end == 10) "plain" else name[10..end];
-}
-fn dayBoundary(window: BootWindow) Boundary {
-    const dir = c.opendir(storePath()) orelse @panic("open day boundary directory");
-    defer _ = c.closedir(dir);
-    var classes: std.StringHashMap(Timestamp) = .init(a);
-    defer {
-        var keys = classes.keyIterator();
-        while (keys.next()) |key| a.free(key.*);
-        classes.deinit();
-    }
-    while (true) {
-        c.__error().* = 0;
-        const entry = c.readdir(dir) orelse {
-            if (c.__error().* != 0) @panic("read day boundary directory");
-            break;
-        };
-        const name = entry.*.d_name[0..entry.*.d_namlen];
-        if (!isDayFile(name)) continue;
-        const path = std.fmt.allocPrintSentinel(a, "{s}/{s}", .{ std.mem.span(storePath()), name }, 0) catch unreachable;
-        defer a.free(path);
-        var file: ?*anyopaque = null;
-        if (asl_file_open_read(path, &file) != 0) continue;
-        const files = asl_file_list_add(null, file);
-        if (files == null) {
-            _ = asl_file_close(file);
-            continue;
-        }
-        defer asl_file_list_close(files);
-        var last: u64 = 0;
-        const result = asl_file_list_match(files, null, &last, 0, 1, 0, 1);
-        defer c.asl_release(result);
-        const message = c.asl_next(result) orelse continue;
-        const first = timestamp(message);
-        const class = accessClass(name);
-        if (classes.getPtr(class)) |old| {
-            if (earlier(first, old.*)) old.* = first;
-        } else classes.put(a.dupe(u8, class) catch unreachable, first) catch unreachable;
-    }
-    var boundary: Boundary = .{};
-    var entries = classes.iterator();
-    while (entries.next()) |entry| {
-        const time = entry.value_ptr.*;
-        if (boundary.oldest == null or earlier(time, boundary.oldest.?)) boundary.oldest = time;
-        if (time.sec <= window.started) continue;
-        // Pick deterministically if multiple classes have a gap.
-        const name = entry.key_ptr.*;
-        if (boundary.gap == null or std.mem.lessThan(u8, name, boundary.gap.?.name[0..boundary.gap.?.len])) {
-            var gap: ClassStart = .{ .name = undefined, .len = name.len, .time = time };
-            if (name.len > gap.name.len) @panic("access class length");
-            @memcpy(gap.name[0..name.len], name);
-            boundary.gap = gap;
-        }
-    }
-    return boundary;
-}
-
-pub fn readBoot(key: []const u8, value: []const u8, prefix: bool, window: BootWindow) BootRead {
-    if (window.ready < window.started or window.ready_nsec < 0 or window.ready_nsec >= 1000000000) @panic("invalid boot readiness window");
-    const files = bootFiles(window.started);
-    defer asl_file_list_close(files);
-    const boundary = dayBoundary(window);
-    const q = since(window);
-    defer c.asl_release(q);
-    const list = c.asl_new(c.ASL_TYPE_LIST) orelse unreachable;
-    defer c.asl_release(list);
-    c.asl_append(list, q);
-    // Locate the first ID from this boot once. A key-filtered query would
-    // walk the whole storm to prove an absent key; only Time is used here.
-    var last: u64 = 0;
-    const first = asl_file_list_match(files, list, &last, 0, 1, 0, 1);
-    var start: u64 = 0;
-    if (c.asl_next(first)) |message| {
-        const id = c.asl_get(message, "ASLMessageID") orelse unreachable;
-        start = std.fmt.parseInt(u64, std.mem.span(id), 10) catch unreachable;
-    }
-    c.asl_release(first);
+    }.less);
     var out: std.ArrayList(u8) = .empty;
-    var retained = false;
-    if (start != 0) while (true) {
-        // Small unfiltered batches bound work even when no requested key
-        // survives. Message IDs order the startup window before later churn.
-        const result = asl_file_list_match(files, null, &last, start, 32, 0, 1);
-        defer c.asl_release(result);
-        var passed_window = false;
-        while (c.asl_next(result)) |message| {
-            const time = timestamp(message);
-            if (time.sec < window.started) continue;
-            if (time.sec > window.ready or (time.sec == window.ready and time.nsec > window.ready_nsec)) {
-                passed_window = true;
-                continue;
-            }
-            retained = true;
-            const key_z = z(key);
-            defer a.free(key_z);
-            const field = c.asl_get(message, key_z) orelse continue;
-            const bytes = std.mem.span(field);
-            if (!(if (prefix) std.mem.startsWith(u8, bytes, value) else std.mem.eql(u8, bytes, value))) continue;
-            const raw = c.asl_format(message, "raw", "sec", 0) orelse @panic("format boot ASL");
-            defer c.free(raw);
-            out.appendSlice(a, std.mem.span(raw)) catch unreachable;
-            out.append(a, '\n') catch unreachable;
-        }
-        if (passed_window or last < start or last == 0 or last == std.math.maxInt(u64)) break;
-        start = last + 1;
-    };
-    return .{ .bytes = out.toOwnedSlice(a) catch unreachable, .retained = retained, .oldest = boundary.oldest, .window = window, .class_gap = boundary.gap };
+    for (records.items) |record| {
+        out.appendSlice(a, record.raw) catch unreachable;
+        out.append(a, '\n') catch unreachable;
+    }
+    return .{ .bytes = out.toOwnedSlice(a) catch unreachable, .files = std.mem.join(a, ", ", names.items) catch unreachable, .oldest = oldestRecord() };
 }
-
 extern fn asl_store_open_write([*:0]const u8, *?*anyopaque) u32;
 extern fn asl_store_save(?*anyopaque, c.asl_object_t) u32;
 extern fn asl_store_close(?*anyopaque) u32;
@@ -386,10 +321,8 @@ test "old boot records are excluded and current duplicates remain visible" {
     for (0..2) |_| try std.testing.expectEqual(@as(u32, 0), asl_store_save(writer, m));
     try std.testing.expectEqual(@as(u32, 0), asl_store_close(writer));
     const boot_records = readBoot("Message", "banner", false, .{ .started = 2000000000, .ready = 2000000000 });
-    defer a.free(boot_records.bytes);
-    try std.testing.expect(boot_records.retained);
-    var reason: [256]u8 = undefined;
-    try std.testing.expect(try boot_records.startupCheck(&reason) == null);
+    defer boot_records.deinit();
+    try boot_records.requireRecords(&.{"[Message banner]"});
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, boot_records.bytes, "[Message banner]"));
     const tail = query("Message", "banner", false, false);
     defer a.free(tail);
@@ -459,112 +392,114 @@ test "boot date selection excludes old files and same-day earlier boots" {
     try std.testing.expectEqual(@as(u32, 0), asl_file_save(file, m, &id));
     try std.testing.expectEqual(@as(u32, 0), asl_file_close(file));
     const history = readBoot("Message", "banner", false, .{ .started = started, .ready = started });
-    defer a.free(history.bytes);
-    try std.testing.expect(history.retained);
+    defer history.deinit();
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, history.bytes, "[Message banner]"));
 }
-test "missing boot-day files cannot justify skipping when older records remain" {
+test "an unrelated later U501 class cannot excuse missing startup records" {
     const fixture = try TestStore.init();
     defer fixture.deinit();
-    try testSave(1999913600, "banner", null);
-    const history = readBoot("Message", "banner", false, .{ .started = 2000000000, .ready = 2000000001 });
-    defer a.free(history.bytes);
-    try std.testing.expectEqual(@as(usize, 0), history.bytes.len);
-    try std.testing.expect(!history.retained);
-    var reason: [256]u8 = undefined;
-    try std.testing.expectError(error.StartupRecordsMissing, history.startupCheck(&reason));
+    const window: BootWindow = .{ .started = 2000000000, .ready = 2000000001 };
+    for ([_][]const u8{ "", ".G80", ".U0.G80" }, 0..) |class, i| {
+        try testClassRecord(class, window.started - 1, "before boot", i + 1);
+    }
+    try testClassRecord(".U501", window.ready + 1, "first user record", 4);
+    const history = readBoot("Message", "banner", false, window);
+    defer history.deinit();
+    try std.testing.expectError(error.StartupRecordsMissing, history.requireRecords(&.{"banner"}));
+    const why = history.failure();
+    defer a.free(why);
+    try std.testing.expect(std.mem.indexOf(u8, why, ".U501.asl") != null);
+    try std.testing.expect(std.mem.indexOf(u8, why, "store's oldest record: 1999999999.000000000") != null);
 }
-test "a store beginning after readiness permits skipping with the observed times" {
+test "a store beginning after readiness fails with files and oldest record" {
     const fixture = try TestStore.init();
     defer fixture.deinit();
     try testSave(2000000100, "later", null);
     const history = readBoot("Message", "banner", false, .{ .started = 2000000000, .ready = 2000000001 });
-    defer a.free(history.bytes);
-    try std.testing.expect(history.bytes.len == 0 and !history.retained);
-    var reason: [256]u8 = undefined;
-    const removed = (try history.startupCheck(&reason)) orelse return error.MissingReason;
-    try std.testing.expectEqualStrings("the store's oldest record (2000000100.000000000) is newer than the boot's first readiness (2000000001.999999999)", removed);
-    // An absent banner remains a failure when any startup record survives.
-    try testSave(2000000000, "other startup record", null);
-    const retained = readBoot("Message", "banner", false, .{ .started = 2000000000, .ready = 2000000001 });
-    defer a.free(retained.bytes);
-    try std.testing.expect(retained.bytes.len == 0 and retained.retained);
-    try std.testing.expect(try retained.startupCheck(&reason) == null);
+    defer history.deinit();
+    try std.testing.expectError(error.StartupRecordsMissing, history.requireRecords(&.{"banner"}));
+    const why = history.failure();
+    defer a.free(why);
+    try std.testing.expect(std.mem.indexOf(u8, why, "files read: [2033.05.18") != null);
+    try std.testing.expect(std.mem.indexOf(u8, why, "store's oldest record: 2000000100.000000000") != null);
 }
-test "pre-boot history plus post-readiness records fails rather than hiding startup loss" {
-    const fixture = try TestStore.init();
-    defer fixture.deinit();
-    const window: BootWindow = .{ .started = 2000000000, .ready = 2000000001 };
-    // The pre-boot file is outside bootFiles' date selection. The fallback
-    // must inspect all day files to see that history still reaches back.
-    try testSave(window.started - 86400, "older day", null);
-    try testSave(window.ready + 1, "after readiness", null);
-    const missing = readBoot("Message", "banner", false, window);
-    defer a.free(missing.bytes);
-    try std.testing.expect(missing.bytes.len == 0 and !missing.retained);
-    try std.testing.expectEqual(window.started - 86400, missing.oldest.?.sec);
-    var reason: [256]u8 = undefined;
-    try std.testing.expectError(error.StartupRecordsMissing, missing.startupCheck(&reason));
-    // Reaching back with a startup-window record keeps the normal assertions.
-    try testSave(window.started, "banner", null);
-    const present = readBoot("Message", "banner", false, window);
-    defer a.free(present.bytes);
-    try std.testing.expect(try present.startupCheck(&reason) == null);
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, present.bytes, "[Message banner]"));
-}
-test "an empty store cannot prove removal and never skips" {
+test "empty fresh-boot history fails with an empty-store diagnostic" {
     const fixture = try TestStore.init();
     defer fixture.deinit();
     const history = readBoot("Message", "banner", false, .{ .started = 2000000000, .ready = 2000000001 });
-    defer a.free(history.bytes);
-    var reason: [256]u8 = undefined;
-    try std.testing.expectError(error.EmptyStore, history.startupCheck(&reason));
+    defer history.deinit();
+    try std.testing.expectError(error.StartupRecordsMissing, history.requireRecords(&.{"banner"}));
+    const why = history.failure();
+    defer a.free(why);
+    try std.testing.expectEqualStrings("startup records missing; files read: []; store's oldest record: none (empty store)", why);
 }
-test "old BB history does not block skipping when day files start after readiness" {
+test "oldest diagnostic includes BB records outside the selected boot dates" {
     const fixture = try TestStore.init();
     defer fixture.deinit();
-    const window: BootWindow = .{ .started = 2000000000, .ready = 2000000001 };
-    try testSave(window.started - 86400, "old BB", 2200000000);
-    try testSave(window.ready + 10, "later day", null);
-    const history = readBoot("Message", "banner", false, window);
-    defer a.free(history.bytes);
-    try std.testing.expect(!history.retained and history.bytes.len == 0);
-    try std.testing.expectEqual(window.ready + 10, history.oldest.?.sec);
-    var reason: [256]u8 = undefined;
-    const removed = (try history.startupCheck(&reason)) orelse return error.MissingReason;
-    try std.testing.expectEqualStrings("the store's oldest record (2000000011.000000000) is newer than the boot's first readiness (2000000001.999999999)", removed);
+    try testSave(1999913600, "old BB", 2200000000);
+    try testSave(2000000100, "later", null);
+    const history = readBoot("Message", "banner", false, .{ .started = 2000000000, .ready = 2000000001 });
+    defer history.deinit();
+    try std.testing.expectEqual(@as(i64, 1999913600), history.oldest.?.sec);
+    try std.testing.expectError(error.StartupRecordsMissing, history.requireRecords(&.{"banner"}));
 }
-test "old BB history plus a pre-boot day record still fails on missing startup records" {
+test "window records after forty later-stamped records are found in ID order" {
     const fixture = try TestStore.init();
     defer fixture.deinit();
-    const window: BootWindow = .{ .started = 2000000000, .ready = 2000000001 };
-    try testSave(window.started - 172800, "old BB", 2200000000);
-    try testSave(window.started - 86400, "old day", null);
-    try testSave(window.ready + 10, "later day", null);
-    const history = readBoot("Message", "banner", false, window);
-    defer a.free(history.bytes);
-    try std.testing.expect(!history.retained and history.bytes.len == 0);
-    try std.testing.expectEqual(window.started - 86400, history.oldest.?.sec);
-    var reason: [256]u8 = undefined;
-    try std.testing.expectError(error.StartupRecordsMissing, history.startupCheck(&reason));
+    try testSave(2000000000, "banner first", null);
+    for (0..40) |_| try testSave(2000000100, "later", null);
+    try testSave(2000000001, "banner second", null);
+    try testSave(2000000000, "banner first", null);
+    const history = readBoot("Message", "banner", true, .{ .started = 2000000000, .ready = 2000000001 });
+    defer history.deinit();
+    try history.requireRecords(&.{ "banner first", "banner second" });
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, history.bytes, "[Message banner"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, history.bytes, "[Message banner first]"));
+    try std.testing.expect(std.mem.indexOf(u8, history.bytes, "banner first").? < std.mem.indexOf(u8, history.bytes, "banner second").?);
 }
-test "a BB-only store is empty for the day boundary but retains BB startup records" {
+test "header scan rejects corrupt links timestamps and truncated records" {
+    var data: [202]u8 = @splat(0);
+    @memcpy(data[0..6], "ASL DB");
+    std.mem.writeInt(u32, data[12..16], 2, .big);
+    std.mem.writeInt(u64, data[16..24], 80, .big);
+    std.mem.writeInt(u32, data[82..86], 116, .big);
+    var records: std.ArrayList(BootRecord) = .empty;
+    defer records.deinit(a);
+    const window: BootWindow = .{ .started = 100, .ready = 101 };
+    // A valid excluded record needs no decoder or ASL object.
+    try scanHeaders(&data, null, "Message", "banner", false, window, &records);
+    std.mem.writeInt(u64, data[86..94], 80, .big);
+    try std.testing.expectError(error.Malformed, scanHeaders(&data, null, "Message", "banner", false, window, &records));
+    std.mem.writeInt(u64, data[86..94], 1000, .big);
+    try std.testing.expectError(error.Malformed, scanHeaders(&data, null, "Message", "banner", false, window, &records));
+    std.mem.writeInt(u64, data[86..94], 0, .big);
+    std.mem.writeInt(u32, data[110..114], 1000000000, .big);
+    try std.testing.expectError(error.Malformed, scanHeaders(&data, null, "Message", "banner", false, window, &records));
+    std.mem.writeInt(u32, data[110..114], 0, .big);
+    try std.testing.expectError(error.Malformed, scanHeaders(data[0..201], null, "Message", "banner", false, window, &records));
+}
+test "readiness nanoseconds bound records within the same second" {
     const fixture = try TestStore.init();
     defer fixture.deinit();
-    const window: BootWindow = .{ .started = 2000000000, .ready = 2000000001 };
-    try testSave(window.started - 86400, "old BB", 2200000000);
-    const missing = readBoot("Message", "banner", false, window);
-    defer a.free(missing.bytes);
-    try std.testing.expect(missing.oldest == null and !missing.retained);
-    var reason: [256]u8 = undefined;
-    try std.testing.expectError(error.EmptyStore, missing.startupCheck(&reason));
-    try testSave(window.started, "banner", 2200000000);
-    const retained = readBoot("Message", "banner", false, window);
-    defer a.free(retained.bytes);
-    try std.testing.expect(retained.retained);
-    try std.testing.expect(try retained.startupCheck(&reason) == null);
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, retained.bytes, "[Message banner]"));
+    const path = try std.fmt.allocPrintSentinel(a, "{s}/2033.05.18.asl", .{fixture.path}, 0);
+    defer a.free(path);
+    var file: ?*anyopaque = null;
+    try std.testing.expectEqual(@as(u32, 0), asl_file_open_write(path, 0o600, c.getuid(), c.getgid(), &file));
+    const message = c.asl_new(c.ASL_TYPE_MSG);
+    defer c.asl_release(message);
+    try std.testing.expect(c.asl_set(message, "Time", "2000000000") == 0);
+    try std.testing.expect(c.asl_set(message, "Message", "banner") == 0);
+    for ([_][*:0]const u8{ "101", "100", "99" }, 1..) |nano, number| {
+        try std.testing.expect(c.asl_set(message, "TimeNanoSec", nano) == 0);
+        var id: u64 = number;
+        try std.testing.expectEqual(@as(u32, 0), asl_file_save(file, message, &id));
+    }
+    try std.testing.expectEqual(@as(u32, 0), asl_file_close(file));
+    const history = readBoot("Message", "banner", false, .{ .started = 2000000000, .ready = 2000000000, .ready_nsec = 100 });
+    defer history.deinit();
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, history.bytes, "[Message banner]"));
 }
+
 test "split files next day and BB records preserve global message ID order" {
     const fixture = try TestStore.init();
     defer fixture.deinit();
@@ -589,8 +524,7 @@ test "split files next day and BB records preserve global message ID order" {
     try testSave(2000086400, "ordered second", null);
     try testSave(2000000001, "ordered third", 2100000000);
     const history = readBoot("Message", "ordered", true, .{ .started = 2000000000, .ready = 2000086401 });
-    defer a.free(history.bytes);
-    try std.testing.expect(history.retained);
+    defer history.deinit();
     const first = std.mem.indexOf(u8, history.bytes, "ordered first") orelse return error.First;
     const second = std.mem.indexOf(u8, history.bytes, "ordered second") orelse return error.Second;
     const third = std.mem.indexOf(u8, history.bytes, "ordered third") orelse return error.Third;
@@ -613,8 +547,7 @@ test "all long-expiry buckets retain startup records without a day file" {
     _ = c.closedir(dir);
     try std.testing.expectEqual(@as(usize, 2), buckets);
     const history = readBoot("Message", "BB", true, .{ .started = 2000000000, .ready = 2000000001 });
-    defer a.free(history.bytes);
-    try std.testing.expect(history.retained);
+    defer history.deinit();
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, history.bytes, "[Message BB"));
 }
 test "calendar selection handles DST and year boundaries" {
@@ -685,10 +618,9 @@ test "real-shape same-day 1.2M-record store reads only startup records" {
     try std.testing.expect(c.clock_gettime(c.CLOCK_MONOTONIC, &before) == 0);
     const history = readBoot("Message", "banner", false, .{ .started = 2000000000, .ready = 2000000001 });
     try std.testing.expect(c.clock_gettime(c.CLOCK_MONOTONIC, &after) == 0);
-    defer a.free(history.bytes);
+    defer history.deinit();
     const ns = (after.tv_sec - before.tv_sec) * std.time.ns_per_s + after.tv_nsec - before.tv_nsec;
     std.debug.print("storm_read records=1200000 classes=plain,G80,U0.G80,U501 elapsed_ms={d}\n", .{@divTrunc(ns, std.time.ns_per_ms)});
-    try std.testing.expect(history.retained);
     try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, history.bytes, "[Message banner]"));
     if (c.getenv("RMX_SCOPE_BASELINE") == null) try std.testing.expect(ns < 2 * std.time.ns_per_s);
 }
@@ -709,7 +641,7 @@ fn testClassRecord(suffix: []const u8, at: i64, message: [*:0]const u8, number: 
     var id = number;
     try std.testing.expectEqual(@as(u32, 0), asl_file_save(file, m, &id));
 }
-test "adx01 shape skips missing launchd records only for the truncated G80 class" {
+test "a truncated class cannot excuse missing fresh-boot records" {
     const fixture = try TestStore.init();
     defer fixture.deinit();
     const window: BootWindow = .{ .started = 2000000000, .ready = 2000000001 };
@@ -719,11 +651,9 @@ test "adx01 shape skips missing launchd records only for the truncated G80 class
     try testClassRecord(".G80.2000001200", window.started + 1200, "surviving split", 4);
     try testSave(window.started, "BB startup", 2200000000);
     const history = readBoot("Message", "launchd banner", false, window);
-    defer a.free(history.bytes);
-    try std.testing.expect(history.retained and history.bytes.len == 0);
-    var reason: [256]u8 = undefined;
-    const removed = (try history.missingCheck(&reason)) orelse return error.MissingReason;
-    try std.testing.expectEqualStrings("class .G80's oldest record (2000001200.000000000) is newer than the boot's start (2000000000)", removed);
+    defer history.deinit();
+    try std.testing.expect(history.bytes.len == 0);
+    try std.testing.expectError(error.StartupRecordsMissing, history.requireRecords(&.{"launchd banner"}));
 }
 test "missing expected startup records fail when every access class reaches back" {
     const fixture = try TestStore.init();
@@ -734,8 +664,7 @@ test "missing expected startup records fail when every access class reaches back
     }
     try testClassRecord(".G80.2000000000", window.started, "other startup", 5);
     const history = readBoot("Message", "launchd banner", false, window);
-    defer a.free(history.bytes);
-    try std.testing.expect(history.retained and history.bytes.len == 0);
-    var reason: [256]u8 = undefined;
-    try std.testing.expectError(error.StartupRecordsMissing, history.missingCheck(&reason));
+    defer history.deinit();
+    try std.testing.expect(history.bytes.len == 0);
+    try std.testing.expectError(error.StartupRecordsMissing, history.requireRecords(&.{"launchd banner"}));
 }

@@ -107,22 +107,20 @@ fn waitEmpty() void {
     }
     c.atf_tc_fail("launchd queue did not drain");
 }
+// Fresh boots only: long-lived-host plans omit early_boot by name.
 fn early() void {
     const first = "*** launchd[1] has started up. ***";
     const second = "*** Shutdown logging is enabled. ***";
     const history = scope.readBoot("Sender", "com.apple.launchd", false, scope.bootWindow());
-    defer a.free(history.bytes);
+    defer history.deinit();
     const bytes = history.bytes;
     const first_at = std.mem.indexOf(u8, bytes, first);
     const second_at = std.mem.indexOf(u8, bytes, second);
-    if (first_at == null or second_at == null) {
-        var reason: [256]u8 = undefined;
-        const removed = history.missingCheck(&reason) catch |err| switch (err) {
-            error.StartupRecordsMissing => c.atf_tc_fail("startup records missing although the store reaches back to the boot"),
-            error.EmptyStore => c.atf_tc_fail("startup records missing and the store is empty"),
-        };
-        if (removed) |why| c.atf_tc_skip("%s", why.ptr);
-    }
+    history.requireRecords(&.{ first, second }) catch {
+        const why = history.failure();
+        defer a.free(why);
+        c.atf_tc_fail("%s", why.ptr);
+    };
     const x = first_at orelse unreachable;
     const y = second_at orelse unreachable;
     need(x < y, "early launchd messages preserve order");
