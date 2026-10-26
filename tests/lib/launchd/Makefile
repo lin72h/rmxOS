@@ -34,7 +34,7 @@ legacy_ipc_test: ${.CURDIR}/legacy_ipc.zig ${.CURDIR}/fd_inventory.zig ${.CURDIR
 OP674_MIG= sh ${SRCTOP}/usr.bin/migcom/mig.sh -migcom ${SYSROOT}/usr/bin/migcom
 op674_reply.h op674_replyUser.c: ${.CURDIR}/op674_reply.defs
 	${OP674_MIG} -DPRIVATE -I${SRCTOP}/sys -I${SRCTOP}/sys/sys -I${SYSROOT}/usr/include -I${SRCTOP}/include/apple -header op674_reply.h -user op674_replyUser.c -server /dev/null ${.ALLSRC}
-reply_ownership_test: ${.CURDIR}/reply_ownership.zig ${.CURDIR}/fd_inventory.zig op674_reply.h op674_replyUser.c ${SRCTOP}/usr.sbin/notifyd/mach_ownership.c ${SRCTOP}/usr.sbin/notifyd/mach_ownership.h
+reply_ownership_test: ${.CURDIR}/reply_ownership.zig ${.CURDIR}/dispatch_receive_observation.zig ${.CURDIR}/fd_inventory.zig op674_reply.h op674_replyUser.c ${SRCTOP}/usr.sbin/notifyd/mach_ownership.c ${SRCTOP}/usr.sbin/notifyd/mach_ownership.h
 	${ZIG} build-exe ${.CURDIR}/reply_ownership.zig ${ATF_C_ARCHIVE} ${MACH_SO} ${SYSROOT}/usr/lib/liblaunch.so.5 ${SYSROOT}/usr/lib/libxpc.so.5 ${SYSROOT}/usr/lib/libdispatch.so.5 ${SYSROOT}/lib/libthr.so.3 -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -I. -cflags -D__MigTypeCheck=1 -- op674_replyUser.c ${SRCTOP}/usr.sbin/notifyd/mach_ownership.c -femit-bin=${.TARGET}
 CLEANFILES+= op674_reply.h op674_replyUser.c
 

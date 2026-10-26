@@ -220,13 +220,19 @@ fn scanHeaders(data: []const u8, file: ?*anyopaque, key: [:0]const u8, value: []
         std.mem.readInt(u32, data[12..16], .big) != 2) return error.Malformed;
     var offset = std.mem.readInt(u64, data[16..24], .big);
     while (offset != 0) {
-        if (offset < 80 or offset > data.len or data.len - @as(usize, @intCast(offset)) < 122) return error.Malformed;
+        if (offset < 80) return error.Malformed;
+        // The live writer can publish a next link after fstat/mmap. Treat
+        // records beyond this snapshot as EOF, while validating visible data.
+        if (offset >= data.len) break;
         const pos: usize = @intCast(offset);
+        if (data.len - pos < 6) break;
+        const visible = data[pos..];
+        const record_len = std.mem.readInt(u32, visible[2..6], .big);
+        if (std.mem.readInt(u16, visible[0..2], .big) != 0 or record_len < 116) return error.Malformed;
+        if (record_len > data.len - pos - 6) break;
         const head = data[pos..][0..122];
-        const len = std.mem.readInt(u32, head[2..6], .big);
-        if (std.mem.readInt(u16, head[0..2], .big) != 0 or len < 116 or len > data.len - pos - 6) return error.Malformed;
         const next = std.mem.readInt(u64, head[6..14], .big);
-        if (next != 0 and next <= offset) return error.Malformed;
+        if (next != 0 and next < offset + record_len + 6) return error.Malformed;
         const seconds = std.mem.readInt(u64, head[22..30], .big);
         const nano = std.mem.readInt(u32, head[30..34], .big);
         if (seconds > std.math.maxInt(i64) or nano >= 1000000000) return error.Malformed;
@@ -458,7 +464,7 @@ test "window records after forty later-stamped records are found in ID order" {
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, history.bytes, "[Message banner first]"));
     try std.testing.expect(std.mem.indexOf(u8, history.bytes, "banner first").? < std.mem.indexOf(u8, history.bytes, "banner second").?);
 }
-test "header scan rejects corrupt links timestamps and truncated records" {
+test "header scan rejects corrupt links and timestamps inside the mapping" {
     var data: [202]u8 = @splat(0);
     @memcpy(data[0..6], "ASL DB");
     std.mem.writeInt(u32, data[12..16], 2, .big);
@@ -471,13 +477,65 @@ test "header scan rejects corrupt links timestamps and truncated records" {
     try scanHeaders(&data, null, "Message", "banner", false, window, &records);
     std.mem.writeInt(u64, data[86..94], 80, .big);
     try std.testing.expectError(error.Malformed, scanHeaders(&data, null, "Message", "banner", false, window, &records));
-    std.mem.writeInt(u64, data[86..94], 1000, .big);
+    std.mem.writeInt(u64, data[86..94], 100, .big);
     try std.testing.expectError(error.Malformed, scanHeaders(&data, null, "Message", "banner", false, window, &records));
     std.mem.writeInt(u64, data[86..94], 0, .big);
     std.mem.writeInt(u32, data[110..114], 1000000000, .big);
     try std.testing.expectError(error.Malformed, scanHeaders(&data, null, "Message", "banner", false, window, &records));
     std.mem.writeInt(u32, data[110..114], 0, .big);
-    try std.testing.expectError(error.Malformed, scanHeaders(data[0..201], null, "Message", "banner", false, window, &records));
+    std.mem.writeInt(u16, data[80..82], 1, .big);
+    try std.testing.expectError(error.Malformed, scanHeaders(&data, null, "Message", "banner", false, window, &records));
+}
+test "header scan stops at an append beyond or crossing the mapped end" {
+    var data: [330]u8 = @splat(0);
+    @memcpy(data[0..6], "ASL DB");
+    std.mem.writeInt(u32, data[12..16], 2, .big);
+    std.mem.writeInt(u64, data[16..24], 80, .big);
+    std.mem.writeInt(u32, data[82..86], 116, .big);
+    std.mem.writeInt(u64, data[86..94], 208, .big);
+    std.mem.writeInt(u32, data[210..214], 116, .big);
+    var records: std.ArrayList(BootRecord) = .empty;
+    defer records.deinit(a);
+    const window: BootWindow = .{ .started = 100, .ready = 101 };
+    for ([_]usize{ 202, 208, 209, 213, 214, 250, 329, 330 }) |mapped_size| {
+        try scanHeaders(data[0..mapped_size], null, "Message", "banner", false, window, &records);
+    }
+    std.mem.writeInt(u64, data[86..94], 1000, .big);
+    try scanHeaders(&data, null, "Message", "banner", false, window, &records);
+    std.mem.writeInt(u64, data[16..24], 1000, .big);
+    try scanHeaders(&data, null, "Message", "banner", false, window, &records);
+}
+test "live ASL append links past an existing mapping without corrupting the scan" {
+    const fixture = try TestStore.init();
+    defer fixture.deinit();
+    const path = try std.fmt.allocPrintSentinel(a, "{s}/live.asl", .{fixture.path}, 0);
+    defer a.free(path);
+    var file: ?*anyopaque = null;
+    try std.testing.expectEqual(@as(u32, 0), asl_file_open_write(path, 0o600, c.getuid(), c.getgid(), &file));
+    defer _ = asl_file_close(file);
+    const message = c.asl_new(c.ASL_TYPE_MSG);
+    defer c.asl_release(message);
+    try std.testing.expect(c.asl_set(message, "Time", "2000000000") == 0);
+    var id: u64 = 1;
+    try std.testing.expectEqual(@as(u32, 0), asl_file_save(file, message, &id));
+    const fd = c.open(path, c.O_RDONLY);
+    try std.testing.expect(fd >= 0);
+    defer _ = c.close(fd);
+    var st: c.struct_stat = undefined;
+    try std.testing.expect(c.fstat(fd, &st) == 0);
+    const size: usize = @intCast(st.st_size);
+    const mapping = c.mmap(null, size, c.PROT_READ, c.MAP_PRIVATE, fd, 0);
+    try std.testing.expect(mapping != c.MAP_FAILED);
+    defer _ = c.munmap(mapping, size);
+    const data = @as([*]const u8, @ptrCast(mapping))[0..size];
+    id = 2;
+    try std.testing.expectEqual(@as(u32, 0), asl_file_save(file, message, &id));
+    const first: usize = @intCast(std.mem.readInt(u64, data[16..24], .big));
+    const next = std.mem.readInt(u64, data[first..][6..14], .big);
+    try std.testing.expect(next >= size);
+    var records: std.ArrayList(BootRecord) = .empty;
+    defer records.deinit(a);
+    try scanHeaders(data, null, "Message", "banner", false, .{ .started = 100, .ready = 101 }, &records);
 }
 test "readiness nanoseconds bound records within the same second" {
     const fixture = try TestStore.init();

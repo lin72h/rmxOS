@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause
 const std = @import("std");
+const dispatch_receive = @import("dispatch_receive_observation.zig");
 const inventory = @import("fd_inventory.zig");
 const c = @cImport({
     // Zig 0.16 cannot translate the unused BSD bintime_shift inline.
@@ -435,8 +436,8 @@ fn dispatchLarge(_: [*c]const c.atf_tc_t) callconv(.c) void {
     while (!drain_entered.load(.seq_cst)) _ = c.usleep(1000);
     const source = dispatch_source_create(&_dispatch_source_type_mach_recv, service, 0, q);
     check(source != null, "dispatch receive source");
-    // The blocked target queue prevents manager installation/claiming. Resume
-    // clears suspension so the public MIG server can consume this port directly.
+    // Blocking delivery on the target queue does not expose a registration
+    // barrier. Observe the actual receive status rather than assuming arming.
     dispatch_resume(source);
     _ = maps(c.getpid());
     var before: Maps = .{};
@@ -449,7 +450,12 @@ fn dispatchLarge(_: [*c]const c.atf_tc_t) callconv(.c) void {
         put(&bytes, 28, Ool{ .address = memory, .size = 4096 });
         put(&bytes, 44, Port{ .name = watch, .disposition = c.MACH_MSG_TYPE_COPY_SEND });
         send(&bytes);
-        check(dispatch_mig_server(source, 128, &unexpectedDemux) == c.MACH_RCV_TOO_LARGE, "dispatch oversized receive status");
+        const status = dispatch_mig_server(source, 128, &unexpectedDemux);
+        var observation: [256]u8 = undefined;
+        const line = dispatch_receive.observation(&observation, i, status, demux_calls) catch unreachable;
+        _ = c.printf("%s\n", line.ptr);
+        _ = c.fflush(null);
+        if (status != c.MACH_RCV_TOO_LARGE) c.atf_tc_fail("dispatch oversized receive status: iteration=%zu expected=%d observed=%d (0x%x)", i, @as(c_int, c.MACH_RCV_TOO_LARGE), status, @as(u32, @bitCast(status)));
         check(refs(watch) == rights_before, "dispatch discarded receive rights");
         if (i == 0) before = maps(c.getpid());
     }
