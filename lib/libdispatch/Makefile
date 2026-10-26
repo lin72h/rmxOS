@@ -75,7 +75,7 @@ SRCS =  protocolUser.c \
 	provider.d
 
 INCSDIR= ${INCLUDEDIR}/dispatch
-INCS=	base.h \
+INCS=	module.modulemap base.h \
 	block.h \
 	data.h \
 	dispatch.h \

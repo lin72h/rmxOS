@@ -1,0 +1,23 @@
+module Dispatch {
+	requires blocks
+	export *
+	link "dispatch"
+	link "BlocksRuntime"
+}
+
+module CDispatch [system] [extern_c] {
+	umbrella header "dispatch.h"
+	exclude header "data_private.h"
+	exclude header "introspection_private.h"
+	exclude header "io_private.h"
+	exclude header "layout_private.h"
+	exclude header "mach_private.h"
+	exclude header "private.h"
+	exclude header "queue_private.h"
+	exclude header "source_private.h"
+	exclude header "voucher_activity_private.h"
+	exclude header "voucher_private.h"
+	export *
+	requires blocks
+	link "dispatch"
+}

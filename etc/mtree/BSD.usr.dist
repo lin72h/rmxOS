@@ -74,6 +74,8 @@
         ..
         compat
         ..
+        swift
+        ..
         dtrace
         ..
         engines-3

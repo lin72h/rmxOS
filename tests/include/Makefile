@@ -25,4 +25,14 @@ ATF_C_ARCHIVE?= ${OBJTOP}/lib/atf/libatf-c/libprivateatf-c.a
 developer_tools_test: ${.CURDIR}/developer_tools.zig
 	${ZIG} build-exe ${.ALLSRC} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}
 
+SCRIPTS+= swift_base_test swift_lookup
+FILES+= libop170_swift.so.1
+FILESDIR= ${TESTSDIR}
+swift_base_test: ${.CURDIR}/swift_base.zig
+	${ZIG} build-exe ${.ALLSRC} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}
+libop170_swift.so.1: ${.CURDIR}/swift_runtime.zig
+	${ZIG} build-lib ${.ALLSRC} -dynamic -fsoname=libop170_swift.so.1 -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -femit-bin=${.TARGET}
+swift_lookup: ${.CURDIR}/swift_lookup.zig libop170_swift.so.1
+	${ZIG} build-exe ${.CURDIR}/swift_lookup.zig libop170_swift.so.1 -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -femit-bin=${.TARGET}
+
 .include <bsd.test.mk>
