@@ -1,42 +1,42 @@
 #!/bin/sh
-# Compatibility service for the asld system logger.
+# Compatibility service for the logd system logger.
 # PROVIDE: syslogd
-# REQUIRE: mountcritremote FILESYSTEMS asld_ready
+# REQUIRE: mountcritremote FILESYSTEMS logd_ready
 # BEFORE: SERVERS
 
 . /etc/rc.subr
 name="syslogd"
-desc="Wait for asld and provide compatible reload/status commands"
-command="/usr/sbin/asld"
+desc="Wait for logd and provide compatible reload/status commands"
+command="/usr/sbin/logd"
 pidfile="/var/run/syslog.pid"
-start_cmd="asld_wait"
+start_cmd="logd_wait"
 # start waits for an already running launchd-owned process.
 rc_fast=yes
 stop_cmd=":"
 extra_commands="reload"
 
-asld_wait()
+logd_wait()
 {
 	local attempt owner ready_tmp
 	attempt=0
 	while [ "$attempt" -lt 30 ]; do
 		owner=$(check_pidfile "$pidfile" "$command")
 		if [ -S /var/run/log ] && [ -n "$owner" ]; then
-			ready_tmp=$(mktemp /var/run/asld.service-ready.XXXXXX) || return 1
+			ready_tmp=$(mktemp /var/run/logd.service-ready.XXXXXX) || return 1
 			if ! echo "$owner" > "$ready_tmp" ||
-			    ! mv -f "$ready_tmp" /var/run/asld.service-ready; then
+			    ! mv -f "$ready_tmp" /var/run/logd.service-ready; then
 				rm -f "$ready_tmp"
 				return 1
 			fi
-			echo "asld: compatibility service ready pid=$owner socket=/var/run/log" >> /var/run/asld.boot-service.log || return 1
-			echo "asld: compatibility service ready pid=$owner socket=/var/run/log"
+			echo "logd: compatibility service ready pid=$owner socket=/var/run/log" >> /var/run/logd.boot-service.log || return 1
+			echo "logd: compatibility service ready pid=$owner socket=/var/run/log"
 			return 0
 		fi
 		sleep 1
 		attempt=$((attempt + 1))
 	done
-	echo "asld socket not ready after 30 seconds; logging dependency unavailable" >> /var/run/asld.boot-service.log
-	warn "asld socket not ready after 30 seconds; logging dependency unavailable"
+	echo "logd socket not ready after 30 seconds; logging dependency unavailable" >> /var/run/logd.boot-service.log
+	warn "logd socket not ready after 30 seconds; logging dependency unavailable"
 	return 1
 }
 

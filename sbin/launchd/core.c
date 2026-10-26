@@ -3406,7 +3406,7 @@ bool
 launchd_asl_drainer_running(void)
 {
 	if (!root_jobmgr) return false;
-	job_t j = job_find(root_jobmgr, "com.apple.syslogd");
+	job_t j = job_find(root_jobmgr, "org.rmxos.logd");
 	return j && j->p > 0;
 }
 

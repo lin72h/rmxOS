@@ -28,7 +28,7 @@ const c = @cImport({
 const a = std.heap.page_allocator;
 var floor: usize = 0;
 fn storePath() [*:0]const u8 {
-    return if (c.getenv("RMX_ASL_TEST_STORE")) |p| p else "/var/log/asl";
+    return if (c.getenv("RMX_ASL_TEST_STORE")) |p| p else "/var/db/logd";
 }
 fn z(s: []const u8) [:0]const u8 {
     return a.dupeZ(u8, s) catch unreachable;
@@ -131,29 +131,29 @@ pub fn bootWindow() BootWindow {
     if (c.sysctlbyname("kern.boottime", &started, &size, null, 0) != 0 or size != @sizeOf(c.struct_timeval)) @panic("boot time");
     // launchd_logging captures this before restart cases or compatibility
     // onestart can replace the service-ready file. Never use a later restart.
-    if (c.fopen("/var/run/op942-first-asld-ready", "rb")) |fp| {
+    if (c.fopen("/var/run/op942-first-logd-ready", "rb")) |fp| {
         defer _ = c.fclose(fp);
-        const proof = first_ready.read(fp, boot_id) catch @panic("first asld readiness proof");
+        const proof = first_ready.read(fp, boot_id) catch @panic("first logd readiness proof");
         return .{ .started = proof.boot_sec, .ready = proof.ready_sec, .ready_nsec = proof.ready_nsec };
     }
     // A standalone kernel case may precede the launchd cases. Accept the
     // current marker only when the boot log proves there was one readiness.
-    const fp = c.fopen("/var/run/asld.boot-service.log", "r") orelse @panic("asld boot log");
+    const fp = c.fopen("/var/run/logd.boot-service.log", "r") orelse @panic("logd boot log");
     defer _ = c.fclose(fp);
     var line: [1024]u8 = undefined;
     var observations: usize = 0;
     while (c.fgets(&line, line.len, fp) != null) {
-        if (std.mem.startsWith(u8, std.mem.sliceTo(&line, 0), "asld: compatibility service ready pid=")) observations += 1;
+        if (std.mem.startsWith(u8, std.mem.sliceTo(&line, 0), "logd: compatibility service ready pid=")) observations += 1;
     }
     var ready: c.struct_stat = undefined;
-    if (c.ferror(fp) != 0 or observations != 1 or c.stat("/var/run/asld.service-ready", &ready) != 0) @panic("first asld readiness unavailable");
+    if (c.ferror(fp) != 0 or observations != 1 or c.stat("/var/run/logd.service-ready", &ready) != 0) @panic("first logd readiness unavailable");
     var marker: c.struct_stat = undefined;
-    if (c.stat("/var/run/asld.filesystems-ready", &marker) != 0) @panic("asld filesystem readiness");
+    if (c.stat("/var/run/logd.filesystems-ready", &marker) != 0) @panic("logd filesystem readiness");
     const proof: ReadyProof = .{ .boot_id = boot_id, .boot_sec = started.tv_sec, .boot_usec = started.tv_usec, .marker_sec = marker.st_mtim.tv_sec, .marker_nsec = marker.st_mtim.tv_nsec, .ready_sec = ready.st_mtim.tv_sec, .ready_nsec = ready.st_mtim.tv_nsec };
-    const saved = c.fopen("/var/run/op942-first-asld-ready", "wbx") orelse @panic("capture first asld readiness");
+    const saved = c.fopen("/var/run/op942-first-logd-ready", "wbx") orelse @panic("capture first logd readiness");
     const written = c.fwrite(&proof, @sizeOf(ReadyProof), 1, saved);
     const closed = c.fclose(saved);
-    if (written != 1 or closed != 0) @panic("save first asld readiness");
+    if (written != 1 or closed != 0) @panic("save first logd readiness");
     return .{ .started = started.tv_sec, .ready = ready.st_mtim.tv_sec, .ready_nsec = ready.st_mtim.tv_nsec };
 }
 
@@ -199,9 +199,9 @@ fn inWindow(time: Timestamp, window: BootWindow) bool {
     return time.sec >= window.started and (time.sec < window.ready or
         (time.sec == window.ready and time.nsec <= window.ready_nsec));
 }
-// ASL v2's fixed record header is documented in lib/libasl/asl_file.h.
+// ASL v2's fixed record header is documented in lib/liblogstore/asl_file.h.
 // Scan every linked MSG header, including records appended after later times.
-// Decode only window records through libasl; storm records need no ASL objects.
+// Decode only window records through liblogstore; storm records need no ASL objects.
 fn scanFile(path: [:0]const u8, file: ?*anyopaque, key: [:0]const u8, value: []const u8, prefix: bool, window: BootWindow, records: *std.ArrayList(BootRecord)) void {
     const fd = c.open(path, c.O_RDONLY);
     if (fd < 0) @panic("open boot header reader");

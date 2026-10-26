@@ -30,7 +30,7 @@ swift_exports_test: ${.CURDIR}/swift_exports.zig
 
 SCRIPTS+= root_setup_test
 root_setup_test: ${.CURDIR}/root_setup.zig
-	${ZIG} build-exe ${.CURDIR}/root_setup.zig ${DISPATCH_SO} ${SYSROOT}/usr/lib/libasl.so.1 ${SYSROOT}/usr/lib/libnotify.so.5 ${SYSROOT}/usr/lib/libmach.so.5 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET} -rdynamic
+	${ZIG} build-exe ${.CURDIR}/root_setup.zig ${DISPATCH_SO} ${OBJTOP}/lib/liblogstore/liblogstore.a ${SYSROOT}/usr/lib/libdispatch.so.5 ${SYSROOT}/usr/lib/liblaunch.so.5 ${SYSROOT}/usr/lib/libnotify.so.5 ${SYSROOT}/usr/lib/libBlocksRuntime.so.0 ${SYSROOT}/lib/libutil.so.10 ${SYSROOT}/lib/libthr.so.3 ${SYSROOT}/lib/libc.so.7 ${SYSROOT}/lib/libsys.so.7 ${SYSROOT}/usr/lib/libnotify.so.5 ${SYSROOT}/usr/lib/libmach.so.5 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET} -rdynamic
 
 SCRIPTS+= simple_asl_unit
 simple_asl.o: ${SRCTOP}/lib/libc/gen/simple_asl.c

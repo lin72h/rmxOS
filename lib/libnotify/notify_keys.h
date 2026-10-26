@@ -68,7 +68,7 @@
  * Sent by syslogd to advise clients that new log messages have been
  * added to the ASL database.
  */
-#define kNotifyASLDBUpdate "com.apple.system.logger.message"
+#define kNotifyASLDBUpdate "org.rmxos.logd.message"
 
 /*
  * Time Zone change notification

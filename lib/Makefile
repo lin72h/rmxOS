@@ -34,7 +34,7 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	lib9p \
 	libalias \
 	libarchive \
-	libasl \
+	liblogstore \
 	libauditd \
 	libbegemot \
 	libblocksruntime \
@@ -130,7 +130,7 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 SUBDIR_DEPEND_geom=	libufs
 SUBDIR_DEPEND_googletest= libregex
 SUBDIR_DEPEND_libarchive= libz libbz2 libexpat liblzma libmd libzstd
-SUBDIR_DEPEND_libasl= libdispatch liblaunch libmach libnotify libosxsupport_rmx libxpc
+SUBDIR_DEPEND_liblogstore= libdispatch liblaunch libmach libnotify libosxsupport_rmx libxpc
 SUBDIR_DEPEND_libauditdm= libbsm
 SUBDIR_DEPEND_libbsddialog= ncurses
 SUBDIR_DEPEND_libbsnmp= ${_libnetgraph}

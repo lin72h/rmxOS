@@ -24,7 +24,7 @@ CFLAGS+= -I${.CURDIR}/../../lib/libxpc
 CFLAGS+= -I${.CURDIR}/../../lib/libdispatch
 CFLAGS+= -I${.CURDIR}/../../lib/libdispatch/private
 CFLAGS+= -I${.CURDIR}/../../lib/libosxsupport
-CFLAGS+= -I${.CURDIR}/../../lib/libasl
+CFLAGS+= -I${.CURDIR}/../../lib/liblogstore
 CFLAGS+= -DHAVE_INTTYPES_H
 CFLAGS+= -include Availability.h
 CFLAGS+= -include mach/boolean.h
@@ -75,7 +75,7 @@ SRCS+= internalUser.c
 SRCS+= launchd.c core.c kill2.c ktrace.c ipc.c log.c runtime.c
 SRCS+= init.c reroot.c
 
-LIBADD=	launch asl notify xpc dispatch osxsupport mach thr sys bsm auditd \
+LIBADD=	launch logstore notify xpc dispatch osxsupport mach thr sys bsm auditd \
 	BlocksRuntime nv sbuf util
 
 # The guest regression image enables its PID-1 observation fixture explicitly.

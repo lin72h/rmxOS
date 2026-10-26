@@ -37,6 +37,10 @@
     ..
 /set mode=0755
     db
+        logd            mode=0755
+        ..
+        logd.archive    mode=0755
+        ..
         entropy         uname=operator gname=operator mode=0700
         ..
         freebsd-update  mode=0700

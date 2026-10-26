@@ -1,0 +1,205 @@
+.\" Copyright (c) 1990, 1991, 1993
+.\"	The Regents of the University of California.  All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. Neither the name of the University nor the names of its contributors
+.\"    may be used to endorse or promote products derived from this software
+.\"    without specific prior written permission.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.Dd October 22, 2026
+.Dt SYSLOG.CONF 5
+.Os
+.Sh NAME
+.Nm syslog.conf
+.Nd logd compatibility message routing configuration
+.Sh DESCRIPTION
+The
+.Nm
+file supplies simple compatibility routes to
+.Xr logd 8 ,
+the ASL system logger.
+Native ASL rules are configured in
+.Xr logd.conf 5 .
+This interface implements a subset of traditional
+.Xr syslogd 8
+configuration syntax.
+.Pp
+Each route has a selector and a destination separated by spaces or tabs.
+A selector is a facility, a period, and a severity level.
+The levels, from highest to lowest severity, are
+.Cm emerg , alert , crit , err , warning , notice , info ,
+and
+.Cm debug .
+A route selects that level and all higher severities.
+An equals sign before the level selects only that level:
+.Cm daemon.=debug .
+The aliases
+.Cm panic , error ,
+and
+.Cm warn
+mean
+.Cm emerg , err ,
+and
+.Cm warning ,
+respectively.
+Other comparison operators are not supported.
+.Pp
+Facilities are
+.Cm auth , authpriv , console , cron , daemon , ftp , kern , lpr ,
+.Cm mail , news , ntp , security , syslog , user , uucp , launchd ,
+and
+.Cm local0
+through
+.Cm local7 .
+Facility and level names are case insensitive.
+An asterisk as the facility selects all facilities.
+An asterisk as the level selects all severities.
+The level
+.Cm none
+excludes a facility.
+The
+.Cm mark
+facility and periodic mark messages are not supported.
+.Pp
+Facilities may be separated by commas to share a level.
+Selectors may be separated by semicolons to share a destination.
+For a matching facility, later selectors override earlier selectors,
+including exclusions.
+Each route is evaluated independently.
+.Ss Program filters
+A line beginning with
+.Ql !prog
+restricts subsequent routes to messages whose ASL Sender is exactly
+.Ql prog .
+Names are case sensitive.
+A comma-separated list, such as
+.Ql !prog1,prog2 ,
+matches either sender.
+The form
+.Ql !-prog1,prog2
+matches senders other than those listed.
+The line
+.Ql !*
+resets the filter.
+The most recent program filter applies until it is replaced or reset.
+It does not inspect prefixes in the message body.
+In particular, kernel messages retain the sender and PID prefix
+.Ql kernel[0]\&:
+in BSD text output, consistent with the ASL store.
+A kernel message containing a program name in its body does not acquire
+that program's Sender.
+.Ss Destinations
+An absolute pathname appends selected messages to that file.
+The special path
+.Pa /dev/console
+writes to the console, except that kernel messages are not repeated there.
+The kernel already writes them to the console.
+.Pp
+A destination beginning with
+.Ql @
+forwards selected messages over UDP to the named host.
+An optional colon and port select a destination port;
+the default service is
+.Ql syslog .
+An asterisk destination sends selected messages to all logged-in users.
+.Pp
+The leading
+.Ql -
+pathname prefix is not supported as synchronization control.
+For compatibility it is accepted and stripped, but it does not change
+write or synchronization behavior.
+File routes do not explicitly call
+.Xr fsync 2
+after kernel messages.
+.Ss Includes and comments
+The directive
+.Dq include directory
+reads non-hidden files ending in
+.Pa .conf
+from that directory in pathname order.
+Included files start with no program filter.
+Includes may be nested up to 16 levels below the main file.
+Blank lines and lines whose first non-blank character is
+.Ql #
+are ignored.
+A comment may follow the destination when separated by whitespace.
+.Ss Unsupported syntax
+The legacy
+.Ql #!prog
+form is a comment, not a program filter.
+The
+.Ql !+prog
+form is not supported; use
+.Ql !prog .
+Hostname filters, including
+.Ql #+hostname ,
+.Ql +hostname ,
+and their exclusion forms, are not supported.
+Forms beginning with
+.Ql #
+are comments and do not restrict subsequent routes.
+Property-based filters, regular expressions, shell pipe destinations,
+and lists of individual users are not supported.
+Malformed selectors are diagnosed and are not installed as routes.
+.Sh FILES
+.Bl -tag -width /etc/syslog.conf -compact
+.It Pa /etc/syslog.conf
+Compatibility routes for
+.Xr logd 8 .
+.El
+.Sh EXAMPLES
+The following routes illustrate thresholds, exclusions, exact levels,
+facility lists, and program filters:
+.Bd -literal
+# Errors and higher, except private authentication.
+*.err;authpriv.none              /var/log/errors
+
+# All kernel messages, retaining kernel[0]: in text output.
+kern.*                          /var/log/kernel
+
+# Only daemon debug messages.
+daemon.=debug                   /var/log/daemon.debug
+
+# Mail and news errors and higher.
+mail,news.err                   /var/log/spoolerr
+
+# Messages whose Sender is ftpd.
+!ftpd
+*.*                             /var/log/ftpd
+
+# Messages whose Sender is bird or bird6.
+!bird,bird6
+local0.info                     /var/log/bird
+
+# Messages from every sender except noisy.
+!-noisy
+user.notice                     /var/log/quiet
+
+# Reset the Sender filter.
+!*
+authpriv.*                      /var/log/secure
+.Ed
+.Sh SEE ALSO
+.Xr syslog 3 ,
+.Xr logd.conf 5 ,
+.Xr logd 8 ,
+.Xr syslogd 8

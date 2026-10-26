@@ -21,7 +21,7 @@ The logger `stopped` fixture selects its workload through the running kernel's
 unexpected values fail closed. The shared fixture policy uses 1200 RELEASE
 jobs and 1100 KASAN jobs, both above the 1000-record queue bound. Worker,
 launchd-parent, ATF and batch deadlines are strictly nested. The existing
-queue/byte/RSS bounds, replacement asld process, newest message, exact drop
+queue/byte/RSS bounds, replacement logd process, newest message, exact drop
 record and fresh cumulative status assertions remain mandatory.
 
 Host-only sizing/build checks: `elixir tools/selfcheck/op860-host.exs --build-only`,

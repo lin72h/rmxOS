@@ -2,8 +2,8 @@
 
 SUBDIR=	adduser \
 	arp \
-	asl \
-	aslmanager \
+	logd \
+	logd-retention \
 	binmiscctl \
 	boottrace \
 	bsdconfig \

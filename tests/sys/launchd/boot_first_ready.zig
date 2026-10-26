@@ -1,5 +1,5 @@
 // Preserve the boot's first readiness observation before any test restarts
-// asld or repeats the compatibility onestart command. Missing proof fails.
+// logd or repeats the compatibility onestart command. Missing proof fails.
 const std = @import("std");
 const c = @cImport({
     // Zig 0.16 cannot translate the unused BSD bintime_shift inline.
@@ -19,7 +19,7 @@ const c = @cImport({
 });
 const saved = @import("first_ready_proof.zig");
 const Proof = saved.Proof;
-const path = "/var/run/op942-first-asld-ready";
+const path = "/var/run/op942-first-logd-ready";
 pub fn valid(ms: i64) bool {
     return ms >= 0 and ms < 1000;
 }
@@ -33,20 +33,20 @@ pub fn observe() !i64 {
         defer _ = c.fclose(fp);
         proof = try saved.read(fp, boot_id);
     } else {
-        const fp = c.fopen("/var/run/asld.boot-service.log", "r") orelse return error.BootLog;
+        const fp = c.fopen("/var/run/logd.boot-service.log", "r") orelse return error.BootLog;
         defer _ = c.fclose(fp);
         var line: [1024]u8 = undefined;
         var first: c_int = 0;
         while (c.fgets(&line, line.len, fp) != null) {
-            if (c.sscanf(&line, "asld: compatibility service ready pid=%d", &first) == 1) break;
+            if (c.sscanf(&line, "logd: compatibility service ready pid=%d", &first) == 1) break;
         }
-        const ready_fp = c.fopen("/var/run/asld.service-ready", "r") orelse return error.Ready;
+        const ready_fp = c.fopen("/var/run/logd.service-ready", "r") orelse return error.Ready;
         defer _ = c.fclose(ready_fp);
         var current: c_int = 0;
         if (first <= 1 or c.fscanf(ready_fp, "%d", &current) != 1 or first != current) return error.FirstReadyNotCaptured;
         var marker: c.struct_stat = undefined;
         var ready: c.struct_stat = undefined;
-        if (c.stat("/var/run/asld.filesystems-ready", &marker) != 0 or c.stat("/var/run/asld.service-ready", &ready) != 0) return error.Stat;
+        if (c.stat("/var/run/logd.filesystems-ready", &marker) != 0 or c.stat("/var/run/logd.service-ready", &ready) != 0) return error.Stat;
         proof = .{ .boot_id = boot_id, .boot_sec = boot.tv_sec, .boot_usec = boot.tv_usec, .marker_sec = marker.st_mtim.tv_sec, .marker_nsec = marker.st_mtim.tv_nsec, .ready_sec = ready.st_mtim.tv_sec, .ready_nsec = ready.st_mtim.tv_nsec };
         const fd = c.open(path, c.O_WRONLY | c.O_CREAT | c.O_EXCL, @as(c.mode_t, 0o600));
         if (fd < 0) return error.ProofCreate;

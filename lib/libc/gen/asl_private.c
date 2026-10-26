@@ -135,7 +135,7 @@ lookup(void)
 	if (bootstrap == MACH_PORT_NULL && port_rpc(&special.head,
 	    sizeof(special), task, 3409, &bootstrap) != 0)
 		return (-1);
-	strlcpy(request.name, "com.apple.system.logger", sizeof(request.name));
+	strlcpy(request.name, "org.rmxos.logd", sizeof(request.name));
 	kr = port_rpc(&request.head, sizeof(request), bootstrap, 404, &server);
 	if (kr != 1099) /* VPROC_ERR_TRY_PER_USER */
 		return (kr);

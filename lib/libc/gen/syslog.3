@@ -277,7 +277,7 @@ A fork child starts with a zero count.
 Counts saturate at the largest unsigned 64-bit value.
 A process that exits before a later successful report cannot report its losses.
 The report arrives over Mach with the kernel's audit identity;
-.Xr asld 8
+.Xr logd 8
 uses the count only as
 .Li sender_dropped
 telemetry, not for authorization or delivery policy.

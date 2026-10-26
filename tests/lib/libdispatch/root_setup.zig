@@ -69,7 +69,7 @@ fn delivery(_: [*c]const c.atf_tc_t) callconv(.c) void {
     defer c.asl_release(q);
     if (c.asl_set_query(q, "Message", message, c.ASL_QUERY_OP_EQUAL) != 0) c.atf_tc_fail("query");
     for (0..40) |_| {
-        const store = c.asl_open_path("/var/log/asl", 0) orelse c.atf_tc_fail("open store");
+        const store = c.asl_open_path("/var/db/logd", 0) orelse c.atf_tc_fail("open store");
         const list = c.asl_new(c.ASL_TYPE_LIST) orelse c.atf_tc_fail("list allocation");
         c.asl_append(list, q);
         var last: usize = 0;
@@ -89,7 +89,7 @@ fn delivery(_: [*c]const c.atf_tc_t) callconv(.c) void {
         if (count == 1) return;
         _ = c.usleep(50000);
     }
-    c.atf_tc_fail("simple diagnostic did not reach asld");
+    c.atf_tc_fail("simple diagnostic did not reach logd");
 }
 const names =
     [_][*:0]const u8{ "unset", "no", "stderr", "simple_delivery" };

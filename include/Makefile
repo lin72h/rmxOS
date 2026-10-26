@@ -529,6 +529,10 @@ symlinks: .PHONY .META
 	    ${SDESTDIR}${INCLUDEDIR}/dev/mlx5
 .endif
 
+# Public ASL compatibility API; implementation is the internal logstore archive.
+.PATH: ${SRCTOP}/lib/liblogstore
+INCS+= asl.h
+
 .include <bsd.prog.mk>
 
 installincludes: ${SHARED}

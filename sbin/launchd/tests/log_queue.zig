@@ -120,7 +120,7 @@ test "queue retains newest records in insertion order" {
     rmx_queue_numbered(6000);
     try std.testing.expectEqual(@as(c_uint, 5000), rmx_queue_oldest());
 }
-test "PID1 retains records for asld through drainer start stop and restart" {
+test "PID1 retains records for logd through drainer start stop and restart" {
     try std.testing.expectEqual(@as(c_int, 0), rmx_route(0, 0));
     try std.testing.expectEqual(@as(c_int, 0), rmx_route(1, 0));
     try std.testing.expectEqual(@as(c_int, 0), rmx_route(1, 1));

@@ -10,7 +10,7 @@ SRCS=	acfileio.c adfile.c adisasm.c adwalk.c ahids.c		\
 # compiler
 SRCS+=	aslallocate.c aslanalyze.c aslascii.c aslbtypes.c	\
 	aslcache.c aslcodegen.c aslcompile.c aslcompiler.y.h	\
-	aslcompilerlex.c aslcompilerparse.c asldebug.c		\
+	aslcompilerlex.c aslcompilerparse.c logdebug.c		\
 	aslerror.c aslexternal.c aslfileio.c aslfiles.c		\
 	aslfold.c aslhelp.c aslhex.c asllength.c asllisting.c	\
 	asllistsup.c aslload.c asllookup.c aslmain.c aslmap.c	\
@@ -22,7 +22,7 @@ SRCS+=	aslallocate.c aslanalyze.c aslascii.c aslbtypes.c	\
 	aslrestype1i.c aslrestype2.c aslrestype2d.c		\
 	aslrestype2e.c aslrestype2q.c aslrestype2s.c		\
 	aslrestype2w.c aslstartup.c aslstubs.c asltransform.c	\
-	asltree.c aslutils.c asluuid.c aslwalks.c aslxref.c	\
+	asltree.c logs.c asluuid.c aslwalks.c aslxref.c	\
 	aslxrefout.c cvcompiler.c cvdisasm.c cvparser.c		\
 	dtcompile.c dtcompilerparser.y.h dtcompilerparserlex.c	\
 	dtcompilerparserparse.c dtexpress.c dtfield.c dtio.c	\

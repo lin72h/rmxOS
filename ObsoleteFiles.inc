@@ -1,4 +1,43 @@
-# 20261021: asld is the only system logger; rc.d/syslogd is its compatibility service.
+# 20261026: Logging program and private-library names replaced. Store data stays.
+OLD_FILES+= etc/asl.conf
+OLD_FILES+= etc/launchd.d/com.apple.syslogd.plist
+OLD_FILES+= etc/launchd.d/com.rmxos.aslmanager.once.plist
+OLD_FILES+= etc/rc.d/asld_ready
+OLD_FILES+= usr/bin/aslutil
+OLD_FILES+= usr/lib/debug/usr/bin/aslutil.debug
+OLD_FILES+= usr/lib/debug/usr/lib/libasl.so.1.debug
+OLD_FILES+= usr/lib/debug/usr/sbin/asld.debug
+OLD_FILES+= usr/lib/debug/usr/sbin/aslmanager.debug
+OLD_FILES+= usr/lib/libasl.a
+OLD_FILES+= usr/lib/libasl.so
+OLD_FILES+= usr/lib/libasl.so.1
+OLD_FILES+= usr/lib/libasl_p.a
+OLD_FILES+= usr/sbin/asld
+OLD_FILES+= usr/sbin/aslmanager
+OLD_FILES+= usr/share/man/man1/aslutil.1.gz
+OLD_FILES+= usr/share/man/man5/asl.conf.5.gz
+OLD_FILES+= usr/share/man/man8/asld.8.gz
+OLD_FILES+= usr/share/man/man8/aslmanager.8.gz
+OLD_FILES+= usr/tests/lib/launchd/asld_telemetry_test
+OLD_FILES+= usr/tests/lib/libasl/Kyuafile
+OLD_FILES+= usr/tests/lib/libasl/asl_input_store_test
+OLD_FILES+= usr/tests/lib/libasl/asld_telemetry_test
+OLD_FILES+= usr/tests/lib/libasl/atomic_contract_test
+OLD_FILES+= usr/tests/lib/libasl/op767_logger.ko
+OLD_FILES+= usr/tests/lib/libasl/retention_observer
+OLD_FILES+= usr/tests/lib/libasl/syslog_lookup_test
+OLD_FILES+= usr/tests/lib/libasl/system_logging_test
+OLD_FILES+= usr/tests/lib/libasl/username_logging.plist
+OLD_FILES+= usr/tests/usr.sbin/asl/Kyuafile
+OLD_FILES+= usr/tests/usr.sbin/asl/cleanup_status_unit
+OLD_FILES+= usr/tests/usr.sbin/asl/filesystems_unit
+OLD_FILES+= usr/tests/usr.sbin/asl/mach_bound_unit
+OLD_FILES+= usr/tests/usr.sbin/asl/syslog_sender_test
+OLD_FILES+= usr/tests/usr.sbin/asl/syslog_transport_unit
+OLD_FILES+= usr/tests/usr.sbin/aslmanager/Kyuafile
+OLD_FILES+= usr/tests/usr.sbin/aslmanager/size_retention_test
+
+# 20261021: logd is the only system logger; rc.d/syslogd is its compatibility service.
 OLD_FILES+=usr/sbin/syslogd
 OLD_FILES+=usr/lib/debug/usr/sbin/syslogd.debug
 #

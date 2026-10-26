@@ -1,0 +1,9 @@
+syntax(2)
+test_suite("FreeBSD")
+atf_test_program{name="asl_input_store_test"}
+atf_test_program{name="logd_telemetry_test"}
+-- Fresh-boot storage case: system_logging_test:kernel_boot.
+-- Long-lived-host plans may omit it while retaining :kernel module checks.
+atf_test_program{name="system_logging_test"}
+atf_test_program{name="atomic_contract_test"}
+atf_test_program{name="syslog_lookup_test"}

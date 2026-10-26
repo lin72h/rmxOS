@@ -5,7 +5,7 @@
  * All rights reserved.
  */
 
-/* Platform diagnostics must not enter libasl, libnotify, or libdispatch.
+/* Platform diagnostics must not enter liblogstore, libnotify, or libdispatch.
  * Use the same ASL Mach wire protocol as asl_private.c, with per-call ports
  * and one nonblocking log send. No heap allocation or shared initialization.
  */
@@ -127,7 +127,7 @@ simple_send(const char *record)
 	if (simple_rpc(&special.head, sizeof(special), task, reply, 3409,
 	    &bootstrap) != 0)
 		goto out;
-	strlcpy(lookup.name, "com.apple.system.logger", sizeof(lookup.name));
+	strlcpy(lookup.name, "org.rmxos.logd", sizeof(lookup.name));
 	kr = simple_rpc(&lookup.head, sizeof(lookup), bootstrap, reply, 404,
 	    &server);
 	if (kr == 1099) { /* VPROC_ERR_TRY_PER_USER */

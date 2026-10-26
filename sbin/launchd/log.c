@@ -9,7 +9,7 @@
 #include "core.h"
 #include <sys/rmx_im.h>
 
-/* A normal versioned relocation can still bind libasl's global export.
+/* A normal versioned relocation can still bind liblogstore's global export.
  * Resolve the version on the libc handle instead of in the global scope. */
 #include <dlfcn.h>
 #define LAUNCHD_NATIVE_SYSLOG_LOOKUP 1
@@ -131,7 +131,7 @@ _logmsg_enqueue(struct logmsg_s *lm)
 static bool
 _launchd_use_system_log(void)
 {
-	/* asld is the sole logger; retain early/restart records for its drain. */
+	/* logd is the sole logger; retain early/restart records for its drain. */
 	return false;
 }
 

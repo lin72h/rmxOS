@@ -7,7 +7,7 @@ LIB=	launch
 
 BASE_INCLUDE= -I${.CURDIR}/../../include/apple
 BASE_INCLUDE+= -I${.CURDIR} -I${.CURDIR}/../libxpc -I${.CURDIR}/../libdispatch
-BASE_INCLUDE+= -I${.CURDIR}/../libasl
+BASE_INCLUDE+= -I${.CURDIR}/../liblogstore
 BASE_INCLUDE+= -I${.CURDIR}/../../sbin/launchd -I${.CURDIR}
 BASE_INCLUDE+= -I${.CURDIR}/../../include -I${.CURDIR}/../../sys
 BASE_INCLUDE+= -I${.OBJDIR}

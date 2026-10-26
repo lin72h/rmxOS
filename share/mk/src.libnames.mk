@@ -43,6 +43,7 @@ _PRIVATELIBS=	\
 _PRIVATELIBS+=	${LOCAL_PRIVATELIBS}
 
 _INTERNALLIBS=	\
+		logstore \
 		amu \
 		apputils \
 		bsnmptools \
@@ -111,7 +112,6 @@ _LIBRARIES=	\
 		9p \
 		alias \
 		archive \
-		asl \
 		asn1 \
 		avl \
 		BlocksRuntime \
@@ -362,7 +362,7 @@ _DP_geom=	bsdxml sbuf
 _DP_cam=	sbuf
 _DP_kldelf=	elf
 _DP_kvm=	elf
-_DP_asl=	BlocksRuntime dispatch launch mach notify util
+_DP_logstore=	BlocksRuntime dispatch launch mach notify util
 _DP_dispatch=	BlocksRuntime mach thr sys
 _DP_launch=	dispatch mach osxsupport thr sys
 _DP_mach=	thr sys
@@ -835,7 +835,8 @@ LIBOSMCOMPDIR=	${_LIB_OBJTOP}/lib/ofed/complib
 LIBOPENSMDIR=	${_LIB_OBJTOP}/lib/ofed/libopensm
 LIBOSMVENDORDIR=${_LIB_OBJTOP}/lib/ofed/libvendor
 LIBOSXSUPPORTDIR=	${_LIB_OBJTOP}/lib/libosxsupport_rmx
-LIBASLDIR=	${_LIB_OBJTOP}/lib/libasl
+LIBLOGSTOREDIR=	${_LIB_OBJTOP}/lib/liblogstore
+LIBLOGSTORE?=	${LIBLOGSTOREDIR}/liblogstore.a
 LIBJANSSONDIR=	${_LIB_OBJTOP}/lib/libjansson
 
 LIBDIALOGDIR=	${_LIB_OBJTOP}/gnu/lib/libdialog
