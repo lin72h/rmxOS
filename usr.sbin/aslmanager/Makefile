@@ -51,4 +51,7 @@ LAUNCHD= com.rmxos.aslmanager.once.plist
 LAUNCHDDIR= /etc/launchd.d
 LAUNCHDMODE= 0644
 
+HAS_TESTS=
+SUBDIR.${MK_TESTS}+= tests
+
 .include <bsd.prog.mk>
