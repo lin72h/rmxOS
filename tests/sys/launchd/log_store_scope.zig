@@ -122,8 +122,10 @@ pub const BootRead = struct {
         return std.fmt.allocPrintSentinel(a, "startup records missing; files read: [{s}]; store's oldest record: none (empty store)", .{self.files}, 0) catch unreachable;
     }
 };
-const ReadyProof = extern struct { boot_sec: i64, boot_usec: i64, marker_sec: i64, marker_nsec: i64, ready_sec: i64, ready_nsec: i64 };
+const first_ready = @import("first_ready_proof.zig");
+const ReadyProof = first_ready.Proof;
 pub fn bootWindow() BootWindow {
+    const boot_id = first_ready.identity() catch @panic("boot identity");
     var started: c.struct_timeval = undefined;
     var size: usize = @sizeOf(c.struct_timeval);
     if (c.sysctlbyname("kern.boottime", &started, &size, null, 0) != 0 or size != @sizeOf(c.struct_timeval)) @panic("boot time");
@@ -131,9 +133,8 @@ pub fn bootWindow() BootWindow {
     // onestart can replace the service-ready file. Never use a later restart.
     if (c.fopen("/var/run/op942-first-asld-ready", "rb")) |fp| {
         defer _ = c.fclose(fp);
-        var proof: ReadyProof = undefined;
-        if (c.fread(&proof, @sizeOf(ReadyProof), 1, fp) != 1 or proof.boot_sec != started.tv_sec or proof.boot_usec != started.tv_usec) @panic("first asld readiness proof");
-        return .{ .started = started.tv_sec, .ready = proof.ready_sec, .ready_nsec = proof.ready_nsec };
+        const proof = first_ready.read(fp, boot_id) catch @panic("first asld readiness proof");
+        return .{ .started = proof.boot_sec, .ready = proof.ready_sec, .ready_nsec = proof.ready_nsec };
     }
     // A standalone kernel case may precede the launchd cases. Accept the
     // current marker only when the boot log proves there was one readiness.
@@ -148,7 +149,7 @@ pub fn bootWindow() BootWindow {
     if (c.ferror(fp) != 0 or observations != 1 or c.stat("/var/run/asld.service-ready", &ready) != 0) @panic("first asld readiness unavailable");
     var marker: c.struct_stat = undefined;
     if (c.stat("/var/run/asld.filesystems-ready", &marker) != 0) @panic("asld filesystem readiness");
-    const proof: ReadyProof = .{ .boot_sec = started.tv_sec, .boot_usec = started.tv_usec, .marker_sec = marker.st_mtim.tv_sec, .marker_nsec = marker.st_mtim.tv_nsec, .ready_sec = ready.st_mtim.tv_sec, .ready_nsec = ready.st_mtim.tv_nsec };
+    const proof: ReadyProof = .{ .boot_id = boot_id, .boot_sec = started.tv_sec, .boot_usec = started.tv_usec, .marker_sec = marker.st_mtim.tv_sec, .marker_nsec = marker.st_mtim.tv_nsec, .ready_sec = ready.st_mtim.tv_sec, .ready_nsec = ready.st_mtim.tv_nsec };
     const saved = c.fopen("/var/run/op942-first-asld-ready", "wbx") orelse @panic("capture first asld readiness");
     const written = c.fwrite(&proof, @sizeOf(ReadyProof), 1, saved);
     const closed = c.fclose(saved);

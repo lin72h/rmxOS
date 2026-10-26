@@ -17,7 +17,8 @@ const c = @cImport({
     @cInclude("fcntl.h");
     @cInclude("unistd.h");
 });
-const Proof = extern struct { boot_sec: i64, boot_usec: i64, marker_sec: i64, marker_nsec: i64, ready_sec: i64, ready_nsec: i64 };
+const saved = @import("first_ready_proof.zig");
+const Proof = saved.Proof;
 const path = "/var/run/op942-first-asld-ready";
 pub fn valid(ms: i64) bool {
     return ms >= 0 and ms < 1000;
@@ -25,11 +26,12 @@ pub fn valid(ms: i64) bool {
 pub fn observe() !i64 {
     var boot: c.struct_timeval = undefined;
     var size: usize = @sizeOf(c.struct_timeval);
-    if (c.sysctlbyname("kern.boottime", &boot, &size, null, 0) != 0) return error.BootTime;
+    if (c.sysctlbyname("kern.boottime", &boot, &size, null, 0) != 0 or size != @sizeOf(c.struct_timeval)) return error.BootTime;
+    const boot_id = try saved.identity();
     var proof: Proof = undefined;
     if (c.fopen(path, "rb")) |fp| {
         defer _ = c.fclose(fp);
-        if (c.fread(&proof, @sizeOf(Proof), 1, fp) != 1 or proof.boot_sec != boot.tv_sec or proof.boot_usec != boot.tv_usec) return error.StaleProof;
+        proof = try saved.read(fp, boot_id);
     } else {
         const fp = c.fopen("/var/run/asld.boot-service.log", "r") orelse return error.BootLog;
         defer _ = c.fclose(fp);
@@ -45,7 +47,7 @@ pub fn observe() !i64 {
         var marker: c.struct_stat = undefined;
         var ready: c.struct_stat = undefined;
         if (c.stat("/var/run/asld.filesystems-ready", &marker) != 0 or c.stat("/var/run/asld.service-ready", &ready) != 0) return error.Stat;
-        proof = .{ .boot_sec = boot.tv_sec, .boot_usec = boot.tv_usec, .marker_sec = marker.st_mtim.tv_sec, .marker_nsec = marker.st_mtim.tv_nsec, .ready_sec = ready.st_mtim.tv_sec, .ready_nsec = ready.st_mtim.tv_nsec };
+        proof = .{ .boot_id = boot_id, .boot_sec = boot.tv_sec, .boot_usec = boot.tv_usec, .marker_sec = marker.st_mtim.tv_sec, .marker_nsec = marker.st_mtim.tv_nsec, .ready_sec = ready.st_mtim.tv_sec, .ready_nsec = ready.st_mtim.tv_nsec };
         const fd = c.open(path, c.O_WRONLY | c.O_CREAT | c.O_EXCL, @as(c.mode_t, 0o600));
         if (fd < 0) return error.ProofCreate;
         defer _ = c.close(fd);

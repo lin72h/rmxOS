@@ -25,7 +25,7 @@ asld_telemetry_test: ${.CURDIR}/asld_telemetry.zig
 SCRIPTS+= system_logging_test
 startup_error.o: ${SRCTOP}/usr.sbin/asl/startup_error.c ${SRCTOP}/usr.sbin/asl/startup_error.h
 	${CC} ${CFLAGS} ${INPUT_CFLAGS} -c ${SRCTOP}/usr.sbin/asl/startup_error.c -o ${.TARGET}
-system_logging_test: ${.CURDIR}/system_logging.zig ${.CURDIR}/logging_observations.zig ${.CURDIR}/boot_ready_check.zig startup_error.o ${.CURDIR}/log_store_scope.zig
+system_logging_test: ${.CURDIR}/system_logging.zig ${.CURDIR}/logging_observations.zig ${.CURDIR}/boot_ready_check.zig startup_error.o ${.CURDIR}/log_store_scope.zig ${.CURDIR}/first_ready_proof.zig
 	${ZIG} build-exe ${.CURDIR}/system_logging.zig startup_error.o ${SYSROOT}/usr/lib/libasl.so.1 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/usr/lib/liblaunch.so.5 ${SYSROOT}/lib/libthr.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}
 SCRIPTS+= op767_logger.ko
 op767_logger.o: ${.CURDIR}/logger_message.zig
@@ -48,7 +48,7 @@ retention_observer: ${.CURDIR}/retention_observer.zig
 SCRIPTS+= syslog_lookup_test
 FILES+= username_logging.plist
 FILESDIR= ${TESTSDIR}
-syslog_lookup_test: ${.CURDIR}/syslog_lookup.zig ${.CURDIR}/log_store_scope.zig
+syslog_lookup_test: ${.CURDIR}/syslog_lookup.zig ${.CURDIR}/log_store_scope.zig ${.CURDIR}/first_ready_proof.zig
 	${ZIG} build-exe ${.CURDIR}/syslog_lookup.zig ${SYSROOT}/usr/lib/libasl.so.1 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/lib/libsys.so.7 ${SYSROOT}/lib/libthr.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET} -rdynamic
 
 .include <bsd.test.mk>
