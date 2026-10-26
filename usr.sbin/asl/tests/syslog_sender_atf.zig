@@ -5,6 +5,7 @@ const recovery = @import("asld_recovery.zig");
 const timing = @import("syslog_timing.zig");
 const transport = @import("syslog_transport.zig");
 const reports = @import("syslog_reports.zig");
+const reconcile = @import("syslog_reconcile.zig");
 const c = @cImport({
     // Zig 0.16 cannot translate the unused BSD bintime_shift inline.
     @cInclude("sys/cdefs.h");
@@ -62,6 +63,7 @@ fn queryBudget(key: [*:0]const u8, value: [*:0]const u8, limit: usize, usec: u32
     defer c.asl_release(list);
     c.asl_append(list, q);
     var last: usize = 0;
+    if (limit == 0 and usec == 0) return reconcile.all(store, list);
     return c.asl_match(store, list, &last, std.math.maxInt(usize), limit, usec, -1);
 }
 fn status() u64 {
@@ -186,7 +188,7 @@ fn flood(_: [*c]const c.atf_tc_t) callconv(.c) void {
     var native_fields_ok = true;
     var stored: usize = 0;
     for (0..50) |pass| {
-        const result = query("Sender", tag, 10002);
+        const result = queryBudget("Sender", tag, 0, 0);
         var seen: [10001]bool = @splat(false);
         stored = 0;
         while (c.asl_next(result)) |m| {
@@ -207,6 +209,7 @@ fn flood(_: [*c]const c.atf_tc_t) callconv(.c) void {
         c.asl_release(result);
         dropped = status() - before;
         _ = c.printf("op063_flood_reconcile pass=%zu stored=%zu reported=%ju\n", pass + 1, stored, dropped);
+        _ = c.fflush(null);
         if (stored + dropped >= 10001) break;
         _ = c.usleep(10000);
     }
@@ -684,13 +687,12 @@ fn shedding(_: [*c]const c.atf_tc_t) callconv(.c) void {
     var drops: u64 = 0;
     var drained: u64 = 0;
     var data: usize = 0;
-    for (0..100) |_| {
+    for (0..100) |pass| {
         need(c.kill(child, c.SIGUSR1) == 0, "private status request");
         _ = c.usleep(20000);
         const store_path = std.fmt.bufPrintZ(&path, "{s}/store", .{std.mem.sliceTo(&root, 0)}) catch unreachable;
         const store = c.asl_open_path(store_path, 0) orelse continue;
-        var last: usize = 0;
-        const result = c.asl_match(store, null, &last, std.math.maxInt(usize), 1024, 100000, -1);
+        const result = reconcile.all(store, null);
         notices = 0;
         drops = 0;
         drained = 0;
@@ -706,6 +708,8 @@ fn shedding(_: [*c]const c.atf_tc_t) callconv(.c) void {
         }
         c.asl_release(result);
         c.asl_release(store);
+        _ = c.printf("op156_shedding_reconcile pass=%zu notices=%zu drops=%ju drained=%ju data=%zu\n", pass + 1, notices, drops, drained, data);
+        _ = c.fflush(null);
         if (drops == 100 and drained == 100) break;
     }
     _ = c.printf("op045_shedding expected_notice=1 observed_notice=%zu expected_drops=100 observed_drops=%ju drain_count=%ju stored_input=%zu\n", notices, drops, drained, data);
