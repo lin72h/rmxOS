@@ -27,7 +27,51 @@ fn fmt(a: A, comptime f: []const u8, args: anytype) ![:0]const u8 {
     return std.fmt.allocPrintSentinel(a, f, args, 0);
 }
 const io = std.Io.Threaded.global_single_threaded.io();
-const metadata = [_][]const u8{ "manifest.tsv", "previous.tsv", "METALOG", "commit", "removals.json", "report.json", "baseline.tsv" };
+const metadata = [_][]const u8{ "manifest.tsv", "previous.tsv", "METALOG", "commit", "removals.json", "report.json", "baseline.tsv", "directories.tsv" };
+pub const Directory = struct { path: []const u8, mode: u32, uid: u32, gid: u32 };
+fn safeDirectory(path: []const u8) bool {
+    if (eq(path, "/")) return true;
+    if (path.len < 2 or path[0] != '/' or path[path.len - 1] == '/') return false;
+    var parts = std.mem.splitScalar(u8, path[1..], '/');
+    while (parts.next()) |part| {
+        if (part.len == 0 or eq(part, ".") or eq(part, "..")) return false;
+        for (part) |ch| if (!std.ascii.isAlphanumeric(ch) and std.mem.indexOfScalar(u8, "_.+@-", ch) == null) return false;
+    }
+    return true;
+}
+pub fn directories(a: A, bytes: []const u8) ![]Directory {
+    if (bytes.len == 0 or bytes[bytes.len - 1] != '\n') return error.InvalidDirectories;
+    var lines = std.mem.splitScalar(u8, bytes, '\n');
+    if (!eq(lines.next() orelse "", "rmx-directories-v1")) return error.InvalidDirectories;
+    var rows: std.ArrayList(Directory) = .empty;
+    while (lines.next()) |line| {
+        if (line.len == 0) {
+            if (lines.next() != null) return error.InvalidDirectories;
+            break;
+        }
+        var f = std.mem.splitScalar(u8, line, '\t');
+        const mode = f.next() orelse return error.InvalidDirectories;
+        const uid = f.next() orelse return error.InvalidDirectories;
+        const gid = f.next() orelse return error.InvalidDirectories;
+        const path = f.next() orelse return error.InvalidDirectories;
+        if (f.next() != null or !safeDirectory(path) or mode.len < 4 or mode.len > 5 or mode[0] != '0') return error.InvalidDirectories;
+        for (mode) |ch| if (ch < '0' or ch > '7') return error.InvalidDirectories;
+        for (uid) |ch| if (!std.ascii.isDigit(ch)) return error.InvalidDirectories;
+        for (gid) |ch| if (!std.ascii.isDigit(ch)) return error.InvalidDirectories;
+        const m = std.fmt.parseInt(u32, mode, 8) catch return error.InvalidDirectories;
+        const user = std.fmt.parseInt(u32, uid, 10) catch return error.InvalidDirectories;
+        const group = std.fmt.parseInt(u32, gid, 10) catch return error.InvalidDirectories;
+        if (m > 0o7777 or user == std.math.maxInt(u32) or group == std.math.maxInt(u32)) return error.InvalidDirectories;
+        for (rows.items) |old| if (eq(path, old.path)) return error.DuplicateDirectory;
+        try rows.append(a, .{ .path = path, .mode = m, .uid = user, .gid = group });
+    }
+    std.mem.sort(Directory, rows.items, {}, struct {
+        fn less(_: void, x: Directory, y: Directory) bool {
+            return std.mem.lessThan(u8, x.path, y.path);
+        }
+    }.less);
+    return rows.toOwnedSlice(a);
+}
 pub fn safePath(p: []const u8) bool {
     if (p.len == 0 or p[0] != '/' or p[p.len - 1] == '/') return false;
     var allowed = false;
@@ -86,6 +130,8 @@ pub const Bundle = struct {
     removals: []const []const u8,
     commit: []const u8,
     digest: []const u8,
+    dirs: []Directory = &.{},
+    directory_bytes: ?[]const u8 = null,
     pub fn deinit(self: Bundle) void {
         std.Io.Dir.cwd().deleteTree(io, self.directory) catch {};
     }
@@ -191,6 +237,16 @@ pub fn load(a: A, archive: [:0]const u8) !Bundle {
     var b = Bundle{ .a = a, .directory = template, .new = undefined, .old = undefined, .baseline = null, .removals = undefined, .commit = undefined, .digest = digest };
     b.new = try manifest(a, try b.read("manifest.tsv"), false);
     b.old = try manifest(a, try b.read("previous.tsv"), false);
+    for (members.items) |m| if (eq(m.name, "directories.tsv")) {
+        if (m.link != null or (m.mode != 0o444 and m.mode != 0o644)) return error.InvalidDirectories;
+        b.directory_bytes = try b.read("directories.tsv");
+        b.dirs = try directories(a, b.directory_bytes.?);
+    };
+    for (b.dirs) |dir| {
+        for (b.new.rows) |row| {
+            if (eq(row.path, dir.path) or std.mem.startsWith(u8, dir.path, try fmt(a, "{s}/", .{row.path}))) return error.DirectoryFileCollision;
+        }
+    }
     b.commit = trim(try b.read("commit"));
     if (!u.hex(b.commit, 40)) return error.InvalidCommit;
     const report = try std.json.parseFromSlice(std.json.Value, a, try b.read("report.json"), .{});
@@ -200,6 +256,9 @@ pub fn load(a: A, archive: [:0]const u8) !Bundle {
     b.removals = removal.value;
     for (b.removals, 0..) |p, i| {
         if (!safePath(p)) return error.UnsafeRemoval;
+        for (b.dirs) |dir| {
+            if (eq(p, dir.path) or std.mem.startsWith(u8, dir.path, try fmt(a, "{s}/", .{p}))) return error.DirectoryFileCollision;
+        }
         for (b.removals[0..i]) |prior| if (eq(prior, p)) return error.UnsafeRemoval;
         if (find(b.new.rows, p)) |row| {
             if (!row.deleted) return error.RemovalPayloadCollision;
@@ -286,6 +345,44 @@ pub const Root = struct {
     }
     pub fn close(self: Root) void {
         _ = c.close(self.fd);
+    }
+    pub fn directory(self: Root, path: []const u8) !?c.struct_stat {
+        if (!safeDirectory(path)) return error.UnsafePath;
+        var st: c.struct_stat = undefined;
+        if (eq(path, "/")) {
+            if (c.fstat(self.fd, &st) != 0) return error.StatFailed;
+        } else {
+            const fd = (try self.parent(path, false)) orelse return null;
+            defer _ = c.close(fd);
+            const rc = c.fstatat(fd, try z(self.a, std.fs.path.basename(path)), &st, c.AT_SYMLINK_NOFOLLOW);
+            if (rc != 0) {
+                if (std.c.errno(rc) == .NOENT) return null;
+                return error.StatFailed;
+            }
+        }
+        if (st.st_mode & c.S_IFMT != c.S_IFDIR) return error.NondirectoryDestination;
+        // An existing mountpoint is also left alone. parent() still refuses
+        // traversal into another dataset when inspecting/creating children.
+        return st;
+    }
+    pub fn createDirectory(self: Root, dir: Directory) !void {
+        if (try self.directory(dir.path) != null) return;
+        const parent_fd = (try self.parent(dir.path, true)).?;
+        defer _ = c.close(parent_fd);
+        const name = try z(self.a, std.fs.path.basename(dir.path));
+        if (c.mkdirat(parent_fd, name, 0o700) != 0) {
+            if (std.c.errno(-1) == .EXIST and try self.directory(dir.path) != null) return;
+            return error.CreateDirectory;
+        }
+        const fd = c.openat(parent_fd, name, c.O_RDONLY | c.O_DIRECTORY | c.O_NOFOLLOW | c.O_CLOEXEC);
+        if (fd < 0) return error.CreateDirectory;
+        defer _ = c.close(fd);
+        var opened: c.struct_stat = undefined;
+        if (c.fstat(fd, &opened) != 0 or @as(u64, @intCast(opened.st_dev)) != self.device) return error.OtherDataset;
+        if (self.ownership and c.fchown(fd, dir.uid, dir.gid) != 0) return error.DirectoryOwnership;
+        if (c.fchmod(fd, @intCast(dir.mode)) != 0 or c.fsync(fd) != 0 or c.fsync(parent_fd) != 0) return error.CreateDirectory;
+        const st = (try self.directory(dir.path)) orelse return error.CreateDirectory;
+        if (st.st_mode & 0o7777 != dir.mode or (self.ownership and (st.st_uid != dir.uid or st.st_gid != dir.gid))) return error.DirectoryMetadata;
     }
     pub fn parent(self: Root, path: []const u8, create: bool) !?c_int {
         if (path.len < 2 or path[0] != '/') return error.UnsafePath;
@@ -424,13 +521,14 @@ pub fn preflight(b: Bundle, root: Root) !Planned {
     var deletes: std.ArrayList([]const u8) = .empty;
     var old_remove: std.ArrayList([]const u8) = .empty;
     var keeps: std.ArrayList([]const u8) = .empty;
+    for (b.dirs) |dir| _ = try root.directory(dir.path);
     for (rows) |*row| {
         const st = try root.stat(row.path);
         if (row.deleted) {
             try deletes.append(b.a, row.path);
             continue;
         }
-        if (std.mem.startsWith(u8, row.path, "/etc/") and st != null and !try root.matches(row.path, row.hash, row.mode, false)) {
+        if (ownerConfiguration(row.path) and st != null and !try root.matches(row.path, row.hash, row.mode, false)) {
             const previous = if (installed == null and b.baseline != null) find(b.baseline.?.rows, row.path) else find(b.old.rows, row.path);
             if (previous == null or previous.?.deleted or !try root.matches(row.path, previous.?.hash, previous.?.mode, false)) {
                 row.use = try std.fmt.allocPrint(b.a, "{s}.rmxos-new", .{row.path});
@@ -453,14 +551,18 @@ pub fn preflight(b: Bundle, root: Root) !Planned {
         }
     }
     // All metadata and derived paths must be safe before the first file change.
-    for ([_][]const u8{ "/var/db/rmxos/manifest.tsv", "/var/db/rmxos/commit", "/var/db/rmxos/conflicts.tsv", "/var/db/rmxos/archive.sha256", "/var/db/rmxos/previous-be", "/var/db/rmxos/pending-target", "/var/db/softwareupdate/no-auto-confirm", "/var/db/softwareupdate/history.tsv", "/boot/loader.conf.local" }) |p| _ = try root.stat(p);
+    for ([_][]const u8{ "/var/db/rmxos/manifest.tsv", "/var/db/rmxos/directories.tsv", "/var/db/rmxos/commit", "/var/db/rmxos/conflicts.tsv", "/var/db/rmxos/archive.sha256", "/var/db/rmxos/previous-be", "/var/db/rmxos/pending-target", "/var/db/softwareupdate/no-auto-confirm", "/var/db/softwareupdate/history.tsv", "/boot/loader.conf.local" }) |p| _ = try root.stat(p);
     return .{ .rows = rows, .conflicts = try conflicts.toOwnedSlice(b.a), .deletes = try deletes.toOwnedSlice(b.a), .old_remove = try old_remove.toOwnedSlice(b.a), .keeps = try keeps.toOwnedSlice(b.a) };
+}
+fn ownerConfiguration(path: []const u8) bool {
+    return std.mem.startsWith(u8, path, "/etc/") and !std.mem.startsWith(u8, path, "/etc/mtree/") and !std.mem.startsWith(u8, path, "/etc/defaults/");
 }
 fn contains(paths: []const []const u8, p: []const u8) bool {
     for (paths) |v| if (eq(v, p)) return true;
     return false;
 }
 pub fn apply(b: Bundle, root: Root, p: Planned, ctx: u.Context) !void {
+    for (b.dirs) |dir| try root.createDirectory(dir);
     for (p.keeps) |path| try ctx.print(ctx.out, "KEEP local {s}\n", .{path});
     for (p.old_remove) |path| {
         try root.remove(path);
@@ -491,6 +593,7 @@ pub fn apply(b: Bundle, root: Root, p: Planned, ctx: u.Context) !void {
     try ctx.print(ctx.out, "{s}VERIFIED files={d} conflicts={d}\n", .{ p.conflicts, p.rows.len, std.mem.count(u8, p.conflicts, "\n") });
 }
 pub fn saveState(b: Bundle, root: Root, p: Planned) !void {
+    if (b.directory_bytes) |bytes| try root.write("/var/db/rmxos/directories.tsv", bytes, 0o444);
     try root.write("/var/db/rmxos/manifest.tsv", b.new.bytes, 0o444);
     try root.write("/var/db/rmxos/commit", try std.fmt.allocPrint(b.a, "{s}\n", .{b.commit}), 0o444);
     try root.write("/var/db/rmxos/conflicts.tsv", p.conflicts, 0o444);
@@ -644,6 +747,11 @@ pub fn install(ctx: u.Context, o: u.Options, s: u.Snapshot, backend: Backend) !u
         var h: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(state.bytes, &h, .{});
         if (!try root.matches(state.path, &std.fmt.bytesToHex(h, .lower), 0o444, true)) return error.FinalStateMismatch;
+    }
+    if (b.directory_bytes) |bytes| {
+        var h: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(bytes, &h, .{});
+        if (!try root.matches("/var/db/rmxos/directories.tsv", &std.fmt.bytesToHex(h, .lower), 0o444, true)) return error.FinalStateMismatch;
     }
     const conflict_count = std.mem.count(u8, p.conflicts, "\n");
     try history(ctx, ctx.root, "apply", current, target, b, conflict_count);

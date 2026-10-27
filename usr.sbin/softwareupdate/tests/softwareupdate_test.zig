@@ -65,7 +65,14 @@ fn lifecycleCase(tc: [*c]const c.atf_tc_t) callconv(.c) void {
     }
 }
 const lifecycle_names = [_][*:0]const u8{ "confirm", "rollback", "cancel_staged", "lifecycle_refusals", "good_boot", "confirmation_window", "retention", "efi_loader", "auto_confirm" };
-var cases: [23]c.atf_tc_t = undefined;
+fn directoryCase(tc: [*c]const c.atf_tc_t) callconv(.c) void {
+    const functions = .{ install.declaredDirectories, install.systemEtc, install.directoryValidation, install.directoryMetadata };
+    inline for (functions, directory_names) |function, name| {
+        if (std.mem.eql(u8, std.mem.span(c.atf_tc_get_ident(tc)), std.mem.span(name))) function() catch |err| c.atf_tc_fail("directory/system paths: %s", @errorName(err).ptr);
+    }
+}
+const directory_names = [_][*:0]const u8{ "declared_directories", "system_etc", "directory_validation", "directory_metadata" };
+var cases: [27]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     const names = [_][*:0]const u8{ "arguments", "refusals", "list_local", "malformed_catalog", "status_fields", "not_implemented", "installed", "first_update", "second_update", "install_refusals", "unsafe_paths", "fake_bectl", "hints_failure", "install_guest" };
     const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ arguments, refusals, listing, malformed, status, disabled, installed, first, second, negative, unsafePaths, fakeBE, failedHints, guest };
@@ -75,8 +82,14 @@ fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
         e = c.atf_tp_add_tc(tp, tc);
         if (c.atf_is_error(e)) return e;
     }
-    for (cases[14..], lifecycle_names) |*tc, name| {
+    for (cases[14..23], lifecycle_names) |*tc, name| {
         var err = c.atf_tc_init(tc, name, head, lifecycleCase, null, c.atf_tp_get_config(tp));
+        if (c.atf_is_error(err)) return err;
+        err = c.atf_tp_add_tc(tp, tc);
+        if (c.atf_is_error(err)) return err;
+    }
+    for (cases[23..], directory_names) |*tc, name| {
+        var err = c.atf_tc_init(tc, name, head, directoryCase, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
         err = c.atf_tp_add_tc(tp, tc);
         if (c.atf_is_error(err)) return err;

@@ -156,7 +156,8 @@ with an absolute local archive path checks its SHA256 sidecar, the archive
 member set, manifests, METALOG, payload hashes, modes and removal paths before
 creating a boot environment.
 Archives use the rmx-devup pack format: manifest.tsv, previous.tsv, METALOG,
-commit, removals.json, report.json, optional baseline.tsv, and files/ payloads.
+commit, removals.json, report.json, optional baseline.tsv and directories.tsv,
+and files/ payloads.
 Only regular files and declared one-level internal hard links are supported.
 Symlinks, traversal, duplicate members and extra payloads are refused.
 Signatures are not implemented.
@@ -177,8 +178,25 @@ Unchanged previous-only files are removed; locally changed ones are kept.
 Explicit obsolete files are removed even if edited.
 Owner-modified /etc files stay and receive candidate .rmxos-new sidecars;
 a differing existing sidecar refuses the update before cloning.
+Files under /etc/mtree/ and /etc/defaults/ are system files and are always
+replaced from the build, without producing sidecars.
 Hard-link declarations are installed canonical-first and verified by inode
 and exact link count.
+.Pp
+The optional directories.tsv starts with rmx-directories-v1 and contains
+tab-separated octal mode, numeric UID, numeric GID and absolute directory path,
+with a final newline. Modes have a leading zero and three or four octal digits;
+UID and GID are unsigned decimal and must not be 4294967295.
+Directory paths cannot contain empty, dot or dot-dot components.
+The root path is permitted; other components use letters, digits, underscore,
+dot, plus, at-sign and hyphen.
+The directory manifest is covered by the archive checksum.
+Missing directories are created in parent-first order in the clone with the
+declared ownership and mode. Existing directories are never changed or removed.
+Symlink and non-directory destinations and crossings into other datasets refuse
+the update. Directory declarations cannot collide with file or removal paths.
+The table is saved as /var/db/rmxos/directories.tsv in the clone.
+Archives without it declare no new directories.
 .Pp
 The clone's RELEASE module hints are refreshed with
 .Xr kldxref 8 .

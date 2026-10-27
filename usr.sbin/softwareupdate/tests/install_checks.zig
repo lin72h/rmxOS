@@ -60,6 +60,9 @@ fn addArchive(w: ?*ar.struct_archive, name: []const u8, data: []const u8, mode: 
     if (link == null) try check(ar.archive_write_data(w, data.ptr, data.len) == data.len);
 }
 pub fn pack(path: [:0]const u8, old: []const File, new: []const File, baseline: bool) !void {
+    return packDirectories(path, old, new, baseline, null);
+}
+fn packDirectories(path: [:0]const u8, old: []const File, new: []const File, baseline: bool, dirs: ?[]const u8) !void {
     const w = ar.archive_write_new() orelse return error.ArchiveWrite;
     defer _ = ar.archive_write_free(w);
     try check(ar.archive_write_set_format_pax_restricted(w) == ar.ARCHIVE_OK);
@@ -70,6 +73,7 @@ pub fn pack(path: [:0]const u8, old: []const File, new: []const File, baseline: 
     try addArchive(w, "./commit", commit ++ "\n", 0o444, null);
     try addArchive(w, "./removals.json", "[\"/usr/sbin/obsolete\"]", 0o444, null);
     try addArchive(w, "./report.json", "{}\n", 0o444, null);
+    if (dirs) |bytes| try addArchive(w, "./directories.tsv", bytes, 0o444, null);
     if (baseline) try addArchive(w, "./baseline.tsv", try manifest(old_files[0..2]), 0o444, null);
     for (new) |f| if (!f.deleted and f.link == null) {
         try addArchive(w, try fmt("./files{s}", .{f.path}), f.data, f.mode, null);
@@ -289,6 +293,112 @@ pub fn orchestration(fail: bool) !void {
     const unmount = std.mem.indexOf(u8, joined, "bectl unmount").?;
     try check(create < mount and mount < hints and hints < unmount);
     if (!fail) try check(unmount < std.mem.indexOf(u8, joined, "activate -t").?);
+}
+pub fn declaredDirectories() !void {
+    const f = try Fixture.init(false);
+    defer f.deinit();
+    const custom = try fmt("{s}/usr/lib/owner-made", .{f.root});
+    const changed = try fmt("{s}/usr/lib/owner-mode", .{f.root});
+    try std.Io.Dir.cwd().createDirPath(io, custom);
+    try std.Io.Dir.cwd().createDirPath(io, changed);
+    try check(c.chmod(custom, 0o710) == 0 and c.chmod(changed, 0o700) == 0);
+    var before: c.struct_stat = undefined;
+    try check(c.stat(custom, &before) == 0);
+    try packDirectories(f.archive, &old_files, &new_files, false, "rmx-directories-v1\n0755\t0\t0\t/usr/lib/swift\n0755\t0\t0\t/usr/lib/owner-made\n0755\t0\t0\t/usr/lib/owner-mode\n");
+    var fake = Fake{ .f = f };
+    const ctx = try f.output();
+    defer _ = c.close(ctx.out);
+    try check(try e.install(ctx, .{ .action = .install, .operand = f.archive }, snap, .{ .data = &fake, .execute = Fake.command }) == 0);
+    try check(c.access(try fmt("{s}/usr/lib/swift", .{f.root}), c.F_OK) != 0);
+    var created: c.struct_stat = undefined;
+    try check(c.stat(try fmt("{s}/usr/lib/swift", .{fake.clone.?}), &created) == 0);
+    try check(created.st_mode & c.S_IFMT == c.S_IFDIR and created.st_mode & 0o7777 == 0o755);
+    // Owned host fixtures suppress privileged ownership just as U2's tests do;
+    // the installed ATF case runs as root and checks the native root:wheel result.
+    try check(created.st_uid == c.geteuid() and created.st_gid == before.st_gid);
+    for ([_]struct { path: []const u8, mode: u32 }{ .{ .path = "/usr/lib/owner-made", .mode = 0o710 }, .{ .path = "/usr/lib/owner-mode", .mode = 0o700 } }) |row| {
+        var st: c.struct_stat = undefined;
+        try check(c.stat(try fmt("{s}{s}", .{ fake.clone.?, row.path }), &st) == 0);
+        try check(st.st_mode & 0o7777 == row.mode and st.st_uid == before.st_uid and st.st_gid == before.st_gid);
+    }
+    // root:wheel is the declared identity even on an unprivileged fixture host.
+    const saved = try u.readPath(a, try fmt("{s}/var/db/rmxos/directories.tsv", .{fake.clone.?}));
+    try check(std.mem.indexOf(u8, saved, "0755\t0\t0\t/usr/lib/swift\n") != null);
+    if (c.geteuid() == 0) try check(created.st_uid == 0 and created.st_gid == 0);
+}
+pub fn systemEtc() !void {
+    const f = try Fixture.init(false);
+    defer f.deinit();
+    const old = [_]File{ .{ .path = "/etc/mtree/BSD.usr.dist", .data = "old mtree" }, .{ .path = "/etc/defaults/rc.conf", .data = "old defaults" }, .{ .path = "/etc/rc.conf", .data = "old owner config" } };
+    const new = [_]File{ .{ .path = "/etc/mtree/BSD.usr.dist", .data = "new mtree" }, .{ .path = "/etc/defaults/rc.conf", .data = "new defaults" }, .{ .path = "/etc/rc.conf", .data = "new owner config" } };
+    for (old) |row| try put(try fmt("{s}{s}", .{ f.root, row.path }), "owner different", 0o644);
+    try put(try fmt("{s}/var/db/rmxos/manifest.tsv", .{f.root}), try manifest(&old), 0o444);
+    try pack(f.archive, &old, &new, false);
+    var fake = Fake{ .f = f };
+    const ctx = try f.output();
+    defer _ = c.close(ctx.out);
+    try check(try e.install(ctx, .{ .action = .install, .operand = f.archive }, snap, .{ .data = &fake, .execute = Fake.command }) == 0);
+    const clone = try e.Root.open(a, fake.clone.?, false);
+    defer clone.close();
+    try check(eq((try clone.read("/etc/mtree/BSD.usr.dist")).?, "new mtree"));
+    try check(eq((try clone.read("/etc/defaults/rc.conf")).?, "new defaults"));
+    try check(try clone.stat("/etc/mtree/BSD.usr.dist.rmxos-new") == null);
+    try check(try clone.stat("/etc/defaults/rc.conf.rmxos-new") == null);
+    try check(eq((try clone.read("/etc/rc.conf")).?, "owner different"));
+    try check(eq((try clone.read("/etc/rc.conf.rmxos-new")).?, "new owner config"));
+    const running = try f.rootOpen();
+    defer running.close();
+    try check(eq((try running.read("/etc/mtree/BSD.usr.dist")).?, "owner different"));
+}
+test "declared missing directories created only in clone existing directories unchanged" {
+    try declaredDirectories();
+}
+test "system etc subtrees replaced owner etc remains a sidecar" {
+    try systemEtc();
+}
+pub fn directoryValidation() !void {
+    const valid = try e.directories(a, "rmx-directories-v1\n01777\t0\t0\t/var/tmp\n0755\t0\t0\t/\n");
+    try check(valid.len == 2 and eq(valid[0].path, "/") and valid[1].mode == 0o1777);
+    for ([_][]const u8{
+        "unknown\n",                                                                  "rmx-directories-v1\n0755\t0\t0\t/usr/../etc\n",
+        "rmx-directories-v1\n0755\t-1\t0\t/usr/lib/swift\n",                          "rmx-directories-v1\n0755\t0\t4294967295\t/usr/lib/swift\n",
+        "rmx-directories-v1\n07777\t0\t0\t/usr/lib/swift\textra\n",                   "rmx-directories-v1\n8888\t0\t0\t/usr/lib/swift\n",
+        "rmx-directories-v1\n0755\t0\t0\t/usr/lib/swift\n\n0755\t0\t0\t/var/empty\n",
+    }) |bad| try std.testing.expectError(error.InvalidDirectories, e.directories(a, bad));
+    try std.testing.expectError(error.DuplicateDirectory, e.directories(a, "rmx-directories-v1\n0755\t0\t0\t/usr/lib/swift\n0755\t0\t0\t/usr/lib/swift\n"));
+    const f = try Fixture.init(false);
+    defer f.deinit();
+    const ctx = try f.output();
+    defer _ = c.close(ctx.out);
+    try packDirectories(f.archive, &old_files, &new_files, false, "rmx-directories-v1\n0755\t0\t0\t/usr/bin/keep\n");
+    var fake = Fake{ .f = f };
+    try std.testing.expectError(error.DirectoryFileCollision, e.install(ctx, .{ .action = .install, .operand = f.archive }, snap, .{ .data = &fake, .execute = Fake.command }));
+    try check(fake.commands.items.len == 0);
+    // Explicit directories cannot traverse a symlink or overwrite a file.
+    try std.Io.Dir.cwd().createDirPath(io, try fmt("{s}/usr/lib", .{f.root}));
+    try check(c.symlink("/tmp", try fmt("{s}/usr/lib/swift", .{f.root})) == 0);
+    try packDirectories(f.archive, &old_files, &new_files, false, "rmx-directories-v1\n0755\t0\t0\t/usr/lib/swift\n");
+    try std.testing.expectError(error.NondirectoryDestination, e.install(ctx, .{ .action = .install, .operand = f.archive }, snap, .{ .data = &fake, .execute = Fake.command }));
+    try check(fake.commands.items.len == 0);
+}
+pub fn directoryMetadata() !void {
+    const f = try Fixture.init(false);
+    defer f.deinit();
+    const native = try e.Root.open(a, f.root, true);
+    defer native.close();
+    const dir = e.Directory{ .path = "/usr/lib/metadata-check", .mode = 0o750, .uid = c.geteuid(), .gid = c.getegid() };
+    try native.createDirectory(dir);
+    const st = (try native.directory(dir.path)).?;
+    try check(st.st_uid == dir.uid and st.st_gid == dir.gid and st.st_mode & 0o7777 == dir.mode);
+    try native.createDirectory(.{ .path = dir.path, .mode = 0o700, .uid = 0, .gid = 0 });
+    const after = (try native.directory(dir.path)).?;
+    try check(st.st_ino == after.st_ino and st.st_uid == after.st_uid and st.st_gid == after.st_gid and st.st_mode == after.st_mode);
+}
+test "directory metadata grammar and unsafe destinations refuse before clone" {
+    try directoryValidation();
+}
+test "native directory metadata applied only to newly created directories" {
+    try directoryMetadata();
 }
 fn observed(argv: []const [:0]const u8) ![]const u8 {
     var pipes: [2]c_int = undefined;
