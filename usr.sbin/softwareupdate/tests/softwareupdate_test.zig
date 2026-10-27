@@ -1,4 +1,6 @@
 const std = @import("std");
+const seals = @import("seal_checks.zig");
+const seal_guest = @import("seal_guest.zig");
 const checks = @import("checks.zig");
 const install = @import("install_checks.zig");
 const lifecycle = @import("lifecycle_checks.zig");
@@ -53,6 +55,10 @@ fn guest(tc: [*c]const c.atf_tc_t) callconv(.c) void {
 fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(tc, "timeout", "20");
     _ = c.atf_tc_set_md_var(tc, "require.user", "root");
+    if (std.mem.eql(u8, std.mem.span(c.atf_tc_get_ident(tc)), "seal_zfs")) {
+        _ = c.atf_tc_set_md_var(tc, "timeout", "180");
+        _ = c.atf_tc_set_md_var(tc, "require.config", "seal_fixture");
+    }
     if (std.mem.eql(u8, std.mem.span(c.atf_tc_get_ident(tc)), "install_guest")) {
         _ = c.atf_tc_set_md_var(tc, "timeout", "120");
         _ = c.atf_tc_set_md_var(tc, "require.config", "install_fixture");
@@ -83,7 +89,26 @@ fn catalogCase(tc: [*c]const c.atf_tc_t) callconv(.c) void {
     }
 }
 const catalog_names = [_][*:0]const u8{ "catalog_missing", "catalog_file_url", "download", "download_nonroot", "published_install", "cut_transfer", "download_mismatch", "catalog_config" };
-var cases: [35]c.atf_tc_t = undefined;
+fn sealCase(tc: [*c]const c.atf_tc_t) callconv(.c) void {
+    const name = std.mem.span(c.atf_tc_get_ident(tc));
+    if (std.mem.eql(u8, name, "seal_zfs")) {
+        if (!c.atf_tc_has_config_var(tc, "seal_fixture")) c.atf_tc_skip("requires commissioned disposable guest ZFS fixtures");
+        seal_guest.run() catch |err| c.atf_tc_fail("seal ZFS: %s", @errorName(err).ptr);
+        return;
+    }
+    const functions = .{ seals.arguments, sealInstall, sealFailure, seals.comparison, seals.metadata };
+    inline for (functions, 0..) |function, i| {
+        if (std.mem.eql(u8, name, std.mem.span(seal_names[i]))) function() catch |err| c.atf_tc_fail("seal: %s", @errorName(err).ptr);
+    }
+}
+fn sealInstall() !void {
+    try seals.installation(false);
+}
+fn sealFailure() !void {
+    try seals.installation(true);
+}
+const seal_names = [_][*:0]const u8{ "seal_arguments", "seal_install", "seal_failure", "seal_drift", "seal_metadata", "seal_zfs" };
+var cases: [41]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     const names = [_][*:0]const u8{ "arguments", "refusals", "list_local", "malformed_catalog", "status_fields", "not_implemented", "installed", "first_update", "second_update", "install_refusals", "unsafe_paths", "fake_bectl", "hints_failure", "install_guest" };
     const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ arguments, refusals, listing, malformed, status, disabled, installed, first, second, negative, unsafePaths, fakeBE, failedHints, guest };
@@ -105,8 +130,14 @@ fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
         err = c.atf_tp_add_tc(tp, tc);
         if (c.atf_is_error(err)) return err;
     }
-    for (cases[27..], catalog_names) |*tc, name| {
+    for (cases[27..35], catalog_names) |*tc, name| {
         var err = c.atf_tc_init(tc, name, head, catalogCase, null, c.atf_tp_get_config(tp));
+        if (c.atf_is_error(err)) return err;
+        err = c.atf_tp_add_tc(tp, tc);
+        if (c.atf_is_error(err)) return err;
+    }
+    for (cases[35..], seal_names) |*tc, name| {
+        var err = c.atf_tc_init(tc, name, head, sealCase, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
         err = c.atf_tp_add_tc(tp, tc);
         if (c.atf_is_error(err)) return err;
@@ -114,6 +145,13 @@ fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     return c.atf_no_error();
 }
 pub export fn main(argc: c_int, argv: [*c][*c]u8) c_int {
+    if (argc == 2 and std.mem.eql(u8, std.mem.span(argv[1]), "--op198-zfs")) {
+        seal_guest.run() catch |err| {
+            @import("update").write(2, @errorName(err)) catch {};
+            return 1;
+        };
+        return 0;
+    }
     if (argc == 2 and std.mem.eql(u8, std.mem.span(argv[1]), "--op190-stage-restart")) {
         install.guestStageRestart() catch |err| {
             @import("update").write(2, @errorName(err)) catch {};

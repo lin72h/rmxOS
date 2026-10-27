@@ -23,10 +23,10 @@ fn hash(bytes: []const u8) [64]u8 {
     std.crypto.hash.sha2.Sha256.hash(bytes, &d, .{});
     return std.fmt.bytesToHex(d, .lower);
 }
-const File = struct { path: []const u8, data: []const u8, mode: u32 = 0o644, link: ?[]const u8 = null, deleted: bool = false };
+pub const File = struct { path: []const u8, data: []const u8, mode: u32 = 0o644, link: ?[]const u8 = null, deleted: bool = false };
 const old_files = [_]File{ .{ .path = "/etc/stock", .data = "old stock" }, .{ .path = "/etc/owner", .data = "old config" }, .{ .path = "/usr/bin/drop", .data = "drop", .mode = 0o555 }, .{ .path = "/usr/bin/local", .data = "old local", .mode = 0o555 }, .{ .path = "/usr/bin/keep", .data = "old keep", .mode = 0o555 } };
 const new_files = [_]File{ .{ .path = "/etc/stock", .data = "new stock" }, .{ .path = "/etc/owner", .data = "new config" }, .{ .path = "/etc/absent", .data = "absent", .mode = 0o444 }, .{ .path = "/usr/bin/keep", .data = "new keep", .mode = 0o555 }, .{ .path = "/usr/bin/alias", .data = "new keep", .mode = 0o555, .link = "/usr/bin/keep" }, .{ .path = "/usr/sbin/obsolete", .data = "", .deleted = true } };
-fn manifest(files: []const File) ![]const u8 {
+pub fn manifest(files: []const File) ![]const u8 {
     var bytes: std.ArrayList(u8) = .empty;
     try bytes.appendSlice(a, "rmx-overlay-v1\nbase=" ++ base ++ "\n");
     for (files) |f| {
@@ -62,7 +62,7 @@ fn addArchive(w: ?*ar.struct_archive, name: []const u8, data: []const u8, mode: 
 pub fn pack(path: [:0]const u8, old: []const File, new: []const File, baseline: bool) !void {
     return packDirectories(path, old, new, baseline, null);
 }
-fn packDirectories(path: [:0]const u8, old: []const File, new: []const File, baseline: bool, dirs: ?[]const u8) !void {
+pub fn packDirectories(path: [:0]const u8, old: []const File, new: []const File, baseline: bool, dirs: ?[]const u8) !void {
     const w = ar.archive_write_new() orelse return error.ArchiveWrite;
     defer _ = ar.archive_write_free(w);
     try check(ar.archive_write_set_format_pax_restricted(w) == ar.ARCHIVE_OK);

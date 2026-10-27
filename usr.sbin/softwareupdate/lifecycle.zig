@@ -211,7 +211,8 @@ fn matchesOwner(root: e.Root, name: []const u8, token: []const u8) !bool {
     const marker = (try value(root, "/var/db/softwareupdate/created-by")) orelse return false;
     return eq(marker, try std.fmt.allocPrint(root.a, "{s}\t{s}", .{ name, token }));
 }
-pub fn prune(ctx: u.Context, root: e.Root, backend: e.Backend, current: []const u8, previous: []const u8) !void {
+pub fn prune(ctx: u.Context, root: e.Root, backend: e.Backend, current_dataset: []const u8, previous: []const u8) !void {
+    const current = std.fs.path.basename(current_dataset);
     var registry = try owned(ctx.allocator, root);
     const text = try backend.command(ctx.allocator, &.{ "/sbin/bectl", "list", "-H", "-c", "creation" });
     const bes = try listing(ctx.allocator, text);
@@ -234,6 +235,7 @@ pub fn prune(ctx: u.Context, root: e.Root, backend: e.Backend, current: []const 
         };
         try mounted.close();
         if (!ours) continue;
+        try u.seals.release(ctx.allocator, backend, try fmt(ctx.allocator, "{s}/{s}", .{ std.fs.path.dirname(current_dataset).?, be.name }));
         _ = try backend.command(ctx.allocator, &.{ "/sbin/bectl", "destroy", try ctx.allocator.dupeZ(u8, be.name) });
         _ = registry.remove(be.name);
         try logAction(ctx, root, backend, "pruned", be.name);
@@ -342,7 +344,7 @@ pub fn command(ctx: u.Context, action: u.Action, s: u.Snapshot, backend: e.Backe
         try root.remove("/var/db/softwareupdate/staged.tsv");
         try logAction(ctx, root, backend, "confirmed", current);
         try ctx.print(ctx.out, "confirmed={s}\n", .{current});
-        try prune(ctx, root, backend, current, previous);
+        try prune(ctx, root, backend, s.dataset.?, previous);
         return 0;
     }
     if (action == .rollback or (action == .cancel and pending != null and eq(pending.?, current))) {
@@ -378,6 +380,13 @@ pub fn command(ctx: u.Context, action: u.Action, s: u.Snapshot, backend: e.Backe
         try mounted.close();
         open = false;
         _ = try backend.command(ctx.allocator, &.{ "/sbin/bectl", "activate", "-T" });
+        try u.seals.release(ctx.allocator, backend, try fmt(ctx.allocator, "{s}/{s}", .{ std.fs.path.dirname(s.dataset.?).?, target }));
+        _ = try backend.command(ctx.allocator, &.{ "/sbin/bectl", "destroy", try ctx.allocator.dupeZ(u8, target) });
+        _ = registry.remove(target);
+        var registry_bytes: std.ArrayList(u8) = .empty;
+        var registry_iterator = registry.iterator();
+        while (registry_iterator.next()) |item| try registry_bytes.appendSlice(ctx.allocator, try std.fmt.allocPrint(ctx.allocator, "{s}\t{s}\n", .{ item.key_ptr.*, item.value_ptr.* }));
+        try root.write("/var/db/softwareupdate/environments.tsv", registry_bytes.items, 0o444);
         try root.remove("/var/db/softwareupdate/staged.tsv");
         try logAction(ctx, root, backend, "cancelled", target);
         return 0;

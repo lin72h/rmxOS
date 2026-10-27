@@ -1,4 +1,4 @@
-.Dd October 27, 2026
+.Dd October 28, 2026
 .Dt SOFTWAREUPDATE 8
 .Os
 .Sh NAME
@@ -22,6 +22,8 @@
 .Cm confirm | cancel
 .Nm
 .Cm rollback Op Fl -restart
+.Nm
+.Cm verify Op Fl -quiet
 .Sh DESCRIPTION
 .Nm
 provides update discovery, build inspection, and local archive installation
@@ -246,7 +248,12 @@ Candidate bytes, modes, ownership and removals are verified.
 The derived linker.hints and appended loader.conf.local are checked in their
 generated form, rather than against their pre-generation archive hashes.
 .Pp
-The clone is unmounted and selected for one boot with
+The clone is unmounted, snapshotted as its root dataset's
+.Cm @sealed ,
+and held with the ZFS tag
+.Cm softwareupdate .
+Failure to snapshot or hold prevents activation.
+The sealed clone is selected for one boot with
 .Cm bectl activate -t .
 The command prints staged= and a reboot command.
 .Fl -restart
@@ -287,8 +294,9 @@ replaced atomically, at efi/freebsd/loader.efi or EFI/BOOT/BOOTX64.EFI.
 Failure to locate or update the loader prevents confirmation.
 .Pp
 .Cm cancel
-before reboot clears the one-time selection and the owned clone's pending
-state. On an unconfirmed staged boot it selects the previous environment.
+before reboot clears the one-time selection and destroys the verified owned
+clone, releasing its softwareupdate hold first.
+On an unconfirmed staged boot it selects the previous environment.
 .Cm rollback
 selects previous-be persistently; with --restart it reboots after selection.
 These commands never destroy the running environment.
@@ -299,8 +307,41 @@ Older environments are removed only if an installation registry token and
 the clone's creation marker agree. Foreign environments and environments
 selected for a boot are never removed.
 Lifecycle operations take an exclusive operation lock.
+.Pp
+Retention releases the softwareupdate hold immediately before destroying an
+owned environment. Other ZFS holds still prevent destruction. Rollback is
+non-destructive and keeps its seal. Confirmation never destroys a seal.
+.Sh SEAL VERIFICATION
+.Cm verify Op Fl -quiet
+requires root and compares the running boot environment with its
+.Cm @sealed
+snapshot. Status names the seal and reports its creation time as UTC Unix
+seconds in seal_taken_unix.
+An environment installed before sealing was introduced has no seal.
+.Pp
+The snapshot's installed manifest defines the base files; its directories.tsv
+defines the base directories. Regular files are exhaustively compared by
+SHA-256, type, mode and ownership with their sealed versions. The sealed
+version is authoritative for generated files and existing directories that
+were preserved at installation. ZFS diff supplies underlying-dataset directory
+candidates, so devfs or tmpfs mounts do not appear as base modifications;
+directory type, mode and ownership are then checked against the snapshot.
+Runtime file additions outside the declared base are not reported.
+.Pp
+Changed paths are listed as modified, missing or type-changed. Ordinary owner
+configuration files recorded with .rmxos-new sidecars at sealing are listed
+separately as expected-owner-change, and do not count as drift when edited.
+Missing files or changed types still count as drift. System configuration
+under /etc/defaults and /etc/mtree is never exempted.
+.Fl -quiet
+prints only the numeric drift count when a seal is present.
+.Pp
+This seal is held, but the running filesystem is not read-only. It reports
+drift; it does not prevent writes or authenticate the published update.
 .Sh EXIT STATUS
 .Ex -std
+For verify, 0 means the base matches, 1 means base drift, 2 means an operational
+error or root refusal, and 3 means this boot environment has no seal.
 .Sh SEE ALSO
 .Xr sha256 1 ,
 .Xr bectl 8

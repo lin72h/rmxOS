@@ -80,6 +80,12 @@ const Fixture = struct {
             return "";
         }
         if (eq(args[0], "/usr/bin/log")) return f.marker;
+        if (eq(args[0], "/sbin/zfs")) {
+            if (eq(args[1], "list")) return try fmt("{s}@sealed\n", .{args[args.len - 1]});
+            if (eq(args[1], "get")) return "1234567890\n";
+            if (eq(args[1], "holds")) return try fmt("{s}\tsoftwareupdate\tdate\n", .{args[args.len - 1]});
+            return "";
+        }
         if (eq(args[0], "/sbin/mount")) return try fmt("/dev/fake {s}/esp msdosfs rw 0 0\n", .{f.path});
         if (!eq(args[0], "/sbin/bectl")) return "";
         if (eq(args[1], "list")) return f.text;
@@ -136,9 +142,10 @@ pub fn cancelStaged() !void {
     f.text = current ++ "\tNR\t/\n" ++ previous ++ "\tT\t-\n";
     try expect(try l.command(f.ctx, .cancel, f.snap(), f.backend(), false) == 0);
     try expect(f.has("/sbin/bectl activate -T"));
-    const clone = try e.Root.open(a, try fmt("{s}/bes/{s}", .{ f.path, previous }), false);
-    defer clone.close();
-    try expect(try clone.stat("/var/db/rmxos/pending-target") == null);
+    try expect(f.has("/sbin/bectl destroy " ++ previous));
+    const calls = try std.mem.join(a, "\n", f.calls.items);
+    try expect(std.mem.indexOf(u8, calls, "/sbin/zfs release softwareupdate").? < std.mem.indexOf(u8, calls, "/sbin/bectl destroy").?);
+    try expect(c.access(try fmt("{s}/bes/{s}", .{ f.path, previous }), c.F_OK) != 0);
 }
 pub fn refusals() !void {
     var f = try Fixture.init();
@@ -206,13 +213,15 @@ pub fn retention() !void {
     try text.appendSlice(a, current ++ "\tNR\n");
     f.text = text.items;
     try f.root.write("/var/db/softwareupdate/environments.tsv", registry.items, 0o444);
-    try l.prune(f.ctx, f.root, f.backend(), current, previous);
+    try l.prune(f.ctx, f.root, f.backend(), "pool/ROOT/" ++ current, previous);
     try expect(f.has("/sbin/bectl destroy rmxos-111111111111"));
     try expect(f.has("/sbin/bectl destroy rmxos-222222222222"));
     try expect(!f.has("/sbin/bectl destroy foreign") and !f.has("/sbin/bectl destroy " ++ previous));
     try expect(!f.has("/sbin/bectl destroy rmxos-333333333333"));
+    const calls = try std.mem.join(a, "\n", f.calls.items);
+    try expect(std.mem.indexOf(u8, calls, "/sbin/zfs release softwareupdate").? < std.mem.indexOf(u8, calls, "/sbin/bectl destroy").?);
     f.text = current ++ "\tN\n" ++ previous ++ "\tT\n";
-    try std.testing.expectError(error.TemporaryBootPending, l.prune(f.ctx, f.root, f.backend(), current, previous));
+    try std.testing.expectError(error.TemporaryBootPending, l.prune(f.ctx, f.root, f.backend(), "pool/ROOT/" ++ current, previous));
 }
 pub fn efi() !void {
     var f = try Fixture.init();

@@ -554,7 +554,7 @@ pub fn preflight(b: Bundle, root: Root) !Planned {
     for ([_][]const u8{ "/var/db/rmxos/manifest.tsv", "/var/db/rmxos/directories.tsv", "/var/db/rmxos/commit", "/var/db/rmxos/conflicts.tsv", "/var/db/rmxos/archive.sha256", "/var/db/rmxos/previous-be", "/var/db/rmxos/pending-target", "/var/db/softwareupdate/no-auto-confirm", "/var/db/softwareupdate/history.tsv", "/boot/loader.conf.local" }) |p| _ = try root.stat(p);
     return .{ .rows = rows, .conflicts = try conflicts.toOwnedSlice(b.a), .deletes = try deletes.toOwnedSlice(b.a), .old_remove = try old_remove.toOwnedSlice(b.a), .keeps = try keeps.toOwnedSlice(b.a) };
 }
-fn ownerConfiguration(path: []const u8) bool {
+pub fn ownerConfiguration(path: []const u8) bool {
     return std.mem.startsWith(u8, path, "/etc/") and !std.mem.startsWith(u8, path, "/etc/mtree/") and !std.mem.startsWith(u8, path, "/etc/defaults/");
 }
 fn contains(paths: []const []const u8, p: []const u8) bool {
@@ -772,6 +772,7 @@ pub fn install(ctx: u.Context, o: u.Options, s: u.Snapshot, backend: Backend) !u
         if (fresh.dataset == null or !eq(fresh.dataset.?, s.dataset.?)) return error.RunningBootEnvironmentChanged;
         if (u.refusal(fresh, null)) |reason| return ctx.diagnostic(reason);
     }
+    try u.seals.create(a, backend, try std.fmt.allocPrint(a, "{s}/{s}", .{ parent, target }));
     _ = try backend.command(a, &.{ "/sbin/bectl", "activate", "-t", target });
     try history(ctx, ctx.root, "staged", current, target, b, conflict_count);
     _ = try backend.command(a, &.{ "/usr/bin/logger", "-t", "softwareupdate", try fmt(a, "staged={s} commit={s} conflicts={d}", .{ target, b.commit, conflict_count }) });

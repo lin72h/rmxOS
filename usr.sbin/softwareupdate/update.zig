@@ -2,6 +2,7 @@ const std = @import("std");
 pub const engine = @import("install.zig");
 pub const lifecycle = @import("lifecycle.zig");
 pub const downloads = @import("download.zig");
+pub const seals = @import("seal.zig");
 pub const c = @cImport({
     @cInclude("sys/cdefs.h");
     @cInclude("sys/types.h");
@@ -29,14 +30,15 @@ pub const help =
     \\       softwareupdate --history
     \\       softwareupdate status | confirm | cancel
     \\       softwareupdate rollback [--restart]
+    \\       softwareupdate verify [--quiet]
     \\       softwareupdate --help
     \\Options: --recommended, --all, --os-only (all updates are OS updates)
     \\Local --install verifies and stages a clone for one boot. Signing is not implemented.
     \\Set catalog_url in /etc/softwareupdate.conf or pass --catalog DIR|URL.
     \\
 ;
-pub const Action = enum { help, list, download, install, history, status, confirm, cancel, rollback, boot_check };
-pub const Options = struct { action: Action, catalog: ?[]const u8 = null, operand: ?[]const u8 = null, restart: bool = false, no_auto_confirm: bool = false };
+pub const Action = enum { help, list, download, install, history, status, confirm, cancel, rollback, boot_check, verify };
+pub const Options = struct { action: Action, catalog: ?[]const u8 = null, operand: ?[]const u8 = null, restart: bool = false, no_auto_confirm: bool = false, quiet: bool = false };
 fn eq(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
 }
@@ -48,7 +50,7 @@ pub fn parse(args: []const []const u8) !Options {
     while (i < args.len) : (i += 1) {
         const a = args[i];
         var found: ?Action = null;
-        inline for (.{ .{ "--help", Action.help }, .{ "--list", Action.list }, .{ "--download", Action.download }, .{ "--install", Action.install }, .{ "--history", Action.history }, .{ "status", Action.status }, .{ "confirm", Action.confirm }, .{ "cancel", Action.cancel }, .{ "rollback", Action.rollback }, .{ "--boot-check", Action.boot_check } }) |entry| {
+        inline for (.{ .{ "--help", Action.help }, .{ "--list", Action.list }, .{ "--download", Action.download }, .{ "--install", Action.install }, .{ "--history", Action.history }, .{ "status", Action.status }, .{ "confirm", Action.confirm }, .{ "cancel", Action.cancel }, .{ "rollback", Action.rollback }, .{ "--boot-check", Action.boot_check }, .{ "verify", Action.verify } }) |entry| {
             if (eq(a, entry[0])) found = entry[1];
         }
         if (found) |f| {
@@ -60,6 +62,9 @@ pub fn parse(args: []const []const u8) !Options {
             if (args[i].len == 0 or args[i][0] == '-') return error.InvalidArguments;
             o.catalog = args[i];
             catalog_seen = true;
+        } else if (eq(a, "--quiet")) {
+            if (o.quiet) return error.InvalidArguments;
+            o.quiet = true;
         } else if (eq(a, "--restart")) {
             if (o.restart) return error.InvalidArguments;
             o.restart = true;
@@ -74,6 +79,7 @@ pub fn parse(args: []const []const u8) !Options {
         }
     }
     o.action = action orelse return error.InvalidArguments;
+    if (o.quiet and o.action != .verify) return error.InvalidArguments;
     if (o.operand != null and o.action != .download and o.action != .install) return error.InvalidArguments;
     if (o.restart and o.action != .install and o.action != .rollback) return error.InvalidArguments;
     if (o.no_auto_confirm and o.action != .install) return error.InvalidArguments;
@@ -399,7 +405,14 @@ pub fn runWithBackend(ctx: Context, args: []const []const u8, s: Snapshot, backe
     switch (o.action) {
         .help => try write(ctx.out, help),
         .history => try history(ctx, false),
-        .status => try status(ctx, s),
+        .status => {
+            try status(ctx, s);
+            if (ctx.root.len == 0 or backend.data != null) try seals.status(ctx, s, backend);
+        },
+        .verify => return seals.verify(ctx, s, backend, o.quiet) catch |err| {
+            _ = try ctx.diagnostic(@errorName(err));
+            return 2;
+        },
         .confirm, .cancel, .rollback => return lifecycle.command(ctx, o.action, s, .{}, o.restart),
         .boot_check => return lifecycle.bootCheck(ctx, .{}),
         else => {
