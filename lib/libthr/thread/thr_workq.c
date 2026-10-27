@@ -64,6 +64,7 @@ struct twq_runtime {
 	volatile u_int		tr_wait_seq;
 	TAILQ_HEAD(, twq_worker) tr_idle_list;
 	struct twq_worker	*tr_dying;
+	lwpid_t			tr_dying_tid;
 	struct twq_lane_runtime	tr_bucket[TWQ_NUM_BUCKETS * 2];
 };
 
@@ -71,6 +72,7 @@ struct twq_worker {
 	struct twq_runtime	*tw_runtime;
 	TAILQ_ENTRY(twq_worker) tw_idle_entry;
 	uint64_t		tw_idle_stamp;
+	lwpid_t			tw_tid;
 };
 
 static struct twq_runtime twq_runtime = {
@@ -591,12 +593,17 @@ twq_reaper_main(void *arg)
 		}
 
 		now = twq_now_msec();
-		if (rt->tr_idle_workers <= 1) {
+		/* Serialize deaths through kernel thread termination, as XNU does. */
+		if (rt->tr_dying == NULL && rt->tr_dying_tid != 0 &&
+		    thr_kill(rt->tr_dying_tid, 0) == -1 && errno == ESRCH)
+			rt->tr_dying_tid = 0;
+		if (rt->tr_idle_workers <= 1 && rt->tr_dying != NULL) {
 			rt->tr_dying = NULL;
+			rt->tr_dying_tid = 0;
 			rt->tr_retire_budget = 0;
 		}
 		/* Parked pthreads belong to libthr, not the kernel TWQ lanes. */
-		if (!twq_any_pending_locked(rt) && rt->tr_dying == NULL &&
+		if (!twq_any_pending_locked(rt) && rt->tr_dying_tid == 0 &&
 		    rt->tr_live_workers == rt->tr_idle_workers &&
 		    rt->tr_idle_workers <= 1) {
 			rt->tr_reaper_started = 0;
@@ -604,12 +611,13 @@ twq_reaper_main(void *arg)
 			return (NULL);
 		}
 		oldest = TAILQ_FIRST(&rt->tr_idle_list);
-		if (rt->tr_dying == NULL && rt->tr_idle_workers > 1 &&
+		if (rt->tr_dying_tid == 0 && rt->tr_idle_workers > 1 &&
 		    oldest != NULL && now - oldest->tw_idle_stamp >
 		    twq_idle_delay_msec(rt->tr_idle_workers,
 		    (uint32_t)MAX(1, sysconf(_SC_NPROCESSORS_ONLN)))) {
 			retire_count = 1;
 			rt->tr_dying = oldest;
+			rt->tr_dying_tid = oldest->tw_tid;
 			rt->tr_retire_budget = 1;
 			rt->tr_wait_seq++;
 			twq_trace_event_locked(rt, "reaper-retire", 0, 0, 0,
@@ -874,6 +882,7 @@ twq_worker_main(void *arg)
 	worker = arg;
 	rt = worker->tw_runtime;
 	curthread = _get_curthread();
+	worker->tw_tid = curthread->tid;
 	idle_lane = -1;
 
 	for (;;) {
@@ -916,6 +925,7 @@ twq_worker_main(void *arg)
 		/* A new request may resuscitate the selected worker. */
 		if (rt->tr_dying == worker) {
 			rt->tr_dying = NULL;
+			rt->tr_dying_tid = 0;
 			rt->tr_retire_budget = 0;
 		}
 		if (twq_lane_is_valid(idle_lane) &&
