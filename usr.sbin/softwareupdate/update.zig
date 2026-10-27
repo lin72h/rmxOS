@@ -1,6 +1,7 @@
 const std = @import("std");
 pub const engine = @import("install.zig");
 pub const lifecycle = @import("lifecycle.zig");
+pub const downloads = @import("download.zig");
 pub const c = @cImport({
     @cInclude("sys/cdefs.h");
     @cInclude("sys/types.h");
@@ -31,11 +32,11 @@ pub const help =
     \\       softwareupdate --help
     \\Options: --recommended, --all, --os-only (all updates are OS updates)
     \\Local --install verifies and stages a clone for one boot. Signing is not implemented.
-    \\Download and named install are not yet implemented.
+    \\Set catalog_url in /etc/softwareupdate.conf or pass --catalog DIR|URL.
     \\
 ;
 pub const Action = enum { help, list, download, install, history, status, confirm, cancel, rollback, boot_check };
-pub const Options = struct { action: Action, catalog: []const u8 = "/var/db/softwareupdate/catalog", operand: ?[]const u8 = null, restart: bool = false, no_auto_confirm: bool = false };
+pub const Options = struct { action: Action, catalog: ?[]const u8 = null, operand: ?[]const u8 = null, restart: bool = false, no_auto_confirm: bool = false };
 fn eq(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
 }
@@ -274,8 +275,6 @@ pub fn list(ctx: Context, directory: []const u8) !void {
     const data = try readPath(ctx.allocator, path);
     const p = try catalog(ctx.allocator, data);
     defer p.deinit();
-    const installed = try ctx.optional("/var/db/rmxos/commit");
-    const digest = hashPath(ctx.allocator, try ctx.path("/var/db/rmxos/manifest.tsv")) catch |err| if (err == error.FileNotFound) null else return err;
     // Validate the whole local publication before printing any update.
     for (p.value.updates) |u| {
         const archive = try std.fmt.allocPrintSentinel(ctx.allocator, "{s}/{s}/update.tar", .{ directory, u.name }, 0);
@@ -285,8 +284,13 @@ pub fn list(ctx: Context, directory: []const u8) !void {
         const checksum = trim(try readPath(ctx.allocator, sidecar));
         if (!eq(checksum, u.sha256)) return error.ChecksumSidecarMismatch;
     }
-    for (p.value.updates) |u| try ctx.print(ctx.out, "{s} applies={s} commit={s} from={s} size={d} restart_required={} date={s}\n", .{ u.name, if (applies(u, if (installed) |v| trim(v) else null, digest)) "yes" else "no", u.commit, u.from.commit, u.size, u.restart_required, u.date });
-    if (p.value.updates.len == 0) try write(ctx.out, "No updates in local catalog.\n");
+    try renderCatalog(ctx, p.value);
+}
+pub fn renderCatalog(ctx: Context, value: Catalog) !void {
+    const installed = try ctx.optional("/var/db/rmxos/commit");
+    const digest = hashPath(ctx.allocator, try ctx.path("/var/db/rmxos/manifest.tsv")) catch |err| if (err == error.FileNotFound) null else return err;
+    for (value.updates) |item| try ctx.print(ctx.out, "{s} applies={s} commit={s} from={s} size={d} restart_required={} date={s}\n", .{ item.name, if (applies(item, if (installed) |v| trim(v) else null, digest)) "yes" else "no", item.commit, item.from.commit, item.size, item.restart_required, item.date });
+    if (value.updates.len == 0) try write(ctx.out, "No updates in catalog.\n");
 }
 pub fn history(ctx: Context, tail: bool) !void {
     const path = try ctx.path("/var/db/softwareupdate/history.tsv");
@@ -370,11 +374,30 @@ pub fn status(ctx: Context, s: Snapshot) !void {
     try history(ctx, true);
 }
 pub fn run(ctx: Context, args: []const []const u8, s: Snapshot) !u8 {
+    return runWithBackend(ctx, args, s, .{});
+}
+pub fn runWithBackend(ctx: Context, args: []const []const u8, s: Snapshot, backend: engine.Backend) !u8 {
     const o = parse(args) catch return ctx.diagnostic("invalid arguments; use --help");
-    if (o.action == .install and o.operand != null and std.fs.path.isAbsolute(o.operand.?)) return @import("install.zig").install(ctx, o, s, .{});
+    if (o.action == .install and o.operand != null) {
+        if (refusal(s, null)) |reason| return ctx.diagnostic(reason);
+        var local = o;
+        if (!std.fs.path.isAbsolute(o.operand.?)) {
+            if (refusal(s, o.operand.?)) |reason| return ctx.diagnostic(reason);
+            local.operand = try downloads.incoming(ctx, o.operand.?);
+        }
+        return engine.install(ctx, local, s, backend);
+    }
+    if (o.action == .list or o.action == .download) {
+        if (o.action == .download and s.uid != 0) return ctx.diagnostic("root required");
+        const source = downloads.location(ctx, o.catalog) catch |err| {
+            if (err == error.MissingCatalogSetting) return ctx.diagnostic("catalog_url is not set in /etc/defaults/softwareupdate.conf or /etc/softwareupdate.conf; use --catalog");
+            return err;
+        };
+        if (o.action == .list) try downloads.list(ctx, source) else try downloads.download(ctx, source, o.operand);
+        return 0;
+    }
     switch (o.action) {
         .help => try write(ctx.out, help),
-        .list => try list(ctx, o.catalog),
         .history => try history(ctx, false),
         .status => try status(ctx, s),
         .confirm, .cancel, .rollback => return lifecycle.command(ctx, o.action, s, .{}, o.restart),

@@ -4,6 +4,10 @@ SCRIPTS= softwareupdate
 SCRIPTSDIR= ${BINDIR}
 SCRIPTSMODE= 0555
 MAN= softwareupdate.8
+FILESGROUPS+= DEFAULTS
+DEFAULTS= softwareupdate.conf
+DEFAULTSDIR= /etc/defaults
+DEFAULTSMODE= 0644
 FILESGROUPS+= LAUNCHD
 LAUNCHD= org.rmxos.softwareupdate.boot-check.plist
 LAUNCHDDIR= /etc/launchd.d
@@ -15,7 +19,7 @@ ZIG_SYSROOT_FLAGS= --sysroot ${ZIG_SYSROOT}
 .endif
 ZIG_TARGET?= x86_64-freebsd
 all: softwareupdate
-softwareupdate: ${.CURDIR}/softwareupdate.zig ${.CURDIR}/update.zig ${.CURDIR}/install.zig ${.CURDIR}/lifecycle.zig
+softwareupdate: ${.CURDIR}/softwareupdate.zig ${.CURDIR}/update.zig ${.CURDIR}/install.zig ${.CURDIR}/lifecycle.zig ${.CURDIR}/download.zig
 	${ZIG} build-exe -O ReleaseSafe -lc ${ZIG_SYSROOT}/usr/lib/libarchive.so.7 -I${SRCTOP}/contrib/libarchive/libarchive -target ${ZIG_TARGET} -mcpu=x86_64_v3 ${ZIG_SYSROOT_FLAGS} ${.CURDIR}/softwareupdate.zig -femit-bin=${.TARGET}
 CLEANFILES+= softwareupdate
 HAS_TESTS=

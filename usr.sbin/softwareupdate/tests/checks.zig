@@ -183,7 +183,7 @@ pub fn statusFields() !void {
 pub fn unimplemented() !void {
     const f = try Fixture.init();
     defer f.deinit();
-    for ([_][]const []const u8{ &.{"--download"}, &.{ "--download", "all" }, &.{ "--install", "rmxos-bbbbbbbbbbbb" }, &.{"--install"} }) |args| {
+    for ([_][]const []const u8{&.{"--install"}}) |args| {
         const out = try f.output(args, good);
         defer a.free(out.text);
         try expect(out.rc != 0 and std.mem.eql(u8, out.text, "softwareupdate: not yet implemented\n"));

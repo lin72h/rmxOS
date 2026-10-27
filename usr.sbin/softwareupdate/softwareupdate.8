@@ -8,7 +8,7 @@
 .Nm
 .Fl -help
 .Nm
-.Fl -list Op Fl -catalog Ar directory
+.Fl -list Op Fl -catalog Ar directory-or-URL
 .Nm
 .Fl -history
 .Nm
@@ -26,17 +26,24 @@
 .Nm
 provides update discovery, build inspection, and local archive installation
 into a new boot environment.
-Downloads and named installs remain unimplemented.
-They parse their operands, check boot-environment preconditions, and fail with
-.Dq softwareupdate: not yet implemented .
+Updates may be downloaded from a published catalog, then installed by name
+from the verified incoming cache or from an absolute archive path.
 The accepted filters
 .Fl -recommended , -all , -os-only
 select OS updates; every update is an OS update.
 .Pp
 .Fl -catalog
-selects a local published directory, defaulting to
-.Pa /var/db/softwareupdate/catalog .
-URLs and downloads are not implemented.
+selects a local published directory, file:// URL, or http(s):// URL.
+A URL may name the publication directory or its catalog.json.
+Without that option, catalog_url is read from
+.Pa /etc/defaults/softwareupdate.conf
+and then overridden by
+.Pa /etc/softwareupdate.conf .
+The setting is a single catalog_url=value assignment, optionally double-quoted;
+blank lines and full-line comments beginning with # are accepted.
+No shell expansion is performed.
+The shipped default is empty: no default publication host exists yet.
+List and download then name catalog_url and exit nonzero until configured.
 The directory contains
 .Pa catalog.json
 and one
@@ -45,9 +52,40 @@ with a
 .Pa update.tar.sha256
 sidecar per entry.
 The sidecar is a lowercase 64-digit SHA256, optionally followed by whitespace.
-List checks regular archive files, declared byte sizes and sidecar agreement;
-it does not verify archive contents or provide authentication.
+Catalog reads use fetch(1). Local listing additionally checks regular archive
+files, declared byte sizes and sidecar agreement; remote listing reads catalog
+metadata only. Neither provides authentication of the publisher.
 Signing is deferred.
+.Sh DOWNLOAD AND NAMED INSTALL
+.Fl -download
+requires root. NAME downloads one catalog entry; all, or no operand, downloads
+every entry. Each archive and sidecar is fetched with fetch(1) into a private
+temporary directory under /var/db/softwareupdate/incoming.
+The archive size and SHA256 must match the catalog, and its sidecar must name
+the same SHA256. Only then is the directory renamed to its final update name.
+A failed or cut transfer removes the temporary files and never gives a partial
+file an installable name. A repeated verified download preserves existing files.
+.Pp
+.Fl -install Ar NAME
+uses /var/db/softwareupdate/incoming/NAME/update.tar and its sidecar through the
+same verification and clone-only engine as local archive installation.
+It does not download implicitly. The install boot-environment preconditions
+below still apply.
+.Sh PUBLISHING
+The build-host Mix project provides one compiled publisher command:
+.Bd -literal -offset indent
+mix softwareupdate.publish OVERLAY PREVIOUS FROM_COMMIT COMMIT TREE
+.Ed
+OVERLAY and PREVIOUS are composed overlay directories with their manifests;
+OVERLAY must also contain directories.tsv and its tree/files payloads.
+The publisher verifies payload identities, packs update.tar with the existing
+manifests, METALOG, commit, removals, report, directories.tsv and payload members,
+and writes TREE/rmxos-COMMIT12/update.tar plus update.tar.sha256.
+It appends a catalog entry whose from identity is FROM_COMMIT and the SHA256
+of PREVIOUS/manifest.tsv. Existing update names refuse; other entries and their
+archives are preserved. Catalog replacement is atomic and serialized by a
+publication lock. The new entry becomes visible only after both archive files
+are in place. This command does not sign updates or impose a downgrade floor.
 .Sh CATALOG FORMAT
 The top-level JSON object has exactly these fields:
 .Bl -tag -width restart_required
@@ -132,7 +170,8 @@ previous BE, target BE, conflict count.
 Missing history prints
 .Dq history=none .
 .Sh PRECONDITIONS
-Every changing command requires effective UID zero, a running ZFS root
+Download requires effective UID zero. Install and lifecycle commands additionally
+require a running ZFS root
 at exactly
 .Pa <pool>/ROOT/<name> ,
 a matching running entry in

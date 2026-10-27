@@ -93,11 +93,11 @@ fn put(path: [:0]const u8, bytes: []const u8, mode: u32) !void {
     try u.write(fd, bytes);
     try check(c.fchmod(fd, @intCast(mode)) == 0);
 }
-const Fixture = struct {
+pub const Fixture = struct {
     path: [:0]const u8,
     root: [:0]const u8,
     archive: [:0]const u8,
-    fn init(baseline: bool) !Fixture {
+    pub fn init(baseline: bool) !Fixture {
         const path = try a.dupeZ(u8, "/tmp/softwareupdate-apply-XXXXXX");
         try check(c.mkdtemp(path) != null);
         errdefer std.Io.Dir.cwd().deleteTree(io, path) catch {};
@@ -118,10 +118,10 @@ const Fixture = struct {
         try put(try fmt("{s}/var/db/rmxos/commit", .{root}), initial ++ "\n", 0o444);
         return f;
     }
-    fn deinit(f: Fixture) void {
+    pub fn deinit(f: Fixture) void {
         std.Io.Dir.cwd().deleteTree(io, f.path) catch {};
     }
-    fn output(f: Fixture) !u.Context {
+    pub fn output(f: Fixture) !u.Context {
         const out = c.open(try fmt("{s}/output", .{f.path}), c.O_WRONLY | c.O_CREAT | c.O_APPEND, @as(c_uint, 0o600));
         if (out < 0) return error.OpenFailed;
         return .{ .allocator = a, .root = f.root, .out = out, .err = out };
@@ -225,13 +225,13 @@ pub fn unsafe() !void {
     defer root.close();
     try std.testing.expectError(error.UnsafeParent, e.preflight(b, root));
 }
-const Fake = struct {
+pub const Fake = struct {
     f: Fixture,
     commands: std.ArrayList([]const u8) = .empty,
     clone: ?[:0]const u8 = null,
     fail_hints: bool = false,
     activated: bool = false,
-    fn command(data: ?*anyopaque, alloc: std.mem.Allocator, argv: []const [:0]const u8) anyerror![]const u8 {
+    pub fn command(data: ?*anyopaque, alloc: std.mem.Allocator, argv: []const [:0]const u8) anyerror![]const u8 {
         const self: *Fake = @ptrCast(@alignCast(data.?));
         const args = try alloc.alloc([]const u8, argv.len);
         for (argv, 0..) |v, i| args[i] = v;

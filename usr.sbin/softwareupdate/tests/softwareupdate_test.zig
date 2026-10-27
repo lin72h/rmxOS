@@ -2,6 +2,7 @@ const std = @import("std");
 const checks = @import("checks.zig");
 const install = @import("install_checks.zig");
 const lifecycle = @import("lifecycle_checks.zig");
+const catalog = @import("catalog_checks.zig");
 const c = @cImport({
     @cInclude("atf-c.h");
 });
@@ -72,7 +73,17 @@ fn directoryCase(tc: [*c]const c.atf_tc_t) callconv(.c) void {
     }
 }
 const directory_names = [_][*:0]const u8{ "declared_directories", "system_etc", "directory_validation", "directory_metadata" };
-var cases: [27]c.atf_tc_t = undefined;
+fn catalogCase(tc: [*c]const c.atf_tc_t) callconv(.c) void {
+    const functions = .{ catalog.missing, catalog.fileURL, catalog.download, catalog.nonroot, catalog.published, catalog.cut, catalog.disagreements, catalog.config };
+    inline for (functions, catalog_names) |function, name| {
+        if (std.mem.eql(u8, std.mem.span(c.atf_tc_get_ident(tc)), std.mem.span(name))) function() catch |err| {
+            if (err == error.SkipZigTest) c.atf_tc_skip("requires commissioned local publication/loopback fixtures");
+            c.atf_tc_fail("catalog/download: %s", @errorName(err).ptr);
+        };
+    }
+}
+const catalog_names = [_][*:0]const u8{ "catalog_missing", "catalog_file_url", "download", "download_nonroot", "published_install", "cut_transfer", "download_mismatch", "catalog_config" };
+var cases: [35]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     const names = [_][*:0]const u8{ "arguments", "refusals", "list_local", "malformed_catalog", "status_fields", "not_implemented", "installed", "first_update", "second_update", "install_refusals", "unsafe_paths", "fake_bectl", "hints_failure", "install_guest" };
     const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ arguments, refusals, listing, malformed, status, disabled, installed, first, second, negative, unsafePaths, fakeBE, failedHints, guest };
@@ -88,8 +99,14 @@ fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
         err = c.atf_tp_add_tc(tp, tc);
         if (c.atf_is_error(err)) return err;
     }
-    for (cases[23..], directory_names) |*tc, name| {
+    for (cases[23..27], directory_names) |*tc, name| {
         var err = c.atf_tc_init(tc, name, head, directoryCase, null, c.atf_tp_get_config(tp));
+        if (c.atf_is_error(err)) return err;
+        err = c.atf_tp_add_tc(tp, tc);
+        if (c.atf_is_error(err)) return err;
+    }
+    for (cases[27..], catalog_names) |*tc, name| {
+        var err = c.atf_tc_init(tc, name, head, catalogCase, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
         err = c.atf_tp_add_tc(tp, tc);
         if (c.atf_is_error(err)) return err;
