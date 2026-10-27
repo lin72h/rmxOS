@@ -43,10 +43,13 @@ MIGCOM?= ${OBJTOP}/usr.bin/migcom/migcom
 MIG?= sh ${.CURDIR}/../../usr.bin/migcom/mig.sh -migcom ${MIGCOM}
 
 SRCS=	asl.c asl_ipcUser.c asl_core.c asl_file.c asl_msg.c asl_object.c \
-	asl_string.c syslog.c asl_client.c asl_fd.c asl_legacy1.c \
+	asl_string.c asl_client.c asl_fd.c asl_legacy1.c \
 	asl_msg_list.c asl_store.c asl_util.c asl_common.c asl_memory.c
 
 LIBADD=	BlocksRuntime dispatch launch mach notify util
+
+# syslog(3) belongs to libc.  A private static archive must not interpose
+# Apple's alternate ASL syslog entry points into its consumers.
 
 MAN=	asl.3
 

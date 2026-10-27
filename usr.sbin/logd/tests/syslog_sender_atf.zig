@@ -257,6 +257,7 @@ fn nativeCase(_: [*c]const c.atf_tc_t) callconv(.c) void {
     var library: c.Dl_info = undefined;
     need(c.dladdr(@ptrCast(&c.syslog), &library) != 0, "syslog binding");
     _ = c.printf("op982_binding symbol=syslog object=%s\n", library.dli_fname);
+    need(library.dli_fname != null and std.mem.endsWith(u8, std.mem.span(library.dli_fname), "/libc.so.7"), "syslog must bind libc, not the private store archive");
     var name: [64]u8 = undefined;
     const tag = std.fmt.bufPrintZ(&name, "op982-native-{d}", .{c.getpid()}) catch unreachable;
     transport.openlog(tag, c.LOG_PID, c.LOG_USER);

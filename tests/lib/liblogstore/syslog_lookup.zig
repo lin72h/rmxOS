@@ -12,6 +12,7 @@ const c = @cImport({
     @cInclude("syslog.h");
     @cInclude("time.h");
     @cInclude("sys/mach/message.h");
+    @cInclude("dlfcn.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 extern fn __sys_task_self_trap() c_uint;
@@ -64,6 +65,15 @@ fn firstLookup() void {
     childNeed(h.msgh_id == 504 and h.msgh_bits & c.MACH_MSGH_BITS_COMPLEX == 0 and h.msgh_size == 36 and code == 1099);
 }
 const Kind = enum { logger, syslog, simple, setgid_child, setuid_root_child };
+fn libcBinding(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    var info: c.Dl_info = undefined;
+    for ([_]*const anyopaque{ @ptrCast(&c.syslog), @ptrCast(&c.openlog), @ptrCast(&c.closelog) }) |symbol| {
+        need(c.dladdr(symbol, &info) != 0 and info.dli_fname != null, "resolve syslog API provider");
+        const path = std.mem.span(info.dli_fname);
+        _ = c.printf("op180_syslog_binding object=%s expected=libc.so.7\n", info.dli_fname);
+        need(std.mem.endsWith(u8, path, "/libc.so.7"), "syslog API must bind libc, not the private store archive");
+    }
+}
 fn ensureUser() void {
     if (c.getpwuid(501) == null) {
         const p = c.fork();
@@ -209,10 +219,10 @@ fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(tc, "require.user", "root");
     _ = c.atf_tc_set_md_var(tc, "timeout", "20");
 }
-var cases: [7]c.atf_tc_t = undefined;
+var cases: [8]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "nonroot_logger", "nonroot_syslog", "nonroot_simple", "root_logger", "setgid_child", "setuid_root_child", "username_daemon" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ nonrootLogger, nonrootSyslog, nonrootSimple, rootLogger, setgidChild, setuidRootChild, usernameDaemon };
+    const names = [_][*:0]const u8{ "libc_binding", "nonroot_logger", "nonroot_syslog", "nonroot_simple", "root_logger", "setgid_child", "setuid_root_child", "username_daemon" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ libcBinding, nonrootLogger, nonrootSyslog, nonrootSimple, rootLogger, setgidChild, setuidRootChild, usernameDaemon };
     for (&cases, names, bodies) |*tc, name, body| {
         var err = c.atf_tc_init(tc, name, head, body, cleanup, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
