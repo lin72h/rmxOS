@@ -26,7 +26,7 @@
 .Nm
 provides update discovery, build inspection, and local archive installation
 into a new boot environment.
-Downloads, named installs, confirm, cancel and rollback remain unimplemented.
+Downloads and named installs remain unimplemented.
 They parse their operands, check boot-environment preconditions, and fail with
 .Dq softwareupdate: not yet implemented .
 The accepted filters
@@ -137,7 +137,7 @@ at exactly
 .Pa <pool>/ROOT/<name> ,
 a matching running entry in
 .Cm bectl list -H ,
-and no entry marked for a temporary boot.
+and no entry marked for a temporary boot, except cancellation of that selection.
 Named install or download targets must differ from the running BE and
 must not already exist.
 For a local archive install, the target name is derived from the validated
@@ -196,13 +196,52 @@ The command prints staged= and a reboot command.
 runs shutdown only after successful staging.
 The persistent running BE remains the fallback; this command never confirms.
 .Fl -no-auto-confirm
-is recorded in /var/db/softwareupdate/no-auto-confirm in the clone;
-automatic confirmation is not implemented yet.
+is recorded in /var/db/softwareupdate/no-auto-confirm in the clone and disables
+automatic confirmation; manual confirmation remains available.
 History is appended on the running BE under /var/db/softwareupdate/history.tsv
 and copied into the clone, with logger records tagged softwareupdate.
 The running payload and its installed manifest are not modified.
 Failures retain created clones, attempt to unmount them, and do not activate
 them unless the failure happens after the activation command succeeded.
+.Sh CONFIRMATION AND RECOVERY
+Status reports the next boot environment selected with the T flag, together
+with the staged commit recorded at installation, even before rebooting.
+On the staged boot it reports the remaining confirmation window and whether
+automatic confirmation is enabled.
+.Pp
+The launchd job org.rmxos.softwareupdate.boot-check runs once at boot.
+When the running environment equals pending-target and automatic confirmation
+is enabled, it waits until 600 seconds of monotonic uptime.
+The three identity files must match their manifest hashes, modes and owners;
+PID 1 must be launchd, mach.ko must be loaded, logd must be running, and a
+unique logger record must be readable through log.
+Failure leaves the update pending, records the reason in history and the log,
+and makes status advise rollback.
+For disposable testing only, a root-owned file not writable by group or other,
+/var/db/softwareupdate/confirm-delay, may reduce the delay to 0 through 600
+seconds. No such override is installed by default.
+.Pp
+.Cm confirm
+requires the running environment to match pending-target and the previous
+environment to exist. It makes the running environment persistent and clears
+pending-target. When installation changed /boot/loader.efi, its manifest
+identity is checked and the loader on the unique EFI system partition is
+replaced atomically, at efi/freebsd/loader.efi or EFI/BOOT/BOOTX64.EFI.
+Failure to locate or update the loader prevents confirmation.
+.Pp
+.Cm cancel
+before reboot clears the one-time selection and the owned clone's pending
+state. On an unconfirmed staged boot it selects the previous environment.
+.Cm rollback
+selects previous-be persistently; with --restart it reboots after selection.
+These commands never destroy the running environment.
+.Pp
+After confirmation the current environment and three other managed
+environments are kept, always including the previous environment.
+Older environments are removed only if an installation registry token and
+the clone's creation marker agree. Foreign environments and environments
+selected for a boot are never removed.
+Lifecycle operations take an exclusive operation lock.
 .Sh EXIT STATUS
 .Ex -std
 .Sh SEE ALSO

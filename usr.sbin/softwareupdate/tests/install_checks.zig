@@ -371,6 +371,68 @@ pub fn guestInstall() !void {
     const status = try u.capture(a, &.{ "/usr/sbin/softwareupdate", "status" });
     try u.write(1, status);
 }
+/// Explicit disposable-guest flow, separate from the installed whole plan.
+pub fn guestStageRestart() !void {
+    try check(c.geteuid() == 0);
+    const s = u.snapshot(a);
+    try check(u.refusal(s, null) == null);
+    try check(!eq(std.fs.path.basename(s.dataset.?), "rmxos-bbbbbbbbbbbb"));
+    const marker_path = "/usr/share/softwareupdate-op190";
+    var old: std.ArrayList(File) = .empty;
+    var new: std.ArrayList(File) = .empty;
+    // A fixture update records the real boot identities, without modifying them.
+    for ([_][:0]const u8{ "/boot/RMXOS-RELEASE/kernel", "/boot/RMXOS-RELEASE/mach.ko", "/sbin/launchd" }) |path| {
+        var st: c.struct_stat = undefined;
+        try check(c.stat(path, &st) == 0);
+        const row = File{ .path = path, .data = try u.readPath(a, path), .mode = @intCast(st.st_mode & 0o7777) };
+        try old.append(a, row);
+        try new.append(a, row);
+    }
+    try put(marker_path, "running original", 0o444);
+    try old.append(a, .{ .path = marker_path, .data = "running original", .mode = 0o444 });
+    try new.append(a, .{ .path = marker_path, .data = "confirmed candidate", .mode = 0o444 });
+    try put("/var/db/rmxos/manifest.tsv", try manifest(old.items), 0o444);
+    try put("/var/db/rmxos/commit", initial ++ "\n", 0o444);
+    try put("/var/db/softwareupdate/confirm-delay", "15\n", 0o444);
+    try put("/var/db/softwareupdate/op190-previous", std.fs.path.basename(s.dataset.?), 0o444);
+    const archive: [:0]const u8 = "/var/tmp/op190-update.tar";
+    try pack(archive, old.items, new.items, false);
+    _ = try observed(&.{ "/usr/sbin/softwareupdate", "status" });
+    _ = try observed(&.{ "/sbin/bectl", "list" });
+    try u.write(1, "op190 boot=1 fixture=ready restart_via=softwareupdate\n");
+    const args = [_:null]?[*:0]const u8{ "/usr/sbin/softwareupdate", "--install", archive, "--restart", null };
+    _ = c.execv(args[0].?, @ptrCast(@constCast(&args)));
+    return error.RestartExecFailed;
+}
+pub fn guestVerifyConfirmed() !void {
+    try check(c.geteuid() == 0);
+    const s = u.snapshot(a);
+    try check(s.dataset != null and eq(std.fs.path.basename(s.dataset.?), "rmxos-bbbbbbbbbbbb"));
+    for (0..120) |_| {
+        if (c.access("/var/db/rmxos/pending-target", c.F_OK) != 0) break;
+        _ = c.usleep(500000);
+    }
+    try check(c.access("/var/db/rmxos/pending-target", c.F_OK) != 0);
+    try check(eq(std.mem.trim(u8, try u.readPath(a, "/var/db/rmxos/confirmed-target"), "\n"), "rmxos-bbbbbbbbbbbb"));
+    try check(eq(try u.readPath(a, "/usr/share/softwareupdate-op190"), "confirmed candidate"));
+    const bes = try u.lifecycle.listing(a, try u.capture(a, &.{ "/sbin/bectl", "list", "-H" }));
+    const prev = try u.readPath(a, "/var/db/softwareupdate/op190-previous");
+    var persistent = false;
+    var kept = false;
+    for (bes) |be| {
+        try check(std.mem.indexOfScalar(u8, be.flags, 'T') == null);
+        if (eq(be.name, "rmxos-bbbbbbbbbbbb")) persistent = std.mem.indexOfScalar(u8, be.flags, 'N') != null and std.mem.indexOfScalar(u8, be.flags, 'R') != null;
+        if (eq(be.name, prev)) kept = true;
+    }
+    try check(persistent and kept);
+    const trail = try u.readPath(a, "/var/db/softwareupdate/history.tsv");
+    try check(std.mem.indexOf(u8, trail, "\tconfirmed\t") != null);
+    try check(std.mem.indexOf(u8, trail, "good-boot-failed") == null);
+    try check(c.access("/var/db/softwareupdate/boot-check-failed", c.F_OK) != 0);
+    try u.write(1, "op190 boot=2 current=rmxos-bbbbbbbbbbbb persistent=yes pending=none previous=kept good_boot=passed auto_confirm=passed\n");
+    _ = try observed(&.{ "/usr/sbin/softwareupdate", "status" });
+    _ = try observed(&.{ "/sbin/bectl", "list" });
+}
 test "first update baseline sidecars removals hardlinks exact repeat" {
     try fileRules(true);
 }

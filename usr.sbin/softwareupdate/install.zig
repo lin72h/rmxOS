@@ -287,7 +287,7 @@ pub const Root = struct {
     pub fn close(self: Root) void {
         _ = c.close(self.fd);
     }
-    fn parent(self: Root, path: []const u8, create: bool) !?c_int {
+    pub fn parent(self: Root, path: []const u8, create: bool) !?c_int {
         if (path.len < 2 or path[0] != '/') return error.UnsafePath;
         var fd = c.dup(self.fd);
         if (fd < 0) return error.OpenFailed;
@@ -522,7 +522,7 @@ pub const Backend = struct {
     fn native(_: ?*anyopaque, a: A, argv: []const [:0]const u8) ![]const u8 {
         return u.capture(a, argv);
     }
-    fn command(self: Backend, a: A, argv: []const [:0]const u8) ![]const u8 {
+    pub fn command(self: Backend, a: A, argv: []const [:0]const u8) ![]const u8 {
         return self.execute(self.data, a, argv);
     }
 };
@@ -564,6 +564,13 @@ pub fn install(ctx: u.Context, o: u.Options, s: u.Snapshot, backend: Backend) !u
     const running = try inspectRunning(a, ctx.root);
     defer running.close();
     _ = try preflight(b, running);
+    const operation = try u.lifecycle.operationLock(running);
+    defer _ = c.close(operation);
+    if (ctx.root.len == 0) {
+        const fresh = u.snapshot(a);
+        if (fresh.dataset == null or !eq(fresh.dataset.?, s.dataset.?)) return error.RunningBootEnvironmentChanged;
+        if (u.refusal(fresh, target)) |reason| return ctx.diagnostic(reason);
+    }
     const scratch = try z(a, "/tmp/softwareupdate-mount-XXXXXX");
     if (c.mkdtemp(@constCast(scratch)) == null) return error.TemporaryDirectory;
     // Never recursively remove a mount point: unmount may fail, leaving the
@@ -643,6 +650,11 @@ pub fn install(ctx: u.Context, o: u.Options, s: u.Snapshot, backend: Backend) !u
     // The clone inherits the running trail, including creation and application.
     const trail = try u.readPath(a, try fmt(a, "{s}/var/db/softwareupdate/history.tsv", .{ctx.root}));
     try root.write("/var/db/softwareupdate/history.tsv", trail, 0o644);
+    var efi_changed = false;
+    for (b.new.rows) |row| if (eq(row.path, "/boot/loader.efi") and !row.deleted) {
+        efi_changed = !try running.matches(row.path, row.hash, row.mode, true);
+    };
+    try u.lifecycle.register(ctx, running, root, target, b.commit, efi_changed);
     root.close();
     root_open = false;
     _ = try backend.command(a, &.{ "/sbin/bectl", "unmount", target });
@@ -661,7 +673,7 @@ pub fn install(ctx: u.Context, o: u.Options, s: u.Snapshot, backend: Backend) !u
     }
     return 0;
 }
-fn inspectRunning(a: A, path: []const u8) !Root {
+pub fn inspectRunning(a: A, path: []const u8) !Root {
     if (path.len != 0) return Root.open(a, try z(a, path), false);
     const fd = c.open("/", c.O_RDONLY | c.O_DIRECTORY | c.O_CLOEXEC);
     if (fd < 0) return error.OpenFailed;

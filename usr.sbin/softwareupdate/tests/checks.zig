@@ -165,11 +165,25 @@ pub fn statusFields() !void {
         defer a.free(field);
         try expect(contains(out.text, field));
     }
+    // Before reboot the pending marker lives in the clone, not this root.
+    const pending_path = try f.path("/var/db/rmxos/pending-target");
+    try expect(c.unlink(pending_path) == 0);
+    try f.put("/var/db/softwareupdate/staged.tsv", "rmxos-bbbbbbbbbbbb\t" ++ "b" ** 40 ++ "\n");
+    var staged = good;
+    staged.listing = "rmxos-aaaaaaaaaaaa\tNR\t/\nrmxos-bbbbbbbbbbbb\tT\t-\n";
+    const before_boot = try f.output(&.{"status"}, staged);
+    try expect(contains(before_boot.text, "staged=rmxos-bbbbbbbbbbbb\nstaged_commit=" ++ "b" ** 40));
+    try f.put("/var/db/rmxos/pending-target", "rmxos-aaaaaaaaaaaa\n");
+    try f.put("/var/db/softwareupdate/no-auto-confirm", "yes\n");
+    try f.put("/var/db/softwareupdate/boot-check-failed", "LogProbeNotStored\n");
+    const window = try f.output(&.{"status"}, good);
+    try expect(contains(window.text, "pending_window_seconds=") and contains(window.text, "auto_confirm=disabled"));
+    try expect(contains(window.text, "good_boot=failed reason=LogProbeNotStored") and contains(window.text, "action=run softwareupdate rollback"));
 }
 pub fn unimplemented() !void {
     const f = try Fixture.init();
     defer f.deinit();
-    for ([_][]const []const u8{ &.{"--download"}, &.{ "--download", "all" }, &.{ "--install", "rmxos-bbbbbbbbbbbb" }, &.{"--install"}, &.{"confirm"}, &.{"cancel"}, &.{ "rollback", "--restart" } }) |args| {
+    for ([_][]const []const u8{ &.{"--download"}, &.{ "--download", "all" }, &.{ "--install", "rmxos-bbbbbbbbbbbb" }, &.{"--install"} }) |args| {
         const out = try f.output(args, good);
         defer a.free(out.text);
         try expect(out.rc != 0 and std.mem.eql(u8, out.text, "softwareupdate: not yet implemented\n"));

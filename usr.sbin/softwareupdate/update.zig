@@ -1,5 +1,6 @@
 const std = @import("std");
 pub const engine = @import("install.zig");
+pub const lifecycle = @import("lifecycle.zig");
 pub const c = @cImport({
     @cInclude("sys/cdefs.h");
     @cInclude("sys/types.h");
@@ -14,6 +15,7 @@ pub const c = @cImport({
     @cInclude("unistd.h");
     @cInclude("signal.h");
     @cInclude("time.h");
+    @cInclude("sys/file.h");
     @cInclude("sys/wait.h");
     @cInclude("sys/stat.h");
     @cInclude("dirent.h");
@@ -29,10 +31,10 @@ pub const help =
     \\       softwareupdate --help
     \\Options: --recommended, --all, --os-only (all updates are OS updates)
     \\Local --install verifies and stages a clone for one boot. Signing is not implemented.
-    \\Download, named install, confirm, cancel and rollback are not yet implemented.
+    \\Download and named install are not yet implemented.
     \\
 ;
-pub const Action = enum { help, list, download, install, history, status, confirm, cancel, rollback };
+pub const Action = enum { help, list, download, install, history, status, confirm, cancel, rollback, boot_check };
 pub const Options = struct { action: Action, catalog: []const u8 = "/var/db/softwareupdate/catalog", operand: ?[]const u8 = null, restart: bool = false, no_auto_confirm: bool = false };
 fn eq(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
@@ -45,7 +47,7 @@ pub fn parse(args: []const []const u8) !Options {
     while (i < args.len) : (i += 1) {
         const a = args[i];
         var found: ?Action = null;
-        inline for (.{ .{ "--help", Action.help }, .{ "--list", Action.list }, .{ "--download", Action.download }, .{ "--install", Action.install }, .{ "--history", Action.history }, .{ "status", Action.status }, .{ "confirm", Action.confirm }, .{ "cancel", Action.cancel }, .{ "rollback", Action.rollback } }) |entry| {
+        inline for (.{ .{ "--help", Action.help }, .{ "--list", Action.list }, .{ "--download", Action.download }, .{ "--install", Action.install }, .{ "--history", Action.history }, .{ "status", Action.status }, .{ "confirm", Action.confirm }, .{ "cancel", Action.cancel }, .{ "rollback", Action.rollback }, .{ "--boot-check", Action.boot_check } }) |entry| {
             if (eq(a, entry[0])) found = entry[1];
         }
         if (found) |f| {
@@ -358,10 +360,11 @@ pub fn status(ctx: Context, s: Snapshot) !void {
         const digest = hashPath(ctx.allocator, try ctx.path(path)) catch |err| if (err == error.FileNotFound) "unavailable" else return err;
         try ctx.print(ctx.out, "sha256 {s}={s}\n", .{ path, digest });
     }
-    inline for (.{ .{ "commit", "/var/db/rmxos/commit" }, .{ "staged", "/var/db/rmxos/pending-target" }, .{ "confirmed", "/var/db/rmxos/confirmed-target" } }) |field| {
+    inline for (.{ .{ "commit", "/var/db/rmxos/commit" }, .{ "confirmed", "/var/db/rmxos/confirmed-target" } }) |field| {
         const value = try ctx.optional(field[1]);
         try ctx.print(ctx.out, "{s}={s}\n", .{ field[0], if (value) |v| trim(v) else "none" });
     }
+    try lifecycle.status(ctx, s);
     const n = try sidecars(ctx, "/etc", 0);
     try ctx.print(ctx.out, "sidecars={d}\nboot_environments:\n{s}\nhistory_last_10:\n", .{ n, s.listing orelse "unavailable" });
     try history(ctx, true);
@@ -374,6 +377,8 @@ pub fn run(ctx: Context, args: []const []const u8, s: Snapshot) !u8 {
         .list => try list(ctx, o.catalog),
         .history => try history(ctx, false),
         .status => try status(ctx, s),
+        .confirm, .cancel, .rollback => return lifecycle.command(ctx, o.action, s, .{}, o.restart),
+        .boot_check => return lifecycle.bootCheck(ctx, .{}),
         else => {
             if (refusal(s, null)) |reason| return ctx.diagnostic(reason);
             // Named updates already specify their future BE. Local archives expose

@@ -1,6 +1,7 @@
 const std = @import("std");
 const checks = @import("checks.zig");
 const install = @import("install_checks.zig");
+const lifecycle = @import("lifecycle_checks.zig");
 const c = @cImport({
     @cInclude("atf-c.h");
 });
@@ -56,18 +57,46 @@ fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
         _ = c.atf_tc_set_md_var(tc, "require.config", "install_fixture");
     }
 }
-var cases: [14]c.atf_tc_t = undefined;
+fn lifecycleCase(tc: [*c]const c.atf_tc_t) callconv(.c) void {
+    const name = std.mem.span(c.atf_tc_get_ident(tc));
+    const functions = .{ lifecycle.confirm, lifecycle.rollback, lifecycle.cancelStaged, lifecycle.refusals, lifecycle.goodBoot, lifecycle.settings, lifecycle.retention, lifecycle.efi, lifecycle.autoConfirm };
+    inline for (functions, 0..) |function, i| {
+        if (std.mem.eql(u8, name, std.mem.span(lifecycle_names[i]))) function() catch |err| c.atf_tc_fail("lifecycle: %s", @errorName(err).ptr);
+    }
+}
+const lifecycle_names = [_][*:0]const u8{ "confirm", "rollback", "cancel_staged", "lifecycle_refusals", "good_boot", "confirmation_window", "retention", "efi_loader", "auto_confirm" };
+var cases: [23]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     const names = [_][*:0]const u8{ "arguments", "refusals", "list_local", "malformed_catalog", "status_fields", "not_implemented", "installed", "first_update", "second_update", "install_refusals", "unsafe_paths", "fake_bectl", "hints_failure", "install_guest" };
     const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ arguments, refusals, listing, malformed, status, disabled, installed, first, second, negative, unsafePaths, fakeBE, failedHints, guest };
-    for (&cases, names, bodies) |*tc, name, body| {
+    for (cases[0..14], names, bodies) |*tc, name, body| {
         var e = c.atf_tc_init(tc, name, head, body, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(e)) return e;
         e = c.atf_tp_add_tc(tp, tc);
         if (c.atf_is_error(e)) return e;
     }
+    for (cases[14..], lifecycle_names) |*tc, name| {
+        var err = c.atf_tc_init(tc, name, head, lifecycleCase, null, c.atf_tp_get_config(tp));
+        if (c.atf_is_error(err)) return err;
+        err = c.atf_tp_add_tc(tp, tc);
+        if (c.atf_is_error(err)) return err;
+    }
     return c.atf_no_error();
 }
 pub export fn main(argc: c_int, argv: [*c][*c]u8) c_int {
+    if (argc == 2 and std.mem.eql(u8, std.mem.span(argv[1]), "--op190-stage-restart")) {
+        install.guestStageRestart() catch |err| {
+            @import("update").write(2, @errorName(err)) catch {};
+            return 1;
+        };
+        return 1;
+    }
+    if (argc == 2 and std.mem.eql(u8, std.mem.span(argv[1]), "--op190-verify-confirmed")) {
+        install.guestVerifyConfirmed() catch |err| {
+            @import("update").write(2, @errorName(err)) catch {};
+            return 1;
+        };
+        return 0;
+    }
     return atf_tp_main(argc, argv, add);
 }
