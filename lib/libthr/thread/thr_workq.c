@@ -6,6 +6,7 @@
 
 #include "namespace.h"
 #include <sys/param.h>
+#include <sys/queue.h>
 #include <errno.h>
 #include <pthread.h>
 #include <pthread/qos_private.h>
@@ -21,6 +22,7 @@
 #include "un-namespace.h"
 
 #include "thr_workq_kern.h"
+#include "thr_workq_idle.h"
 #include "thr_private.h"
 
 __weak_reference(_pthread_workqueue_init, pthread_workqueue_init);
@@ -53,7 +55,6 @@ struct twq_runtime {
 	int			tr_dispatch_offset;
 	uint64_t		tr_queue_serialno_offs;
 	uint64_t		tr_queue_label_offs;
-	uint64_t		tr_last_activity_msec;
 	uint32_t		tr_init_features;
 	pthread_workqueue_function_t tr_legacy_func;
 	pthread_workqueue_function2_t tr_worker_func;
@@ -61,19 +62,23 @@ struct twq_runtime {
 	uint32_t		tr_live_workers;
 	uint32_t		tr_retire_budget;
 	volatile u_int		tr_wait_seq;
+	TAILQ_HEAD(, twq_worker) tr_idle_list;
+	struct twq_worker	*tr_dying;
 	struct twq_lane_runtime	tr_bucket[TWQ_NUM_BUCKETS * 2];
 };
 
 struct twq_worker {
 	struct twq_runtime	*tw_runtime;
+	TAILQ_ENTRY(twq_worker) tw_idle_entry;
+	uint64_t		tw_idle_stamp;
 };
 
 static struct twq_runtime twq_runtime = {
 	.tr_lock = DEFAULT_UMUTEX,
 	.tr_dispatch_offset = 0,
+	.tr_idle_list = TAILQ_HEAD_INITIALIZER(twq_runtime.tr_idle_list),
 };
 
-#define	TWQ_IDLE_TIMEOUT_SEC	5
 #define	TWQ_REAPER_PERIOD_MSEC	100
 #define	TWQ_RUNTIME_NUM_LANES	(TWQ_NUM_BUCKETS * 2)
 
@@ -83,6 +88,7 @@ static int twq_kernel_sync_request(uint16_t desired,
 static int twq_kernel_thread_transfer(uint16_t from_desired,
     pthread_priority_t from_priority, pthread_priority_t to_priority);
 static int twq_spawn_workers(struct twq_runtime *rt, uint16_t count);
+static int twq_start_reaper(struct twq_runtime *rt);
 static int twq_sys_kernreturn(int op, void *arg2, int arg3, int arg4);
 
 static inline bool
@@ -227,7 +233,7 @@ twq_probe_supported_features(void)
 }
 
 static uint32_t
-twq_warm_worker_floor(void)
+twq_narrow_worker_floor(void)
 {
 	long cpus;
 
@@ -247,13 +253,6 @@ twq_now_msec(void)
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	return ((uint64_t)now.tv_sec * 1000ULL +
 	    (uint64_t)now.tv_nsec / 1000000ULL);
-}
-
-static void
-twq_note_activity_locked(struct twq_runtime *rt)
-{
-
-	rt->tr_last_activity_msec = twq_now_msec();
 }
 
 static bool
@@ -556,7 +555,6 @@ twq_runtime_init_locked(struct twq_runtime *rt)
 		rt->tr_supported_features = twq_probe_supported_features();
 		rt->tr_supported_checked = 1;
 	}
-	rt->tr_last_activity_msec = twq_now_msec();
 }
 
 static void *
@@ -565,7 +563,8 @@ twq_reaper_main(void *arg)
 	struct twq_runtime *rt;
 	struct pthread *curthread;
 	pthread_priority_t redrive_priority;
-	uint32_t retire_count, warm_floor;
+	uint32_t retire_count;
+	struct twq_worker *oldest;
 	uint16_t admitted, desired, spawn_needed, wake_needed, woken_or_spawned;
 	int error, redrive_lane;
 	uint64_t now;
@@ -592,15 +591,26 @@ twq_reaper_main(void *arg)
 		}
 
 		now = twq_now_msec();
-		warm_floor = twq_warm_worker_floor();
-		if (!twq_any_pending_locked(rt) &&
-		    now - rt->tr_last_activity_msec >=
-		    (uint64_t)TWQ_IDLE_TIMEOUT_SEC * 1000ULL &&
-		    rt->tr_live_workers > warm_floor &&
-		    rt->tr_idle_workers != 0) {
-			retire_count = MIN(rt->tr_live_workers - warm_floor,
-			    rt->tr_idle_workers);
-			rt->tr_retire_budget += retire_count;
+		if (rt->tr_idle_workers <= 1) {
+			rt->tr_dying = NULL;
+			rt->tr_retire_budget = 0;
+		}
+		/* Parked pthreads belong to libthr, not the kernel TWQ lanes. */
+		if (!twq_any_pending_locked(rt) && rt->tr_dying == NULL &&
+		    rt->tr_live_workers == rt->tr_idle_workers &&
+		    rt->tr_idle_workers <= 1) {
+			rt->tr_reaper_started = 0;
+			THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
+			return (NULL);
+		}
+		oldest = TAILQ_FIRST(&rt->tr_idle_list);
+		if (rt->tr_dying == NULL && rt->tr_idle_workers > 1 &&
+		    oldest != NULL && now - oldest->tw_idle_stamp >
+		    twq_idle_delay_msec(rt->tr_idle_workers,
+		    (uint32_t)MAX(1, sysconf(_SC_NPROCESSORS_ONLN)))) {
+			retire_count = 1;
+			rt->tr_dying = oldest;
+			rt->tr_retire_budget = 1;
 			rt->tr_wait_seq++;
 			twq_trace_event_locked(rt, "reaper-retire", 0, 0, 0,
 			    retire_count, retire_count, 0);
@@ -616,7 +626,7 @@ twq_reaper_main(void *arg)
 		THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
 
 		if (retire_count != 0)
-			_thr_umtx_wake(&rt->tr_wait_seq, (int)retire_count, 0);
+			_thr_umtx_wake(&rt->tr_wait_seq, INT_MAX, 0);
 		if (!redrive)
 			continue;
 
@@ -852,7 +862,6 @@ twq_worker_main(void *arg)
 	uint16_t handoff_desired;
 	uint16_t desired;
 	uint16_t return_desired;
-	uint32_t warm_floor;
 	int handoff_lane;
 	int idle_lane;
 	int lane;
@@ -865,21 +874,23 @@ twq_worker_main(void *arg)
 	worker = arg;
 	rt = worker->tw_runtime;
 	curthread = _get_curthread();
-	warm_floor = twq_warm_worker_floor();
 	idle_lane = -1;
 
 	for (;;) {
 		THR_UMUTEX_LOCK(curthread, &rt->tr_lock);
 		rt->tr_idle_workers++;
+		worker->tw_idle_stamp = twq_now_msec();
+		TAILQ_INSERT_TAIL(&rt->tr_idle_list, worker, tw_idle_entry);
 		if (twq_lane_is_valid(idle_lane))
 			rt->tr_bucket[idle_lane].tbr_idle++;
 		for (;;) {
 			lane = twq_pick_bucket_locked(rt, idle_lane);
 			if (lane >= 0)
 				break;
-			if (rt->tr_retire_budget != 0 &&
-			    rt->tr_live_workers > warm_floor) {
-				rt->tr_retire_budget--;
+			if (rt->tr_dying == worker && rt->tr_idle_workers > 1) {
+				rt->tr_dying = NULL;
+				rt->tr_retire_budget = 0;
+				TAILQ_REMOVE(&rt->tr_idle_list, worker, tw_idle_entry);
 				if (rt->tr_idle_workers != 0)
 					rt->tr_idle_workers--;
 				if (twq_lane_is_valid(idle_lane) &&
@@ -901,6 +912,12 @@ twq_worker_main(void *arg)
 				continue;
 		}
 		rt->tr_idle_workers--;
+		TAILQ_REMOVE(&rt->tr_idle_list, worker, tw_idle_entry);
+		/* A new request may resuscitate the selected worker. */
+		if (rt->tr_dying == worker) {
+			rt->tr_dying = NULL;
+			rt->tr_retire_budget = 0;
+		}
 		if (twq_lane_is_valid(idle_lane) &&
 		    rt->tr_bucket[idle_lane].tbr_idle != 0)
 			rt->tr_bucket[idle_lane].tbr_idle--;
@@ -912,7 +929,6 @@ twq_worker_main(void *arg)
 			rt->tr_bucket[lane].tbr_ready--;
 		rt->tr_bucket[lane].tbr_active++;
 		rt->tr_bucket[lane].tbr_starting++;
-		twq_note_activity_locked(rt);
 		priority = rt->tr_bucket[lane].tbr_priority;
 		desired = twq_lane_desired_locked(rt, lane);
 		twq_trace_event_locked(rt, "worker-claim", lane, priority,
@@ -944,7 +960,6 @@ twq_worker_main(void *arg)
 		THR_UMUTEX_LOCK(curthread, &rt->tr_lock);
 		if (rt->tr_bucket[lane].tbr_active != 0)
 			rt->tr_bucket[lane].tbr_active--;
-		twq_note_activity_locked(rt);
 		return_priority = priority;
 		return_desired = twq_lane_desired_locked(rt, lane);
 		twq_trace_event_locked(rt, "worker-return", lane, priority,
@@ -1115,10 +1130,18 @@ twq_addthreads_common(uint32_t numthreads, pthread_priority_t priority)
 		THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
 		return (EPERM);
 	}
+	/* The timer thread leaves when only the warm worker remains. */
+	if (!rt->tr_reaper_started) {
+		error = twq_start_reaper(rt);
+		if (error != 0) {
+			THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
+			return (error);
+		}
+		rt->tr_reaper_started = 1;
+	}
 	rt->tr_bucket[lane].tbr_pending = MIN(UINT32_MAX - numthreads,
 	    rt->tr_bucket[lane].tbr_pending) + numthreads;
 	rt->tr_bucket[lane].tbr_priority = priority;
-	twq_note_activity_locked(rt);
 	desired = twq_lane_desired_locked(rt, lane);
 	twq_trace_event_locked(rt, "addthreads-begin", lane, priority,
 	    numthreads, 0, 0, 0);
@@ -1306,7 +1329,7 @@ _pthread_workqueue_should_narrow(pthread_priority_t priority)
 	rt = &twq_runtime;
 	curthread = _get_curthread();
 	THR_UMUTEX_LOCK(curthread, &rt->tr_lock);
-	should_narrow = rt->tr_live_workers > twq_warm_worker_floor();
+	should_narrow = rt->tr_live_workers > twq_narrow_worker_floor();
 	THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
 	return (should_narrow);
 }

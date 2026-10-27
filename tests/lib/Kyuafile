@@ -1,5 +1,7 @@
 syntax(2)
 test_suite("FreeBSD")
+include("libthr/Kyuafile")
+
 include("libdispatch/Kyuafile")
 include("libmach/Kyuafile")
 include("launchd/Kyuafile")
