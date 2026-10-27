@@ -1,0 +1,162 @@
+.Dd October 27, 2026
+.Dt SOFTWAREUPDATE 8
+.Os
+.Sh NAME
+.Nm softwareupdate
+.Nd inspect rmxOS builds and published OS updates
+.Sh SYNOPSIS
+.Nm
+.Fl -help
+.Nm
+.Fl -list Op Fl -catalog Ar directory
+.Nm
+.Fl -history
+.Nm
+.Cm status
+.Nm
+.Fl -download Op Ar NAME Ns | Ns Cm all
+.Nm
+.Fl -install Op Fl -restart Op Fl -no-auto-confirm
+.Op Ar NAME Ns | Ns Pa /path/to/update.tar
+.Nm
+.Cm confirm | cancel
+.Nm
+.Cm rollback Op Fl -restart
+.Sh DESCRIPTION
+.Nm
+provides read-only update discovery and build inspection.
+Only
+.Fl -help , -list , -history
+and
+.Cm status
+are implemented in this version.
+Changing commands parse their operands, check boot-environment preconditions,
+and fail with
+.Dq softwareupdate: not yet implemented .
+They never create, activate, confirm, remove, or modify a boot environment.
+The accepted filters
+.Fl -recommended , -all , -os-only
+select OS updates; every update is an OS update.
+.Pp
+.Fl -catalog
+selects a local published directory, defaulting to
+.Pa /var/db/softwareupdate/catalog .
+URLs and downloads are not implemented.
+The directory contains
+.Pa catalog.json
+and one
+.Pa rmxos-<commit12>/update.tar
+with a
+.Pa update.tar.sha256
+sidecar per entry.
+The sidecar is a lowercase 64-digit SHA256, optionally followed by whitespace.
+List checks regular archive files, declared byte sizes and sidecar agreement;
+it does not verify archive contents or provide authentication.
+Signing is deferred.
+.Sh CATALOG FORMAT
+The top-level JSON object has exactly these fields:
+.Bl -tag -width restart_required
+.It format
+The string
+.Dq rmxos-catalog-v1 .
+.It updates
+An array of update objects.
+Each has these required fields:
+.Bl -tag -width manifest_sha256
+.It name
+.Dq rmxos-
+followed by the first 12 lowercase hexadecimal digits of commit.
+Names must be unique and cannot contain paths.
+.It commit
+The produced build's full 40-digit lowercase hexadecimal source commit.
+.It sha256
+The archive's 64-digit lowercase hexadecimal SHA256.
+.It from
+An object containing
+.Cm commit
+(the required installed build's 40-digit commit) and
+.Cm manifest_sha256
+(the SHA256 of its complete installed manifest bytes).
+.It date
+Publication date, a nonempty string, conventionally UTC ISO 8601.
+.It size
+The archive's byte length as an unsigned integer.
+.It restart_required
+A JSON boolean indicating whether the update needs a restart.
+.El
+.El
+.Pp
+An entry has
+.Dq applies=yes
+only if both
+.Cm from.commit
+and
+.Cm from.manifest_sha256
+match
+.Pa /var/db/rmxos/commit
+and the hash of
+.Pa /var/db/rmxos/manifest.tsv .
+Missing installed identity is reported as not applicable.
+Unknown fields, duplicate names, invalid hashes and incomplete objects
+are refused.
+.Sh STATUS AND HISTORY
+.Cm status
+reports the mounted root dataset and BE name, actual SHA256 hashes of
+.Pa /boot/RMXOS-RELEASE/kernel ,
+.Pa /boot/RMXOS-RELEASE/mach.ko
+and
+.Pa /sbin/launchd ,
+the recorded commit, staged target and confirmed BE, owner
+.Pa /etc/*.rmxos-new
+sidecars recursively, the
+.Xr bectl 8
+list, and the last ten history lines.
+It does not use
+.Xr uname 1
+as build identity.
+Missing image-install identity or state is printed as
+.Dq none ;
+unavailable files or BE information are explicitly marked unavailable.
+Directory symlinks are not traversed.
+Unreadable sidecar directories are named
+as
+.Dq sidecars_unreadable
+and are not included in the sidecar count.
+.Pp
+State is read from
+.Pa /var/db/rmxos/pending-target
+and
+.Pa /var/db/rmxos/confirmed-target .
+.Fl -history
+streams the complete
+.Pa /var/db/softwareupdate/history.tsv
+without changing it.
+Status shows its last ten lines.
+Each history line is tab-separated: UTC time, action, from-commit, to-commit,
+previous BE, target BE, conflict count.
+Missing history prints
+.Dq history=none .
+.Sh PRECONDITIONS
+Every changing command requires effective UID zero, a running ZFS root
+at exactly
+.Pa <pool>/ROOT/<name> ,
+a matching running entry in
+.Cm bectl list -H ,
+and no entry marked for a temporary boot.
+Named install or download targets must differ from the running BE and
+must not already exist.
+For a local archive install, the target name is derived from its
+.Pa ./commit
+member using read-only tar output; no files are extracted.
+An unspecified or
+.Cm all
+selection does not resolve a target in this version and stops before any
+update engine runs.
+All refusals start with
+.Dq softwareupdate:
+on standard error and exit nonzero.
+.Sh EXIT STATUS
+.Ex -std
+.Sh SEE ALSO
+.Xr sha256 1 ,
+.Xr bectl 8

@@ -222,6 +222,8 @@ SUBDIR.${MK_TESTS}+=	tests
 
 .include <bsd.arch.inc.mk>
 
+SUBDIR+= softwareupdate
+
 SUBDIR_PARALLEL=
 
 # Add architecture-specific manpages

@@ -1313,6 +1313,8 @@
         ..
         sa
         ..
+        softwareupdate
+        ..
         syslogd
         ..
         sysrc
