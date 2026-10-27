@@ -1,4 +1,5 @@
 const std = @import("std");
+pub const engine = @import("install.zig");
 pub const c = @cImport({
     @cInclude("sys/cdefs.h");
     @cInclude("sys/types.h");
@@ -12,6 +13,7 @@ pub const c = @cImport({
     @cInclude("stdlib.h");
     @cInclude("unistd.h");
     @cInclude("signal.h");
+    @cInclude("time.h");
     @cInclude("sys/wait.h");
     @cInclude("sys/stat.h");
     @cInclude("dirent.h");
@@ -26,7 +28,8 @@ pub const help =
     \\       softwareupdate rollback [--restart]
     \\       softwareupdate --help
     \\Options: --recommended, --all, --os-only (all updates are OS updates)
-    \\Only --help, --list, --history and status are implemented in this version.
+    \\Local --install verifies and stages a clone for one boot. Signing is not implemented.
+    \\Download, named install, confirm, cancel and rollback are not yet implemented.
     \\
 ;
 pub const Action = enum { help, list, download, install, history, status, confirm, cancel, rollback };
@@ -365,6 +368,7 @@ pub fn status(ctx: Context, s: Snapshot) !void {
 }
 pub fn run(ctx: Context, args: []const []const u8, s: Snapshot) !u8 {
     const o = parse(args) catch return ctx.diagnostic("invalid arguments; use --help");
+    if (o.action == .install and o.operand != null and std.fs.path.isAbsolute(o.operand.?)) return @import("install.zig").install(ctx, o, s, .{});
     switch (o.action) {
         .help => try write(ctx.out, help),
         .list => try list(ctx, o.catalog),

@@ -3,7 +3,7 @@
 .Os
 .Sh NAME
 .Nm softwareupdate
-.Nd inspect rmxOS builds and published OS updates
+.Nd inspect and stage rmxOS boot-environment updates
 .Sh SYNOPSIS
 .Nm
 .Fl -help
@@ -24,16 +24,11 @@
 .Cm rollback Op Fl -restart
 .Sh DESCRIPTION
 .Nm
-provides read-only update discovery and build inspection.
-Only
-.Fl -help , -list , -history
-and
-.Cm status
-are implemented in this version.
-Changing commands parse their operands, check boot-environment preconditions,
-and fail with
+provides update discovery, build inspection, and local archive installation
+into a new boot environment.
+Downloads, named installs, confirm, cancel and rollback remain unimplemented.
+They parse their operands, check boot-environment preconditions, and fail with
 .Dq softwareupdate: not yet implemented .
-They never create, activate, confirm, remove, or modify a boot environment.
 The accepted filters
 .Fl -recommended , -all , -os-only
 select OS updates; every update is an OS update.
@@ -145,9 +140,9 @@ a matching running entry in
 and no entry marked for a temporary boot.
 Named install or download targets must differ from the running BE and
 must not already exist.
-For a local archive install, the target name is derived from its
+For a local archive install, the target name is derived from the validated
 .Pa ./commit
-member using read-only tar output; no files are extracted.
+member.
 An unspecified or
 .Cm all
 selection does not resolve a target in this version and stops before any
@@ -155,6 +150,59 @@ update engine runs.
 All refusals start with
 .Dq softwareupdate:
 on standard error and exit nonzero.
+.Sh LOCAL INSTALLATION
+.Fl -install
+with an absolute local archive path checks its SHA256 sidecar, the archive
+member set, manifests, METALOG, payload hashes, modes and removal paths before
+creating a boot environment.
+Archives use the rmx-devup pack format: manifest.tsv, previous.tsv, METALOG,
+commit, removals.json, report.json, optional baseline.tsv, and files/ payloads.
+Only regular files and declared one-level internal hard links are supported.
+Symlinks, traversal, duplicate members and extra payloads are refused.
+Signatures are not implemented.
+.Pp
+The running manifest must equal previous.tsv or manifest.tsv.
+A first update without installed manifest state requires baseline.tsv;
+its /etc inventory is used only for configuration comparisons, never deletions.
+Every destination is checked before cloning; the clone is checked again.
+Symlink parents, nonregular destinations and crossings into other datasets
+are refused.
+.Pp
+The command clones the running BE with
+.Cm bectl create -e ,
+mounts it, and writes only inside that clone.
+Candidate files use a same-directory temporary file and rename, declared modes
+and root/wheel ownership.
+Unchanged previous-only files are removed; locally changed ones are kept.
+Explicit obsolete files are removed even if edited.
+Owner-modified /etc files stay and receive candidate .rmxos-new sidecars;
+a differing existing sidecar refuses the update before cloning.
+Hard-link declarations are installed canonical-first and verified by inode
+and exact link count.
+.Pp
+The clone's RELEASE module hints are refreshed with
+.Xr kldxref 8 .
+Failure prevents activation and retains the clone for inspection.
+Build state is written under /var/db/rmxos, and the owner's loader.conf.local
+lines are preserved before appending the clone's root dataset selection.
+Candidate bytes, modes, ownership and removals are verified.
+The derived linker.hints and appended loader.conf.local are checked in their
+generated form, rather than against their pre-generation archive hashes.
+.Pp
+The clone is unmounted and selected for one boot with
+.Cm bectl activate -t .
+The command prints staged= and a reboot command.
+.Fl -restart
+runs shutdown only after successful staging.
+The persistent running BE remains the fallback; this command never confirms.
+.Fl -no-auto-confirm
+is recorded in /var/db/softwareupdate/no-auto-confirm in the clone;
+automatic confirmation is not implemented yet.
+History is appended on the running BE under /var/db/softwareupdate/history.tsv
+and copied into the clone, with logger records tagged softwareupdate.
+The running payload and its installed manifest are not modified.
+Failures retain created clones, attempt to unmount them, and do not activate
+them unless the failure happens after the activation command succeeded.
 .Sh EXIT STATUS
 .Ex -std
 .Sh SEE ALSO
