@@ -432,6 +432,7 @@ xpc_pipe_send(xpc_object_t xobj, mach_port_t dst, mach_port_t local,
 	    MACH_MSG_TYPE_MAKE_SEND);
 	message->header.msgh_remote_port = dst;
 	message->header.msgh_local_port = local;
+	message->header.msgh_id = XPC_PIPE_MESSAGE_ID;
 	message->id = id;
 	message->size = size;
 	kr = mach_msg_send(&message->header);
@@ -549,7 +550,7 @@ xpc_pipe_receive(mach_port_t local, mach_port_t *remote, xpc_object_t *result,
 int
 xpc_pipe_try_receive(mach_port_t portset, xpc_object_t *requestobj, mach_port_t *rcvport,
 	boolean_t (*demux)(mach_msg_header_t *, mach_msg_header_t *), mach_msg_size_t msgsize,
-	int flags __unused)
+	int flags)
 {
 	struct xpc_recv_message message = {0};
 	struct xpc_recv_message rsp_message = {0};
@@ -622,6 +623,55 @@ xpc_pipe_try_receive(mach_port_t portset, xpc_object_t *requestobj, mach_port_t 
 			break;
 		}
 		return (TRUE);
+	}
+	if (flags & XPC_PIPE_RECEIVE_MIG_ONLY) {
+		/* Every received OOL mapping belongs to us. The kernel preserves
+		 * physical-copy's clear deallocate bit; destruction still needs
+		 * to release its newly copied-out mapping. Do not change this bit
+		 * on the legacy decode path or on outgoing MIG replies. */
+		if ((request->msgh_bits & MACH_MSGH_BITS_COMPLEX) &&
+		    request->msgh_size >= sizeof(mach_msg_base_t) &&
+		    request->msgh_size <= capacity) {
+			mach_msg_body_t *body = (mach_msg_body_t *)(request + 1);
+			char *cursor = (char *)(body + 1);
+			char *end = (char *)request + request->msgh_size;
+			for (mach_msg_size_t i = 0; i < body->msgh_descriptor_count; i++) {
+				mach_msg_descriptor_t d;
+				size_t length;
+				if ((size_t)(end - cursor) < sizeof(d.type))
+					break;
+				memset(&d, 0, sizeof(d));
+				memcpy(&d, cursor, sizeof(d.type));
+				switch (d.type.type) {
+				case MACH_MSG_PORT_DESCRIPTOR:
+					length = sizeof(d.port);
+					break;
+				case MACH_MSG_OOL_DESCRIPTOR:
+				case MACH_MSG_OOL_VOLATILE_DESCRIPTOR:
+					length = sizeof(d.out_of_line);
+					break;
+				case MACH_MSG_OOL_PORTS_DESCRIPTOR:
+					length = sizeof(d.ool_ports);
+					break;
+				default:
+					goto raw_destroy;
+				}
+				if ((size_t)(end - cursor) < length)
+					break;
+				memcpy(&d, cursor, length);
+				if (d.type.type == MACH_MSG_OOL_PORTS_DESCRIPTOR)
+					d.ool_ports.deallocate = TRUE;
+				else if (d.type.type != MACH_MSG_PORT_DESCRIPTOR)
+					d.out_of_line.deallocate = TRUE;
+				memcpy(cursor, &d, length);
+				cursor += length;
+			}
+		}
+raw_destroy:
+		mach_msg_destroy(request);
+		*requestobj = NULL;
+		*rcvport = MACH_PORT_NULL;
+		return (0);
 	}
 	return (xpc_pipe_decode(&message, capacity, true, requestobj));
 }

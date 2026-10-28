@@ -1285,7 +1285,7 @@ launchd_mig_demux(mach_msg_header_t *request, mach_msg_header_t *reply)
 			result = xpc_domain_server(request, reply);
 #endif
 		} else {
-			_launchd_syslog(LOG_ERR, "Cannot handle MIG request with ID: 0x%x", request->msgh_id);
+			_launchd_syslog(LOG_DEBUG, "Cannot handle MIG request with ID: 0x%x", request->msgh_id);
 		}
 	} else {
 #ifdef _EXTRA_LAUNCHD_SPEW
@@ -1294,14 +1294,6 @@ launchd_mig_demux(mach_msg_header_t *request, mach_msg_header_t *reply)
 	}
 
 	return result;
-}
-
-static void
-launchd_reject_nonmig(xpc_object_t request)
-{
-	time_of_mach_msg_return = runtime_get_opaque_time();
-	_launchd_syslog(LOG_DEBUG, "Ignoring unsupported non-MIG XPC request.");
-	xpc_release(request);
 }
 
 void
@@ -1317,16 +1309,11 @@ launchd_runtime2(mach_msg_size_t msg_size)
 		/* msg_size bounds the MIG body; the receiver also requests audit data.
 		 * xpc_pipe_try_receive clamps the total to its backing buffer. */
 		result = xpc_pipe_try_receive(ipc_port_set, &request, &recvp, launchd_mig_demux,
-		    msg_size + sizeof(mach_msg_audit_trailer_t), 0);
-		if (result != 1)
+		    msg_size + sizeof(mach_msg_audit_trailer_t), XPC_PIPE_RECEIVE_MIG_ONLY);
+		if (result == 0)
+			time_of_mach_msg_return = runtime_get_opaque_time();
+		if (result != 0 && result != 1)
 			launchd_syslog(LOG_ERR, "result=%d", result);
-		if (result == 0 && request) {
-			launchd_reject_nonmig(request);
-		} else if (result == 0) {
-			_launchd_syslog(LOG_DEBUG, "MIG request.");
-		} else if (result == EINVAL) {
-			_launchd_syslog(LOG_ERR, "Rejected invalid request message.");
-		}
 	}
 }
 

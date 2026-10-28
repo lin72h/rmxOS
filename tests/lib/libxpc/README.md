@@ -78,3 +78,15 @@ Signed-zero and NaN equality are observations, not guessed expectations. No
 numeric hash value is compared across platforms; only equal-hash implication.
 The staged macOS 27 header explicitly permits NULL dictionary-create values
 (`xpc.h:1921-1924`), overriding op-213's contrary proposed interpretation.
+
+`raw_drop_test` covers `XPC_PIPE_RECEIVE_MIG_ONLY`, including send rights,
+native descriptor pipe-writer lifetime, OOL memory and OOL port arrays; a MIG
+request/reply follows a non-MIG message on the same port set. Its heap case
+uses jemalloc `stats.allocated`, like `repeatedDecodeHeap`, and the real receive
+seam with valid nvlist bytes on hosts without Mach. Set `OP233_REAL_MACH=1`
+in a Mach guest to additionally repeat the resource-bearing drops 1,024 times.
+`XPC_SO` must name the `XPC_CONSUMER_FIXTURE` library; install that test-only
+library under `/usr/tests/lib/libxpc/lib` (`XPC_TEST_RPATH`). The system library
+and PID 1 do not need the fixture. `launchd_flood.zig` is the guest workload:
+load/unload a job, send 10,000 XPC messages to the bootstrap port, compare PID 1
+RSS via `ps`, and use `launchctl list` as a final MIG barrier.
