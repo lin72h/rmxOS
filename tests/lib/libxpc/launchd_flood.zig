@@ -27,8 +27,29 @@ fn rss() usize {
     need(c.pclose(f) == 0, "ps status");
     return @intCast(c.strtoul(&buf, null, 10));
 }
+fn checkPid1() void {
+    const f = c.popen("ps -o comm= -p 1", "r");
+    need(f != null, "PID 1 ps open");
+    var buf: [128]u8 = @splat(0);
+    need(c.fgets(&buf, buf.len, f) != null, "PID 1 ps read");
+    need(c.pclose(f) == 0, "PID 1 ps status");
+    const n = std.mem.indexOfScalar(u8, &buf, 0).?;
+    need(std.mem.eql(u8, std.mem.trim(u8, buf[0..n], " \t\r\n"), "launchd"), "PID 1 is launchd");
+}
+fn jobPresent() bool {
+    const f = c.popen("launchctl list", "r");
+    need(f != null, "job list open");
+    var buf: [4096]u8 = undefined;
+    var found = false;
+    while (c.fgets(&buf, buf.len, f) != null) {
+        const n = std.mem.indexOfScalar(u8, &buf, 0).?;
+        if (std.mem.eql(u8, std.mem.trim(u8, buf[0..n], "\r\n"), "org.rmxos.op233")) found = true;
+    }
+    need(c.pclose(f) == 0, "job list status");
+    return found;
+}
 pub fn main() void {
-    command("test \"$(ps -o comm= -p 1)\" = launchd");
+    checkPid1();
     command("launchctl list >/tmp/op233-list");
     const plist = c.fopen("/tmp/op233-job.plist", "w");
     need(plist != null, "plist create");
@@ -36,13 +57,14 @@ pub fn main() void {
     need(c.fclose(plist) == 0, "plist close");
     command("launchctl load /tmp/op233-job.plist");
     command("launchctl list org.rmxos.op233");
+    need(jobPresent(), "job loaded");
     command("launchctl unload /tmp/op233-job.plist");
-    command("! launchctl list org.rmxos.op233");
+    need(!jobPresent(), "job unloaded");
     var bootstrap: u32 = 0;
     need(c.task_get_bootstrap_port(c.mach_task_self(), &bootstrap) == 0 and bootstrap != 0, "bootstrap port");
     const obj = c.xpc_dictionary_create(null, null, 0);
     need(obj != null, "dictionary");
-    const payload: [4096]u8 = @splat('X');
+    const payload: [64]u8 = @splat('X');
     c.xpc_dictionary_set_data(obj, "payload", &payload, payload.len);
     for (0..256) |i| need(op500_pipe_send(obj, bootstrap, 0, i) == 0, "warm send");
     command("launchctl list >/tmp/op233-list");
