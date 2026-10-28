@@ -251,6 +251,13 @@ fn insertFailure() void {
         for (0..128) |_| {
             const result = c.mach_port_insert_right(task, occupied, source, disp);
             fact("insertion_refused", 1, @intFromBool(result != 0));
+            if (disp == c.MACH_MSG_TYPE_MAKE_SEND_ONCE) {
+                // Destroying an unused send-once right delivers its notification.
+                // Consume that legitimate queued right before comparing counts.
+                var bytes: [256]u8 align(8) = @splat(0);
+                fact("unused_send_once_released", 0, receive(source, &bytes));
+                fact("unused_send_once_id", c.MACH_NOTIFY_SEND_ONCE, @as(*fm.Header, @ptrCast(&bytes)).id);
+            }
         }
         sameState(before, portState(source));
     }
