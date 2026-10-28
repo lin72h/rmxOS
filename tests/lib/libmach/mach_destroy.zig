@@ -6,6 +6,8 @@ const c = @cImport({
     @cInclude("sys/mman.h");
     @cInclude("errno.h");
     @cInclude("stdio.h");
+    @cInclude("unistd.h");
+    @cInclude("fcntl.h");
 });
 const Port = extern struct { name: u32, pad: u32 = 0, pad2: u16 = 0, disposition: u8, kind: u8 = c.MACH_MSG_PORT_DESCRIPTOR };
 const Ool = extern struct { address: u64, deallocate: u8 = 0, copy: u8 = c.MACH_MSG_VIRTUAL_COPY, disposition: u8 = 0, kind: u8, count: u32 };
@@ -42,7 +44,17 @@ noinline fn destroyPoisoned(h: *c.mach_msg_header_t) u32 {
     for (0..storage.len) |i| sum += poison[i];
     return sum;
 }
-fn run(second: bool) void {
+fn descriptorCount() u32 {
+    var n: u32 = 0;
+    var fd: c_int = 0;
+    const limit = c.getdtablesize();
+    while (fd < limit) : (fd += 1) {
+        if (c.fcntl(fd, c.F_GETFD) != -1) n += 1;
+    }
+    return n;
+}
+fn run(second: bool, with_file: bool) void {
+    const descriptors_before = if (with_file) descriptorCount() else 0;
     const destination = port();
     const a = port();
     const b = port();
@@ -58,6 +70,10 @@ fn run(second: bool) void {
     const ports: [*]u32 = @ptrCast(@alignCast(array));
     ports[0] = a;
     ports[1] = b;
+    var pipe: [2]c_int = undefined;
+    if (with_file) {
+        if (c.pipe(&pipe) != 0 or c.fcntl(pipe[0], c.F_SETFL, @as(c_int, c.O_NONBLOCK)) != 0) c.atf_tc_fail("pipe setup");
+    }
     var wire: [512]u8 align(8) = @splat(0);
     const h: *c.mach_msg_header_t = @ptrCast(&wire);
     h.* = std.mem.zeroes(c.mach_msg_header_t);
@@ -65,7 +81,7 @@ fn run(second: bool) void {
     h.msgh_remote_port = destination;
     h.msgh_id = 48101;
     var offset: usize = @sizeOf(c.mach_msg_header_t);
-    write(&wire, &offset, @as(u32, 4));
+    write(&wire, &offset, @as(u32, if (with_file) 5 else 4));
     const order = if (second) [4]u8{ 2, 0, 3, 1 } else [4]u8{ 0, 1, 2, 3 };
     for (order) |kind| switch (kind) {
         0 => write(&wire, &offset, Port{ .name = a, .disposition = c.MACH_MSG_TYPE_COPY_SEND }),
@@ -74,9 +90,11 @@ fn run(second: bool) void {
         3 => write(&wire, &offset, Ool{ .address = @intFromPtr(array), .kind = c.MACH_MSG_OOL_PORTS_DESCRIPTOR, .count = 2, .disposition = c.MACH_MSG_TYPE_COPY_SEND }),
         else => unreachable,
     };
+    if (with_file) write(&wire, &offset, Port{ .name = @intCast(pipe[1]), .disposition = c.MACH_MSG_TYPE_COPY_SEND });
     h.msgh_size = @intCast(offset);
     const sent = c.mach_msg(h, c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, h.msgh_size, 0, 0, 0, 0);
     if (sent != 0) c.atf_tc_fail("complex send kr=%d", sent);
+    if (with_file and c.close(pipe[1]) != 0) c.atf_tc_fail("original writer close");
     @memset(&wire, 0);
     const got = c.mach_msg(h, c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, wire.len, destination, 1000, 0);
     if (got != 0 or h.msgh_id != 48101 or (h.msgh_bits & c.MACH_MSGH_BITS_COMPLEX) == 0) c.atf_tc_fail("complex receive kr=%d", got);
@@ -95,6 +113,8 @@ fn run(second: bool) void {
             offset += @sizeOf(Ool);
         }
     }
+    const received_file = if (with_file) std.mem.bytesToValue(Port, wire[offset..][0..@sizeOf(Port)]).name else 0;
+    if (with_file and (received_file < 16 or c.fcntl(@intCast(received_file), c.F_GETFD) == -1)) c.atf_tc_fail("received native file name=%u", received_file);
     var vector: u8 = 0;
     const mapped_region = c.mincore(@ptrFromInt(ool_address), 4096, &vector);
     const mapped_array = c.mincore(@ptrFromInt(array_address), 4096, &vector);
@@ -117,22 +137,38 @@ fn run(second: bool) void {
     if (after_a != 1 or after_b != 1 or receive_after != c.KERN_INVALID_NAME or unrelated_after != 3 or region_rc != -1 or array_rc != -1 or region_errno != c.ENOMEM or array_errno != c.ENOMEM or poison != 1351680) c.atf_tc_fail("received complex message resources not destroyed");
     _ = c.munmap(region, 4096);
     _ = c.munmap(array, 4096);
+    if (with_file) {
+        var byte: u8 = 0;
+        const pipe_read = c.read(pipe[0], &byte, 1);
+        const file_rc = c.fcntl(@intCast(received_file), c.F_GETFD);
+        const file_errno = c.__error().*;
+        _ = c.close(pipe[0]);
+        for ([_]u32{ destination, a, b, unrelated }) |p| {
+            if (c.mach_port_destroy(c.mach_task_self(), p) != 0) c.atf_tc_fail("port cleanup name=%u", p);
+        }
+        const descriptors_after = descriptorCount();
+        _ = c.printf("destroy_file pipe_read_expected=0 pipe_read_observed=%ld file_rc_expected=-1 file_rc_observed=%d file_errno_expected=%d file_errno_observed=%d descriptors_expected=%u descriptors_observed=%u\n", pipe_read, file_rc, @as(c_int, c.EBADF), file_errno, descriptors_before, descriptors_after);
+        if (pipe_read != 0 or file_rc != -1 or file_errno != c.EBADF or descriptors_after != descriptors_before) c.atf_tc_fail("received file not released exactly once");
+    }
 }
 fn first(_: [*c]const c.atf_tc_t) callconv(.c) void {
-    run(false);
+    run(false, false);
 }
 fn secondOrder(_: [*c]const c.atf_tc_t) callconv(.c) void {
-    run(true);
+    run(true, false);
+}
+fn destroyReleasesFileDescriptor(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    run(false, true);
 }
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-var cases: [2]c.atf_tc_t = undefined;
+var cases: [3]c.atf_tc_t = undefined;
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "20");
 }
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "destroy_ports_first", "destroy_ool_first" };
-    const bodies = .{ &first, &secondOrder };
-    inline for (0..2) |i| {
+    const names = [_][*:0]const u8{ "destroy_ports_first", "destroy_ool_first", "destroyReleasesFileDescriptor" };
+    const bodies = .{ &first, &secondOrder, &destroyReleasesFileDescriptor };
+    inline for (0..3) |i| {
         const err = c.atf_tc_init(&cases[i], names[i], &head, bodies[i], null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
         const added = c.atf_tp_add_tc(tp, &cases[i]);

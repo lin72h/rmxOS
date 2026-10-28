@@ -51,6 +51,7 @@
 #include <sys/types.h>
 
 #include <stdlib.h>
+#include <unistd.h>
 #include <sys/queue.h>
 
 #include <mach/mach.h>
@@ -183,7 +184,15 @@ mach_msg_destroy_port(mach_port_t port, mach_msg_type_name_t type)
       case MACH_MSG_TYPE_MOVE_SEND:
       case MACH_MSG_TYPE_MOVE_SEND_ONCE:
 	/* destroy the send/send-once right */
-	(void) mach_port_deallocate(mach_task_self(), port);
+	if (mach_port_deallocate(mach_task_self(), port) == KERN_INVALID_NAME) {
+	    /*
+	     * rmxOS copies a file-context port out as a native descriptor,
+	     * without a Mach entry.  Only that missing-entry result permits
+	     * native close; successful right deallocation must not close the
+	     * descriptor that still backs a receive right or other send refs.
+	     */
+	    (void) close((int)port);
+	}
 	break;
 
       case MACH_MSG_TYPE_MOVE_RECEIVE:
