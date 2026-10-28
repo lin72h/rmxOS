@@ -10,6 +10,7 @@ pub const c = @cImport({
 });
 const fixtures = @import("fixtures.zig");
 const Row = struct { eventMessage: []const u8, formatString: []const u8, messageType: []const u8, op: u32 };
+pub var emit_hook: ?*const fn ([*:0]const u8, []const u8, c_uint, u32) void = null;
 const a = std.heap.page_allocator;
 fn eq(x: []const u8, y: []const u8) bool {
     return std.mem.eql(u8, x, y);
@@ -159,6 +160,7 @@ pub fn oracle() !void {
         var flat: [c.__OSLOG_CODEC_STORAGE]u8 = undefined;
         var flat_size: usize = 0;
         const kind: c_uint = if (eq(row.messageType, "Fault")) 17 else if (eq(row.messageType, "Error")) 16 else if (eq(row.messageType, "Info")) 1 else if (eq(row.messageType, "Debug")) 2 else 0;
+        if (emit_hook) |hook| hook(sample.format, sample.bytes[0..sample.size], kind, row.op);
         const flatten = c.__oslog_codec_flatten(&sample.bytes, sample.size, kind, Source.read, &source, &flat, flat.len, &flat_size);
         if (flatten != 0) {
             try print("oracle[{d}] flatten={d} format={s}\n", .{ index, flatten, format });
@@ -233,6 +235,32 @@ pub fn wire() !void {
     std.mem.writeInt(u64, buffer[4..12], @intFromPtr(input.strings[0]), .little);
     try expect(c.__oslog_codec_flatten(&buffer, buffer.len, 0, Source.read, &source, &flat, flat.len, &length) == 0);
     try expect(eq(flat[0..length], &.{ 2, 1, 0x22, 4, 0, 0, 7, 0, 's', 'e', 'c', 'r', 'e', 't', 0 }));
+    var bounded = [_]u8{ 2, 2, 0x12, 4, 3, 0, 0, 0, 0x22, 8, 0, 0, 0, 0, 0, 0, 0, 0 };
+    std.mem.writeInt(u64, bounded[10..18], @intFromPtr(input.strings[0]), .little);
+    try expect(c.__oslog_codec_flatten(&bounded, bounded.len, 0, Source.read, &source, &flat, flat.len, &length) == 0);
+    try expect(eq(flat[0..length], &.{ 2, 2, 0x12, 4, 3, 0, 0, 0, 0x22, 4, 0, 0, 3, 0, 's', 'e', 'c' }));
+    const bounded_format = "%{public}.3s";
+    try expect(c.__oslog_codec_render(bounded_format, bounded_format.len, &flat, length, &output, output.len, &n) == 0);
+    try expect(eq(output[0..n], "sec"));
+    bounded[4] = 0;
+    try expect(c.__oslog_codec_flatten(&bounded, bounded.len, 0, Source.read, &source, &flat, flat.len, &length) == 0);
+    const empty_format = "%{public}.0s";
+    try expect(c.__oslog_codec_render(empty_format, empty_format.len, &flat, length, &output, output.len, &n) == 0);
+    try expect(n == 0);
+    // Exactly 1024 metadata bytes: a precision-zero string needs no data byte.
+    var full: [1028]u8 = @splat(0);
+    full[0] = 2;
+    full[1] = 169;
+    var at: usize = 2;
+    for (0..167) |i| {
+        const size: usize = if (i < 165) 4 else 8;
+        full[at + 1] = @intCast(size);
+        at += size + 2;
+    }
+    // Skip bounded's standalone header when embedding its two commands.
+    std.mem.copyForwards(u8, full[at..], bounded[2..]);
+    try expect(c.__oslog_codec_flatten(&full, full.len, 0, Source.read, &source, &flat, flat.len, &length) == 0);
+    try expect(length == 1024 and flat[1] == 169 and std.mem.eql(u8, flat[1018..1024], &.{ 0x22, 4, 0, 0, 0, 0 }));
     try print("wire ranges/privacy/counts/scalars/percent PASS\n", .{});
 }
 test "74 macOS oracle eventMessages" {

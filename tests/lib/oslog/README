@@ -1,5 +1,45 @@
 Internal os_log codec tests (op-201)
 
+Public API (op-207): oslog_api_test registers objects, oracle and canary.
+It links the installed libc and reads the real logd store in a Mach guest.
+The supplied probe sources under oracle_inputs are unchanged; compiler flags
+permit their original warnings. The two approved native exceptions are the
+observed ASLR pointer value and A03's writable FreeBSD strerror buffer.
+Separate deterministic public-entry replays still match all 74 oracle rows.
+api_checks.zig replaces the internal send only for host builds. Host parser/
+store iteration is a component harness; it does not prove Mach transport,
+daemon startup, dispatch queues or BSD-output routing.
+
+The public header derives from XNU's APSL header, not the SDK. Format strings
+live in the readonly ELF .os_log section. An opaque local token replaces the
+Mach-O dso header; log.h does not redeclare trace.h's __dso_handle. Emit entries
+capture the caller PC and serialize public data only, using libc's existing
+Mach send and shared syslog mutex. Public pointer reads use kernel copyin via
+an owned pipe, with no process signal handler. Log objects are immortal and
+interned by subsystem/category. Their prefix also supports libdispatch's
+generic retain/release; libc delegates non-log objects to that runtime.
+
+Record keys below org.rmxos.logd are type (raw u8 in decimal), subsystem,
+category, formatString, threadID, machTimestamp (uptime ns), senderImagePath,
+senderImageBuildID (GNU ELF build-ID hex, empty if absent), senderImagePC
+(offset from lowest PT_LOAD address), and traceID (opaque decimal u64).
+Legacy ASL Level is notice/info/error/critical for default/info/error/fault.
+Empty values use ASL's existing octal-NUL escape, preserving empty strings
+instead of null-valued keys. No store-format or logd change is required.
+
+%S is refused without sending. Precision-capped strings follow XNU and omit
+their NUL; a budget-truncated string retains its terminator and marker. The
+precision-zero boundary has a wire regression. The fault budget remains the
+single measured profile described below. The canary seed is host-random test
+data; the case PID and a fresh random nonce make each invocation distinct.
+Store/text scans stream without a file-size cap. Case reads page back to a
+saved message-ID boundary, excluding historical records with a reused PID.
+An ordered end marker proves the disabled/refused calls produced no record.
+The guest scans
+store bytes, text and kernel console history; the host validator also scans
+the entire captured serial for the private prefix. Its public console marker
+is an explicit positive control, since logd has no console rule.
+
 oracle.json contains the eventMessage, formatString and messageType fields of
 all 34 op963 and 40 op970 rows from the staged macOS 27 oracle. The source
 manifest SHA256 is c14e12c938d7b89dbbf86e01614d5da0a96c9b819d62d863dbfe77570a215d84.
@@ -32,4 +72,5 @@ items. No 32-string kernel restriction is applied to user space.
 Enablement and record metadata are outside this codec. Disabled/debug and the
 crashing Objective-C %@ call in the probes have no stored oracle row to replay.
 Object/data/errno/mask descriptors are unsupported; malformed/unsupported inputs
-return an error. No public API, installed header, emitter or logd change is made.
+return an error. The codec exports no public API or installed header; op-207
+adds the separate public wrapper described above. logd remains unchanged.

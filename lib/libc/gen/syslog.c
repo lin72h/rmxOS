@@ -69,7 +69,8 @@ static int	LogMask = 0xff;		/* mask of priorities to be logged */
 static uint64_t LogRefused;
 static pid_t LogRefusedPid;
 static struct timespec LogReportTime;
-static pthread_mutex_t	syslog_mutex = PTHREAD_MUTEX_INITIALIZER;
+__hidden pthread_mutex_t __libc_syslog_mutex = PTHREAD_MUTEX_INITIALIZER;
+#define syslog_mutex __libc_syslog_mutex
 
 #define	THREAD_LOCK()							\
 	do { 								\

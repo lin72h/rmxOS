@@ -220,6 +220,7 @@ static void
 field(FILE *fp, const char *key, const char *value)
 {
 	fprintf(fp, "[%s ", key);
+	if (*value == 0) fputs("\\000", fp);
 	for (const unsigned char *p = (const void *)value; *p; p++) {
 		if (*p == '\\' || *p == '[' || *p == ']')
 			fputc('\\', fp);

@@ -152,6 +152,7 @@ SRCS+= \
 	sysctlnametomib.c \
 	syslog.c \
 	oslog_codec.c \
+	oslog.c \
 	asl_private.c \
 	simple_asl.c \
 	telldir.c \

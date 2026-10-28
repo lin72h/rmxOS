@@ -181,7 +181,7 @@ __oslog_codec_flatten(const unsigned char *input, size_t n, unsigned type,
 	unsigned count = 0, flags = 0, f;
 	int error, precision = -1;
 	uintptr_t pointer;
-	bool secret, truncated;
+	bool secret, truncated, terminated;
 
 	if (used == NULL)
 		return (EINVAL);
@@ -221,7 +221,7 @@ __oslog_codec_flatten(const unsigned char *input, size_t n, unsigned type,
 			flags |= 1;
 		} else if (cmd->type == STRING || cmd->type == WIDE) {
 			room = limit - 2 - m - size - d;
-			if (room == 0) {
+			if (room == 0 && precision != 0) {
 				m -= 2;
 				break;
 			}
@@ -245,16 +245,18 @@ __oslog_codec_flatten(const unsigned char *input, size_t n, unsigned type,
 					break;
 				data[d + len++] = ch;
 			}
-			if (len == room) {
+			if (len == room && precision != 0) {
 				len--;
 				truncated = true;
 			}
 			kept = truncated ? utf8_prefix(data + d, len) : len;
-			data[d + kept] = 0;
+			terminated = truncated || precision < 0;
+			if (terminated)
+				data[d + kept] = 0;
 			put16(meta + m, d);
 			put16(meta + m + 2,
-			    (kept + 1) | (truncated ? 0x8000 : 0));
-			d += kept + 1;
+			    (kept + terminated) | (truncated ? 0x8000 : 0));
+			d += kept + terminated;
 		} else
 			memcpy(meta + m, cmd->data, size);
 		m += size;
@@ -468,7 +470,8 @@ __oslog_codec_render(const char *format, size_t size, const unsigned char *flat,
 	struct spec s;
 	size_t end, i, p = 0, start, off, len;
 	unsigned index = 0;
-	int error, value;
+	int error, value, count_value;
+	bool terminated;
 	const struct command *cmd;
 	char mismatch[256];
 
@@ -489,9 +492,16 @@ __oslog_codec_render(const char *format, size_t size, const unsigned char *flat,
 		} else if (cmd->type == STRING || cmd->type == WIDE) {
 			off = get16(cmd->data);
 			len = get16(cmd->data + 2) & 0x7fff;
-			if (len == 0 || off > n - end || len > n - end - off ||
-			    flat[end + off + len - 1] != 0 ||
-			    memchr(flat + end + off, 0, len - 1) != NULL)
+			terminated = true;
+			if (i > 0 && items[i - 1].type == COUNT &&
+			    !(items[i - 1].flags & PRIVATE)) {
+				memcpy(&count_value, items[i - 1].data, 4);
+				if (count_value >= 0 && !(get16(cmd->data + 2) & 0x8000))
+					terminated = false;
+			}
+			if (off > n - end || len > n - end - off ||
+			    (terminated && (len == 0 || flat[end + off + len - 1] != 0)) ||
+			    memchr(flat + end + off, 0, len - terminated) != NULL)
 				return (EINVAL);
 		}
 	}
@@ -560,6 +570,8 @@ __oslog_codec_render(const char *format, size_t size, const unsigned char *flat,
 		} else if (s.conversion == 's') {
 			off = get16(cmd->data);
 			len = get16(cmd->data + 2) & 0x7fff;
+			terminated = !s.has_precision || value < 0 ||
+			    (get16(cmd->data + 2) & 0x8000) != 0;
 			if (s.length[0] != 0) {
 				value = snprintf(mismatch, sizeof(mismatch),
 				    "<decode: mismatch for [%.*s] got [STRING%s sz:%zu]>",
@@ -574,7 +586,7 @@ __oslog_codec_render(const char *format, size_t size, const unsigned char *flat,
 					return (error);
 			} else {
 				if ((error = append(&out, flat + end + off,
-					 len - 1)) != 0)
+					 len - terminated)) != 0)
 					return (error);
 				if (get16(cmd->data + 2) & 0x8000)
 					if ((error = append(&out,

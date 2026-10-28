@@ -6,6 +6,7 @@ NO_OBJ=
 INCS=	assumes.h \
 	base.h \
 	object.h \
+	log.h \
 	trace.h
 INCSDIR=${INCLUDEDIR}/os
 
