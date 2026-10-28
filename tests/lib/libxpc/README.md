@@ -90,3 +90,6 @@ library under `/usr/tests/lib/libxpc/lib` (`XPC_TEST_RPATH`). The system library
 and PID 1 do not need the fixture. `launchd_flood.zig` is the guest workload:
 load/unload a job, send 10,000 XPC messages to the bootstrap port, compare PID 1
 RSS via `ps`, and use `launchctl list` as a final MIG barrier.
+The fixture DSO must use the distinct SONAME `libxpc_fixture.so.5`, and test
+binaries must name that dependency explicitly. Reusing the system library's
+SONAME can select an already-loaded system `libxpc` before RUNPATH is used.

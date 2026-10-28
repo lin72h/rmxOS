@@ -4,6 +4,7 @@ SCRIPTS+= xpc_receive_test
 SCRIPTS+= receive_pending_test
 SCRIPTS+= raw_drop_test
 SCRIPTS+= object_model_test decode_lifetime_test
+CLEANFILES+= ${SCRIPTS}
 SCRIPTSDIR= ${TESTSDIR}
 ZIG?= zig
 ZIG_SYSROOT?= ${SYSROOT}
