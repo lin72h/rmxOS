@@ -922,7 +922,8 @@ mach_ports_register(
 	int i;
 
 	if ((task == TASK_NULL) ||
-	    (portsCnt > TASK_PORT_REGISTER_MAX))
+	    (portsCnt > TASK_PORT_REGISTER_MAX) ||
+	    (portsCnt != 0 && memory == NULL))
 		return KERN_INVALID_ARGUMENT;
 
 	/*

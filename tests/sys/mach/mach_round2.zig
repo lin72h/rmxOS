@@ -5,6 +5,8 @@ const projection_ports = @import("projection_ports.zig");
 const c = @cImport({
     @cInclude("atf-c.h");
     @cInclude("mach/mach.h");
+    @cInclude("mach/mach_vm.h");
+    @cInclude("mach/notify.h");
     @cInclude("sys/types.h");
     @cInclude("sys/syscall.h");
     @cInclude("sys/sysctl.h");
@@ -14,7 +16,7 @@ const c = @cImport({
     @cInclude("stdio.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-const names = [_][*:0]const u8{ "reply_send", "terminate", "file_insert", "file_insert_zero", "file_receive", "named_dead" };
+const names = [_][*:0]const u8{ "reply_send", "terminate", "file_insert", "file_insert_zero", "file_receive", "named_dead", "mig_id", "insert_failure", "register_count" };
 var cases: [names.len]c.atf_tc_t = undefined;
 fn fact(name: [*:0]const u8, expected: i64, observed: i64) void {
     _ = c.printf("round2 check=%s expected=%lld observed=%lld\n", name, @as(c_longlong, expected), @as(c_longlong, observed));
@@ -177,9 +179,136 @@ fn fileReceive() void {
     var zero: u32 = 0;
     fact("selector_cleanup", 0, c.sysctlbyname("mach.current_task_port_name", null, null, &zero, @sizeOf(u32)));
 }
+const PortState = struct { refs: u32 = 0, srights: u32 = 0, sorights: u32 = 0 };
+fn portState(port: u32) PortState {
+    fact("state_selector", 0, c.sysctlbyname("mach.current_task_port_name", null, null, @constCast(&port), @sizeOf(u32)));
+    defer {
+        var zero: u32 = 0;
+        _ = c.sysctlbyname("mach.current_task_port_name", null, null, &zero, @sizeOf(u32));
+    }
+    var buf: [512]u8 = undefined;
+    var len: usize = buf.len;
+    fact("state_snapshot", 0, c.sysctlbyname("mach.current_task_port_status", &buf, &len, null, 0));
+    var state: PortState = .{};
+    inline for (std.meta.fields(PortState)) |field| {
+        var found = false;
+        var fields = std.mem.tokenizeAny(u8, buf[0..len], " \x00");
+        while (fields.next()) |value| {
+            if (std.mem.startsWith(u8, value, field.name ++ "=")) {
+                @field(state, field.name) = std.fmt.parseInt(u32, value[field.name.len + 1 ..], 10) catch c.atf_tc_fail("invalid state field");
+                found = true;
+            }
+        }
+        if (!found) c.atf_tc_fail("missing state field");
+    }
+    return state;
+}
+fn sameState(before: PortState, after: PortState) void {
+    inline for (std.meta.fields(PortState)) |field| fact(field.name, @field(before, field.name), @field(after, field.name));
+}
+fn rpc(bytes: []align(8) u8) i32 {
+    const reply = fm.allocate();
+    defer _ = c.mach_port_destroy(c.mach_task_self(), reply);
+    const h: *c.mach_msg_header_t = @ptrCast(bytes.ptr);
+    h.msgh_bits |= c.MACH_MSG_TYPE_MAKE_SEND_ONCE << 8;
+    h.msgh_local_port = reply;
+    const expected_id: i32 = @bitCast(@as(u32, @bitCast(h.msgh_id)) +% 100);
+    fact("rpc_send", 0, c.mach_msg(h, c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, @intCast(bytes.len), 0, 0, 2000, 0));
+    var out: [512]u8 align(8) = @splat(0);
+    fact("rpc_receive", 0, receive(reply, &out));
+    const rh: *c.mach_msg_header_t = @ptrCast(&out);
+    fact("rpc_reply_id", expected_id, rh.msgh_id);
+    fact("rpc_simple", 0, rh.msgh_bits & c.MACH_MSGH_BITS_COMPLEX);
+    fact("rpc_error_size", 36, rh.msgh_size);
+    return @as(*i32, @ptrCast(@alignCast(out[32..].ptr))).*;
+}
+fn migId() void {
+    const task = c.mach_task_self();
+    const before = portState(task);
+    for ([_]i32{ -1, -1023, std.math.minInt(i32), std.math.maxInt(i32) }) |id| {
+        var bytes: [24]u8 align(8) = @splat(0);
+        const h: *c.mach_msg_header_t = @ptrCast(&bytes);
+        h.* = std.mem.zeroes(c.mach_msg_header_t);
+        h.msgh_bits = c.MACH_MSG_TYPE_COPY_SEND;
+        h.msgh_size = bytes.len;
+        h.msgh_remote_port = task;
+        h.msgh_id = id;
+        fact("unknown_mig_id", -303, rpc(&bytes));
+        sameState(before, portState(task));
+    }
+}
+fn insertFailure() void {
+    const task = c.mach_task_self();
+    const source = fm.allocate();
+    const occupied = fm.allocate();
+    const notify = fm.allocate();
+    defer _ = c.mach_port_destroy(task, source);
+    defer _ = c.mach_port_destroy(task, occupied);
+    defer _ = c.mach_port_destroy(task, notify);
+    fact("legitimate_send", 0, c.mach_port_insert_right(task, source, source, c.MACH_MSG_TYPE_MAKE_SEND));
+    const before = portState(source);
+    for ([_]u8{ c.MACH_MSG_TYPE_MAKE_SEND, c.MACH_MSG_TYPE_MAKE_SEND_ONCE }) |disp| {
+        for (0..128) |_| {
+            const result = c.mach_port_insert_right(task, occupied, source, disp);
+            fact("insertion_refused", 1, @intFromBool(result != 0));
+        }
+        sameState(before, portState(source));
+    }
+    var old: u32 = 0;
+    fact("request_no_senders", 0, c.mach_port_request_notification(task, source, c.MACH_NOTIFY_NO_SENDERS, 0, notify, c.MACH_MSG_TYPE_MAKE_SEND_ONCE, &old));
+    fact("no_previous_request", 0, old);
+    fact("remove_legitimate_send", 0, c.mach_port_deallocate(task, source));
+    var bytes: [256]u8 align(8) = @splat(0);
+    fact("no_senders_arrived", 0, receive(notify, &bytes));
+    fact("notification_id", c.MACH_NOTIFY_NO_SENDERS, @as(*fm.Header, @ptrCast(&bytes)).id);
+    fact("only_one_notification", c.MACH_RCV_TIMED_OUT, c.mach_msg(@ptrCast(&bytes), c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, bytes.len, notify, 0, 0));
+}
+fn registered(expected: u32) void {
+    var ports: [*c]u32 = null;
+    var count: u32 = 0;
+    fact("lookup_registered", 0, c.mach_ports_lookup(c.mach_task_self(), &ports, &count));
+    defer _ = c.mach_vm_deallocate(c.mach_task_self(), @intFromPtr(ports), count * @sizeOf(u32));
+    fact("registered_array_present", 1, @intFromBool(count > 0 and ports != null));
+    fact("registered_first", expected, ports[0]);
+    for (ports[0..count], 0..) |p, i| {
+        if (i != 0) fact("other_registered_empty", 0, p);
+        if (p != 0) _ = c.mach_port_deallocate(c.mach_task_self(), p);
+    }
+}
+fn registerCount() void {
+    const task = c.mach_task_self();
+    fact("clear_registered", 0, c.mach_ports_register(task, null, 0));
+    const port = fm.allocate();
+    defer _ = c.mach_port_destroy(task, port);
+    fact("registered_make_send", 0, c.mach_port_insert_right(task, port, port, c.MACH_MSG_TYPE_MAKE_SEND));
+    var array = [_]u32{port};
+    const Ool = extern struct { address: u64, deallocate: u8, copy: u8, disposition: u8, kind: u8, count: u32 };
+    for ([_][2]u32{ .{ 1, 2 }, .{ 0, 1 }, .{ 1, 1 } }) |counts| {
+        var bytes: [56]u8 align(8) = @splat(0);
+        const h: *fm.Header = @ptrCast(&bytes);
+        h.* = .{ .bits = c.MACH_MSGH_BITS_COMPLEX | c.MACH_MSG_TYPE_COPY_SEND, .size = bytes.len, .remote = task, .local = 0, .voucher = 0, .id = 3403 };
+        @as(*u32, @ptrCast(@alignCast(bytes[24..].ptr))).* = 1;
+        const d: *align(1) Ool = @ptrCast(bytes[28..].ptr);
+        d.* = .{ .address = if (counts[0] == 0) 0 else @intFromPtr(&array), .deallocate = 0, .copy = c.MACH_MSG_VIRTUAL_COPY, .disposition = c.MACH_MSG_TYPE_COPY_SEND, .kind = c.MACH_MSG_OOL_PORTS_DESCRIPTOR, .count = counts[0] };
+        bytes[48] = 1; // NDR little endian, offset 44 + 4.
+        @as(*u32, @ptrCast(@alignCast(bytes[52..].ptr))).* = counts[1];
+        const result = rpc(&bytes);
+        if (counts[0] == counts[1]) {
+            fact("matching_registration", 0, result);
+            registered(port);
+        } else {
+            fact("mismatch_refused", 1, @intFromBool(result == -304 or result == c.KERN_INVALID_ARGUMENT));
+            registered(0);
+        }
+    }
+    fact("clear_registered_after", 0, c.mach_ports_register(task, null, 0));
+}
 fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
     _ = c.alarm(20);
     const name = std.mem.span(c.atf_tc_get_ident(t));
+    if (std.mem.eql(u8, name, "mig_id")) return migId();
+    if (std.mem.eql(u8, name, "insert_failure")) return insertFailure();
+    if (std.mem.eql(u8, name, "register_count")) return registerCount();
     if (std.mem.eql(u8, name, "terminate")) {
         const task = c.mach_task_self();
         fact("terminate_unsupported", 46, c.task_terminate(task));

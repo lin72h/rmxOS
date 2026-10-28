@@ -1780,7 +1780,8 @@ ipc_kmsg_copyin_body(
 	mach_msg_descriptor_t	*user_addr, *kern_addr;
     vm_map_copy_t		copy = VM_MAP_COPY_NULL;
     boolean_t 			complex;
-    int				i, dsc_count, is_task_64bit;
+    int				is_task_64bit;
+    mach_msg_size_t		i, dsc_count;
     vm_size_t			space_needed = 0;
     vm_offset_t			paddr = 0;
     kern_return_t		mr = 0;
@@ -1793,7 +1794,17 @@ ipc_kmsg_copyin_body(
     body = (mach_msg_body_t *) (kmsg->ikm_header + 1);
     naddr = (mach_msg_descriptor_t *) (body + 1);
 
+    /* Bound the unsigned count before walking or expanding descriptors. */
+    if (kmsg->ikm_header->msgh_size < sizeof(mach_msg_base_t)) {
+        ipc_kmsg_clean_partial(kmsg, 0, NULL, 0, 0);
+        return MACH_SEND_MSG_TOO_SMALL;
+    }
     dsc_count = body->msgh_descriptor_count;
+    if (dsc_count > (kmsg->ikm_header->msgh_size -
+        sizeof(mach_msg_base_t)) / sizeof(mach_msg_legacy_port_descriptor_t)) {
+        ipc_kmsg_clean_partial(kmsg, 0, NULL, 0, 0);
+        return MACH_SEND_MSG_TOO_SMALL;
+    }
     if (dsc_count == 0)
 		return MACH_MSG_SUCCESS;
     /*
@@ -1922,6 +1933,31 @@ ipc_kmsg_copyin_body(
                     (mach_msg_descriptor_t *)((mach_msg_base_t *)kmsg->ikm_header + 1),
 								   0, 0);
             goto out;
+        }
+        /* File projections are transferable between tasks, not kernel rights. */
+        if (((ipc_port_t)dest)->ip_receiver == ipc_space_kernel) {
+            mach_msg_descriptor_t *dsc = kern_addr - 1;
+            ipc_port_t *ports = NULL;
+            mach_msg_size_t count = 0, j;
+
+            if (dsc->type.type == MACH_MSG_PORT_DESCRIPTOR) {
+                ports = &dsc->port.name;
+                count = 1;
+            } else if (dsc->type.type == MACH_MSG_OOL_PORTS_DESCRIPTOR) {
+                ports = (ipc_port_t *)dsc->ool_ports.address;
+                count = dsc->ool_ports.count;
+            }
+            for (j = 0; j < count; j++) {
+                if (IP_VALID(ports[j]) &&
+                    (ports[j]->ip_flags & IP_CONTEXT_FILE)) {
+                    /* Include this descriptor: its own copyin succeeded. */
+                    ipc_kmsg_clean_partial(kmsg, i + 1,
+                        (mach_msg_descriptor_t *)((mach_msg_base_t *)
+                        kmsg->ikm_header + 1), 0, 0);
+                    mr = MACH_SEND_INVALID_RIGHT;
+                    goto out;
+                }
+            }
         }
     }
     if (!complex)

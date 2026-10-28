@@ -32,7 +32,7 @@ const Projection = extern struct { special: [3]u32 = @splat(0), mask: u32 = 0, b
 const selectors = [_]i32{ c.TASK_SEATBELT_PORT, c.TASK_ACCESS_PORT, c.TASK_DEBUG_CONTROL_PORT };
 const launch_mask: u32 = c.EXC_MASK_CRASH | c.EXC_MASK_GUARD | c.EXC_MASK_RESOURCE;
 const launch_behavior: i32 = @bitCast(@as(u32, c.EXCEPTION_STATE_IDENTITY) | c.MACH_EXCEPTION_CODES);
-var cases: [5]c.atf_tc_t = undefined;
+var cases: [6]c.atf_tc_t = undefined;
 var label: [*:0]const u8 = undefined;
 var index: usize = 0;
 var mismatch = false;
@@ -335,14 +335,65 @@ fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "require.user", "%s", "root");
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "20");
 }
+fn nativeFileRefs(fd: c_int) c_int {
+    const Prefix = extern struct { size: c_int, kind: c_int, fd: c_int, refs: c_int };
+    var mib = [_]c_int{ c.CTL_KERN, c.KERN_PROC, c.KERN_PROC_FILEDESC, c.getpid() };
+    var buf: [65536]u8 align(8) = undefined;
+    var len: usize = buf.len;
+    setup(c.sysctl(&mib, mib.len, &buf, &len, null, 0) == 0);
+    var offset: usize = 0;
+    while (offset + @sizeOf(Prefix) <= len) {
+        const p: *align(1) const Prefix = @ptrCast(buf[offset..].ptr);
+        setup(p.size >= @sizeOf(Prefix) and @as(usize, @intCast(p.size)) <= len - offset);
+        if (p.fd == fd) return p.refs;
+        offset += @intCast(p.size);
+    }
+    c.atf_tc_fail("pipe absent from file table");
+}
+fn fileException(t: [*c]const c.atf_tc_t) callconv(.c) void {
+    load(t);
+    label = "file_exception";
+    index = 0;
+    mismatch = false;
+    var pipe: [2]c_int = undefined;
+    setup(c.pipe(&pipe) == 0);
+    const before = nativeFileRefs(pipe[1]);
+    const pid = c.fork();
+    setup(pid >= 0);
+    if (pid == 0) {
+        _ = c.alarm(10);
+        const child_before = nativeFileRefs(pipe[1]);
+        const task = c.mach_task_self();
+        const original = project();
+        const error1 = c.task_set_exception_ports(task, c.EXC_MASK_GUARD, @intCast(pipe[1]), c.EXCEPTION_DEFAULT, 0);
+        fact(c.MACH_SEND_INVALID_RIGHT, error1);
+        fact(child_before, nativeFileRefs(pipe[1]));
+        unchanged(original, project());
+        const error2 = c.task_set_special_port(task, c.TASK_ACCESS_PORT, @intCast(pipe[1]));
+        fact(c.MACH_SEND_INVALID_RIGHT, error2);
+        fact(child_before, nativeFileRefs(pipe[1]));
+        unchanged(original, project());
+        _ = c.fflush(null);
+        c._exit(if (mismatch) 1 else 0);
+    }
+    var status: c_int = 0;
+    setup(c.waitpid(pid, &status, 0) == pid);
+    fact(0, status);
+    fact(before, nativeFileRefs(pipe[1]));
+    setup(c.close(pipe[1]) == 0);
+    var byte: u8 = 0;
+    fact(0, c.read(pipe[0], &byte, 1));
+    _ = c.close(pipe[0]);
+    done();
+}
 fn cleanup(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const module = c.kldfind("rmx_translate_fixture.ko");
     if (module >= 0) _ = c.kldunload(module);
     _ = c.unlink("./op516-setid-helper");
 }
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "special", "exception", "refused", "stale_exit", "stale_exec" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &special, &exception, &refused, &staleExit, &staleExec };
+    const names = [_][*:0]const u8{ "special", "exception", "refused", "stale_exit", "stale_exec", "file_exception" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &special, &exception, &refused, &staleExit, &staleExec, &fileException };
     for (names, bodies, 0..) |name, body, i| {
         const err = c.atf_tc_init(&cases[i], name, &head, body, &cleanup, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;

@@ -37,6 +37,15 @@ fn headroom() void {
     sendRight(carried);
     defer _ = c.close(@intCast(dest));
     defer _ = c.close(@intCast(carried));
+    for ([_]u32{ 0xfffffff0, 0x80000000, 1 }) |count| {
+        var msg: [28]u8 align(8) = @splat(0);
+        const h: *fm.Header = @ptrCast(&msg);
+        h.* = .{ .bits = c.MACH_MSGH_BITS_COMPLEX | c.MACH_MSG_TYPE_COPY_SEND, .size = msg.len, .remote = dest, .local = 0, .voucher = 0, .id = 21001 };
+        @as(*u32, @ptrCast(@alignCast(msg[24..].ptr))).* = count;
+        fact("oversized_descriptor_count", c.MACH_SEND_MSG_TOO_SMALL, send(&msg));
+        var empty: [256]u8 align(8) = @splat(0);
+        fact("rejected_message_not_queued", c.MACH_RCV_TIMED_OUT, c.mach_msg(@ptrCast(&empty), c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, empty.len, dest, 0, 0));
+    }
     for ([_]u32{ 1, 5, 11, 64 }) |count| {
         var msg: [1024]u8 align(8) = @splat(0);
         const size = 28 + 12 * count + 16;

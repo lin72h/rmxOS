@@ -342,7 +342,7 @@ ipc_kobject_server(ipc_kmsg_t	request)
 	 */
 	{
 		register int key = request->ikm_header->msgh_id;
-		register int i = MIG_HASH(key);
+		register unsigned int i = (unsigned int)MIG_HASH(key);
 		register int max_iter = mig_table_max_displ;
 	
 		do

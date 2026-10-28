@@ -1676,6 +1676,8 @@ mig_internal kern_return_t __MIG_check__Request__mach_ports_register_t(__attribu
 	if (In0P->init_port_set.type != MACH_MSG_OOL_PORTS_DESCRIPTOR ||
 	    In0P->init_port_set.disposition != 17)
 		return MIG_TYPE_ERROR;
+	if (In0P->init_port_set.count != In0P->init_port_setCnt)
+		return MIG_BAD_ARGUMENTS;
 #endif	/* __MigTypeCheck */
 
 	return MACH_MSG_SUCCESS;
