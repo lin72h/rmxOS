@@ -8,6 +8,10 @@
 #include "projection.h"
 #include <servers/bootstrap.h>
 static struct op500_hooks hooks;
+/* Test-build-only field projection; never inspect an object after final release. */
+uint32_t op211_reference_count(xpc_object_t o) {
+ return __atomic_load_n(&((struct xpc_object *)o)->xo_refcnt, __ATOMIC_RELAXED);
+}
 static unsigned op736_fail_alloc;
 void op736_fail_pending_alloc(void) { __atomic_store_n(&op736_fail_alloc, 1, __ATOMIC_SEQ_CST); }
 int op736_pending_alloc_fail(void) { return __atomic_exchange_n(&op736_fail_alloc, 0, __ATOMIC_SEQ_CST); }

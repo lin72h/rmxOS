@@ -31,3 +31,50 @@ completion. A serial-queue fence ensures callback observations are complete.
 The Elixir self-check validator checks exact fact count/order, inputs, terminal
 ATF status and false-green controls. Baseline expectations are source-derived
 negative controls until a contained run records them.
+# Object-model contract cases (op-211)
+
+`object_model.zig` uses the public C XPC API. Build its ATF executable with
+the existing `XPC_CONSUMER_FIXTURE=yes` library; `coordination.c` adds only an
+atomic read-only reference-count projection. Ordinary installed libraries need
+not export that observation. macOS omits reference-count checks and tests only
+publicly observable behavior. `decode_lifetime.zig` is rmxOS-only and injects a
+valid private nvlist message through the existing receive seam; it runs the
+real pipe decoder, not a replacement. Its allocator check flushes the thread
+cache, refreshes the jemalloc statistics epoch and compares live allocated
+bytes after warmup, not RSS. No new wire protocol is introduced.
+
+Both new programs are intentionally red at `f108926b`. Do not mark their ATF
+cases as expected failures: later ownership fixes must make them pass.
+The host runner isolates each case in its own process with allocator junking.
+It suppresses Mach/dispatch process initialization using the existing host
+registration shim; object functions and decode use the real library code.
+These checks do not prove transport or connection behavior.
+
+For explorer2 on macOS 27, use the same `object_model.zig`, Zig 0.16 and the
+installed SDK (never copy SDK headers into the source tree):
+
+```zsh
+SDK=$(xcrun --sdk macosx --show-sdk-path)
+sw_vers
+xcrun --sdk macosx --show-sdk-version
+zig version
+zig test object_model.zig -lc --sysroot "$SDK" \
+  -I"$SDK/usr/include" -L"$SDK/usr/lib" -lSystem
+```
+
+Use `--test-filter retainedChild` (or another test name) to isolate a case.
+No ATF installation or rmxOS fixture/library is required in this form.
+`OS_OBJECT_USE_OBJC=0` is set inside the import: C ownership, no ARC. The
+three public constant backing symbols are declared by address only because
+Zig cannot import an extern variable of incomplete C struct type; no private
+object layout is imported. `xpc_copy` and fd functions are resolved by their
+public names so a declared-only rmxOS function becomes a test failure rather
+than preventing all other cases from linking.
+
+Four names carry `ORACLE_REQUIRED`: `booleanConstants`,
+`stringBufferIndependence`, `floatingEquality` and `resourceCopies`. Record the
+normal assertion outcomes and the `ORACLE` floating/resource observations.
+Signed-zero and NaN equality are observations, not guessed expectations. No
+numeric hash value is compared across platforms; only equal-hash implication.
+The staged macOS 27 header explicitly permits NULL dictionary-create values
+(`xpc.h:1921-1924`), overriding op-213's contrary proposed interpretation.
