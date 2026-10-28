@@ -365,6 +365,39 @@ pub const Root = struct {
         // traversal into another dataset when inspecting/creating children.
         return st;
     }
+    /// A declared path at or below the mount point of another filesystem lies
+    /// outside the boot environment, as macOS treats its data volume: the
+    /// clone has no such mount. Symlinked components still refuse.
+    pub fn outside(self: Root, path: []const u8) !bool {
+        if (!safeDirectory(path)) return error.UnsafePath;
+        if (eq(path, "/")) return false;
+        var fd = c.dup(self.fd);
+        if (fd < 0) return error.OpenFailed;
+        defer _ = c.close(fd);
+        var parts = std.mem.splitScalar(u8, path[1..], '/');
+        while (parts.next()) |part| {
+            const name = try z(self.a, part);
+            var st: c.struct_stat = undefined;
+            if (parts.peek() == null) {
+                const rc = c.fstatat(fd, name, &st, c.AT_SYMLINK_NOFOLLOW);
+                if (rc != 0) {
+                    if (std.c.errno(rc) == .NOENT) return false;
+                    return error.StatFailed;
+                }
+                return @as(u64, @intCast(st.st_dev)) != self.device;
+            }
+            const nextfd = c.openat(fd, name, c.O_RDONLY | c.O_DIRECTORY | c.O_NOFOLLOW | c.O_CLOEXEC);
+            if (nextfd < 0) {
+                if (std.c.errno(nextfd) == .NOENT) return false;
+                return error.UnsafeParent;
+            }
+            _ = c.close(fd);
+            fd = nextfd;
+            if (c.fstat(fd, &st) != 0) return error.StatFailed;
+            if (@as(u64, @intCast(st.st_dev)) != self.device) return true;
+        }
+        return false;
+    }
     pub fn createDirectory(self: Root, dir: Directory) !void {
         if (try self.directory(dir.path) != null) return;
         const parent_fd = (try self.parent(dir.path, true)).?;
@@ -521,7 +554,11 @@ pub fn preflight(b: Bundle, root: Root) !Planned {
     var deletes: std.ArrayList([]const u8) = .empty;
     var old_remove: std.ArrayList([]const u8) = .empty;
     var keeps: std.ArrayList([]const u8) = .empty;
-    for (b.dirs) |dir| _ = try root.directory(dir.path);
+    // Only the running root has such mounts. apply() still creates every
+    // declared directory in the clone and refuses a crossing there.
+    for (b.dirs) |dir| if (!try root.outside(dir.path)) {
+        _ = try root.directory(dir.path);
+    };
     for (rows) |*row| {
         const st = try root.stat(row.path);
         if (row.deleted) {

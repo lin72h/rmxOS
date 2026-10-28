@@ -159,6 +159,9 @@ fn comparePaths(ctx: u.Context, live: e.Root, sealed: e.Root, quiet: bool, direc
                 }
                 if (!found) continue;
             }
+            // A directory at or below another filesystem's mount point is
+            // outside the sealed boot environment and is not drift.
+            if (try live.outside(dir.path)) continue;
             if (try difference(live, sealed, dir.path)) |kind| {
                 drift += 1;
                 if (!quiet) try ctx.print(ctx.out, "{s} {s}\n", .{ kind, dir.path });

@@ -5,6 +5,7 @@ const checks = @import("checks.zig");
 const install = @import("install_checks.zig");
 const lifecycle = @import("lifecycle_checks.zig");
 const catalog = @import("catalog_checks.zig");
+const mounts = @import("mount_checks.zig");
 const c = @cImport({
     @cInclude("atf-c.h");
 });
@@ -108,7 +109,14 @@ fn sealFailure() !void {
     try seals.installation(true);
 }
 const seal_names = [_][*:0]const u8{ "seal_arguments", "seal_install", "seal_failure", "seal_drift", "seal_metadata", "seal_zfs" };
-var cases: [41]c.atf_tc_t = undefined;
+fn mountCase(tc: [*c]const c.atf_tc_t) callconv(.c) void {
+    const functions = .{ mounts.freebsdLayout, mounts.mountOnDeclared, mounts.acrossMount };
+    inline for (functions, mount_names) |function, name| {
+        if (std.mem.eql(u8, std.mem.span(c.atf_tc_get_ident(tc)), std.mem.span(name))) function() catch |err| c.atf_tc_fail("mounted directories: %s", @errorName(err).ptr);
+    }
+}
+const mount_names = [_][*:0]const u8{ "preflightFreeBSDLayout", "preflightMountOnDeclared", "verifyAcrossMount" };
+var cases: [44]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     const names = [_][*:0]const u8{ "arguments", "refusals", "list_local", "malformed_catalog", "status_fields", "not_implemented", "installed", "first_update", "second_update", "install_refusals", "unsafe_paths", "fake_bectl", "hints_failure", "install_guest" };
     const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ arguments, refusals, listing, malformed, status, disabled, installed, first, second, negative, unsafePaths, fakeBE, failedHints, guest };
@@ -136,8 +144,14 @@ fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
         err = c.atf_tp_add_tc(tp, tc);
         if (c.atf_is_error(err)) return err;
     }
-    for (cases[35..], seal_names) |*tc, name| {
+    for (cases[35..41], seal_names) |*tc, name| {
         var err = c.atf_tc_init(tc, name, head, sealCase, null, c.atf_tp_get_config(tp));
+        if (c.atf_is_error(err)) return err;
+        err = c.atf_tp_add_tc(tp, tc);
+        if (c.atf_is_error(err)) return err;
+    }
+    for (cases[41..], mount_names) |*tc, name| {
+        var err = c.atf_tc_init(tc, name, head, mountCase, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
         err = c.atf_tp_add_tc(tp, tc);
         if (c.atf_is_error(err)) return err;
