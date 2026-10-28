@@ -1,0 +1,35 @@
+Internal os_log codec tests (op-201)
+
+oracle.json contains the eventMessage, formatString and messageType fields of
+all 34 op963 and 40 op970 rows from the staged macOS 27 oracle. The source
+manifest SHA256 is c14e12c938d7b89dbbf86e01614d5da0a96c9b819d62d863dbfe77570a215d84.
+Rmx.Op201 in rmx-implementer regenerates the compiler inputs from those rows.
+C fixtures contain Clang builtin call sites and storage getters only. Zig owns
+the input selection, bounds-checked capture reader and assertions.
+
+oracle compares every eventMessage byte. The main executable, a linked DSO and
+dlopen/RTLD_NODELETE DSO are real native images. For the op963 pointer row it
+replays the recorded numeric address, since ASLR addresses differ between runs.
+For op970 A03, FreeBSD strerror() returns writable storage and is asserted
+private; the byte-exact replay instead uses libc's readonly sys_errlist entry
+with identical text. This does not reproduce the native macOS strerror call.
+No writable-pointer exemption is added to the codec.
+
+wire asserts the serialized range bytes, scalar formatting, precision, literal
+percent and redaction. malformed exercises short inputs, invalid ranges and
+formats (including %n), a rejected pointer, and 20,000 random input pairs. The
+host sanitizer driver instruments the C codec with Clang ASan and UBSan; its
+intentional compiler-input faults verify both instruments are active.
+
+The codec is internal to libc, with hidden symbols and an uninstalled header.
+Pointer capture is delegated to a checked reader; rendering has no pointers or
+varargs to read. The normal flattened budget is 1024 bytes. The fault profile
+uses 1998 bytes to reproduce 1989 string bytes plus header/range/NUL overhead;
+that fault budget rests on one macOS 27 call-site measurement, not a general
+fault-size contract. Arguments are charged in order, without reserving later
+items. No 32-string kernel restriction is applied to user space.
+
+Enablement and record metadata are outside this codec. Disabled/debug and the
+crashing Objective-C %@ call in the probes have no stored oracle row to replay.
+Object/data/errno/mask descriptors are unsupported; malformed/unsupported inputs
+return an error. No public API, installed header, emitter or logd change is made.
