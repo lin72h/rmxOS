@@ -6,6 +6,7 @@ const install = @import("install_checks.zig");
 const lifecycle = @import("lifecycle_checks.zig");
 const catalog = @import("catalog_checks.zig");
 const mounts = @import("mount_checks.zig");
+const lineage = @import("lineage_checks.zig");
 const c = @cImport({
     @cInclude("atf-c.h");
 });
@@ -56,6 +57,9 @@ fn guest(tc: [*c]const c.atf_tc_t) callconv(.c) void {
 fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(tc, "timeout", "20");
     _ = c.atf_tc_set_md_var(tc, "require.user", "root");
+    for ([_][]const u8{ "secondUpdateConfirms", "sealFoundAfterPromote" }) |name| {
+        if (std.mem.eql(u8, std.mem.span(c.atf_tc_get_ident(tc)), name)) _ = c.atf_tc_set_md_var(tc, "timeout", "120");
+    }
     if (std.mem.eql(u8, std.mem.span(c.atf_tc_get_ident(tc)), "seal_zfs")) {
         _ = c.atf_tc_set_md_var(tc, "timeout", "180");
         _ = c.atf_tc_set_md_var(tc, "require.config", "seal_fixture");
@@ -116,7 +120,23 @@ fn mountCase(tc: [*c]const c.atf_tc_t) callconv(.c) void {
     }
 }
 const mount_names = [_][*:0]const u8{ "preflightFreeBSDLayout", "preflightMountOnDeclared", "verifyAcrossMount" };
-var cases: [44]c.atf_tc_t = undefined;
+const lineage_names = [_][*:0]const u8{ "secondUpdateConfirms", "sealFoundAfterPromote", "failedActivateKeepsBoot", "failedConfirmRecorded" };
+fn lineageCase(tc: [*c]const c.atf_tc_t) callconv(.c) void {
+    const functions = .{ secondUpdateConfirms, sealFoundAfterPromote, lifecycle.failedActivateKeepsBoot, lifecycle.failedConfirmRecorded };
+    inline for (functions, lineage_names) |function, name| {
+        if (std.mem.eql(u8, std.mem.span(c.atf_tc_get_ident(tc)), std.mem.span(name))) function() catch |err| {
+            if (err == error.SkipZigTest) c.atf_tc_skip("requires disposable guest ZFS pool: OP242_REAL_ZFS=1");
+            c.atf_tc_fail("lineage: %s", @errorName(err).ptr);
+        };
+    }
+}
+fn secondUpdateConfirms() !void {
+    try lineage.run(false);
+}
+fn sealFoundAfterPromote() !void {
+    try lineage.run(true);
+}
+var cases: [48]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     const names = [_][*:0]const u8{ "arguments", "refusals", "list_local", "malformed_catalog", "status_fields", "not_implemented", "installed", "first_update", "second_update", "install_refusals", "unsafe_paths", "fake_bectl", "hints_failure", "install_guest" };
     const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ arguments, refusals, listing, malformed, status, disabled, installed, first, second, negative, unsafePaths, fakeBE, failedHints, guest };
@@ -150,8 +170,14 @@ fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
         err = c.atf_tp_add_tc(tp, tc);
         if (c.atf_is_error(err)) return err;
     }
-    for (cases[41..], mount_names) |*tc, name| {
+    for (cases[41..44], mount_names) |*tc, name| {
         var err = c.atf_tc_init(tc, name, head, mountCase, null, c.atf_tp_get_config(tp));
+        if (c.atf_is_error(err)) return err;
+        err = c.atf_tp_add_tc(tp, tc);
+        if (c.atf_is_error(err)) return err;
+    }
+    for (cases[44..], lineage_names) |*tc, name| {
+        var err = c.atf_tc_init(tc, name, head, lineageCase, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
         err = c.atf_tp_add_tc(tp, tc);
         if (c.atf_is_error(err)) return err;
@@ -159,6 +185,15 @@ fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     return c.atf_no_error();
 }
 pub export fn main(argc: c_int, argv: [*c][*c]u8) c_int {
+    _ = @import("update").c.setenv("OP242_TEST_HELPER", argv[0], 1);
+    if (argc == 2 and std.mem.eql(u8, std.mem.span(argv[1]), "--op242-clean")) {
+        lineage.clean() catch return 1;
+        return 0;
+    }
+    if (argc == 2 and std.mem.eql(u8, std.mem.span(argv[1]), "--op242-bectl-fail")) {
+        @import("update").write(2, "cannot promote newest: conflicting snapshot sealed\n") catch return 254;
+        return 255;
+    }
     if (argc == 2 and std.mem.eql(u8, std.mem.span(argv[1]), "--op198-zfs")) {
         seal_guest.run() catch |err| {
             @import("update").write(2, @errorName(err)) catch {};

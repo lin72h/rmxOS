@@ -86,7 +86,7 @@ pub fn run() !void {
         destroy(parent, target) catch {};
     }
     try expect(successful.activated);
-    const seal = try fmt("{s}/{s}@sealed", .{ parent, target });
+    const seal = ((try u.seals.info(a, .{}, try fmt("{s}/{s}", .{ parent, target }))) orelse return error.SealAbsent).name;
     const holds = try call(&.{ "/sbin/zfs", "holds", "-H", seal });
     try expect(std.mem.indexOf(u8, holds, "softwareupdate") != null);
     try u.write(1, holds);

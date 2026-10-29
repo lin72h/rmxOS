@@ -25,6 +25,7 @@ const Fake = struct {
                 try expect(self.snapshot and !self.inner.activated);
                 self.held = true;
             }
+            if (std.mem.eql(u8, args[1], "get")) return "1234567890\n";
             return "";
         }
         if (std.mem.eql(u8, args[0], "/sbin/bectl") and std.mem.eql(u8, args[1], "activate")) try expect(self.held);
@@ -110,14 +111,21 @@ test "seal comparison clean drift owner edits quiet and runtime scope" {
 const Metadata = struct {
     present: bool = true,
     released: bool = false,
+    destroyed: bool = false,
     fn command(ptr: ?*anyopaque, _: std.mem.Allocator, args: []const [:0]const u8) ![]const u8 {
         const self: *Metadata = @ptrCast(@alignCast(ptr.?));
         try expect(std.mem.eql(u8, args[0], "/sbin/zfs"));
-        if (std.mem.eql(u8, args[1], "list")) return if (self.present) "zroot/ROOT/rmxos-aaaaaaaaaaaa@sealed\n" else "";
-        if (std.mem.eql(u8, args[1], "get")) return "1234567890\n";
+        if (std.mem.eql(u8, args[1], "list")) return if (self.present) "zroot/ROOT/rmxos-aaaaaaaaaaaa@sealed\t1234567890\t1234567890\n" else "";
+        if (std.mem.eql(u8, args[1], "get")) return if (std.mem.eql(u8, args[args.len - 2], "org.rmxos:seal-guid")) "-\n" else "1234567890\n";
         if (std.mem.eql(u8, args[1], "holds")) return "zroot/ROOT/rmxos-aaaaaaaaaaaa@sealed\tsoftwareupdate\tdate\n";
         if (std.mem.eql(u8, args[1], "release")) {
             self.released = true;
+            return "";
+        }
+        if (std.mem.eql(u8, args[1], "destroy")) {
+            try expect(self.released);
+            self.destroyed = true;
+            self.present = false;
             return "";
         }
         return error.UnexpectedCommand;
@@ -134,7 +142,7 @@ pub fn metadata() !void {
     try u.seals.status(ctx, snap, backend);
     try expect(std.mem.indexOf(u8, try u.readPath(a, try fmt("{s}/output", .{fixture.path})), "seal_taken_unix=1234567890") != null);
     try u.seals.release(a, backend, snap.dataset.?);
-    try expect(fake.released);
+    try expect(fake.released and fake.destroyed);
     fake.present = false;
     try expect(try u.seals.verify(ctx, snap, backend, false) == 3);
     var nonroot = snap;

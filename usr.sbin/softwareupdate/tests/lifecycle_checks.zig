@@ -24,6 +24,9 @@ const Fixture = struct {
     fail: []const u8 = "",
     marker: []const u8 = "",
     mounted: ?struct { name: []const u8, path: [:0]const u8 } = null,
+    fail_activate: bool = false,
+    bootfs: []const u8 = "pool/ROOT/" ++ previous,
+    failure: ?[]const u8 = null,
     fn init() !Fixture {
         const path = try a.dupeZ(u8, "/tmp/softwareupdate-lifecycle-XXXXXX");
         if (c.mkdtemp(path) == null) return error.TemporaryDirectory;
@@ -58,7 +61,9 @@ const Fixture = struct {
         return .{ .uid = 0, .dataset = "pool/ROOT/" ++ current, .listing = f.text };
     }
     fn backend(f: *Fixture) e.Backend {
-        return .{ .data = f, .execute = execute };
+        var b = e.Backend{ .data = f, .execute = execute };
+        if (@hasField(e.Backend, "failure")) b.failure = &f.failure;
+        return b;
     }
     fn has(f: Fixture, needle: []const u8) bool {
         for (f.calls.items) |s| if (eq(s, needle)) return true;
@@ -72,6 +77,23 @@ const Fixture = struct {
             try line.appendSlice(a, arg);
         }
         try f.calls.append(a, try line.toOwnedSlice(a));
+        if (eq(args[0], "/sbin/zpool")) {
+            if (eq(args[1], "get")) return try fmt("{s}\n", .{f.bootfs});
+            if (eq(args[1], "set") and std.mem.startsWith(u8, args[2], "bootfs=")) {
+                f.bootfs = args[2][7..];
+                return "";
+            }
+            return error.UnexpectedPoolCommand;
+        }
+        if (eq(args[0], "/sbin/bectl") and eq(args[1], "activate") and eq(args[2], current) and f.fail_activate) {
+            // libbe sets bootfs before attempting promotion.
+            f.bootfs = "pool/ROOT/" ++ current;
+            f.failure = "bectl activate: wait_status=65280 stderr=cannot promote newest: conflicting snapshot sealed";
+            if (@hasDecl(u, "captureWithFailure")) {
+                if (c.getenv("OP242_TEST_HELPER")) |program| return u.captureWithFailure(a, &.{ std.mem.span(program), "--op242-bectl-fail" }, &f.failure);
+            }
+            return error.CommandFailed;
+        }
         if (eq(args[0], f.fail)) return error.FakeCommandFailure;
         if (eq(args[0], "/bin/ps")) return if (eq(f.fail, "pid1")) "init\n" else "launchd\n";
         if (eq(args[0], "/bin/pgrep")) return if (eq(f.fail, "logd")) "" else "42\n";
@@ -81,8 +103,8 @@ const Fixture = struct {
         }
         if (eq(args[0], "/usr/bin/log")) return f.marker;
         if (eq(args[0], "/sbin/zfs")) {
-            if (eq(args[1], "list")) return try fmt("{s}@sealed\n", .{args[args.len - 1]});
-            if (eq(args[1], "get")) return "1234567890\n";
+            if (eq(args[1], "list")) return try fmt("{s}@sealed\t1234567890\t1234567890\n", .{args[args.len - 1]});
+            if (eq(args[1], "get")) return if (eq(args[args.len - 2], "org.rmxos:seal-guid")) "-\n" else "1234567890\n";
             if (eq(args[1], "holds")) return try fmt("{s}\tsoftwareupdate\tdate\n", .{args[args.len - 1]});
             return "";
         }
@@ -252,6 +274,51 @@ pub fn autoConfirm() !void {
     try expect(try l.checkReady(f.ctx, f.snap(), f.backend()) == 0);
     try expect(f.has("/sbin/bectl activate " ++ current));
     try expect(try f.root.stat("/var/db/softwareupdate/boot-check-failed") == null);
+}
+pub fn failedActivateKeepsBoot() !void {
+    var f = try Fixture.init();
+    defer f.deinit();
+    f.fail_activate = true;
+    const result = l.command(f.ctx, .confirm, f.snap(), f.backend(), false);
+    if (result) |rc| try expect(rc != 0) else |_| {}
+    try expect(eq(f.bootfs, "pool/ROOT/" ++ previous));
+    try expect(try f.root.stat("/var/db/rmxos/pending-target") != null);
+    try expect(try f.root.stat("/var/db/rmxos/confirmed-target") == null);
+}
+pub fn failedConfirmRecorded() !void {
+    for ([_]bool{ false, true }) |automatic| {
+        var f = try Fixture.init();
+        defer f.deinit();
+        f.fail_activate = true;
+        try f.root.write("/var/db/softwareupdate/confirm-delay", "0\n", 0o444);
+        const out = c.open(try fmt("{s}/output", .{f.path}), c.O_RDWR | c.O_CREAT | c.O_TRUNC, @as(c_uint, 0o600));
+        try expect(out >= 0);
+        defer _ = c.close(out);
+        var ctx = f.ctx;
+        ctx.out = out;
+        ctx.err = out;
+        const result = if (automatic) l.checkReady(ctx, f.snap(), f.backend()) else l.command(ctx, .confirm, f.snap(), f.backend(), false);
+        if (result) |rc| try expect(rc != 0) else |_| {}
+        const reason = (try f.root.read("/var/db/softwareupdate/boot-check-failed")) orelse return error.ConfirmReasonMissing;
+        const history = (try f.root.read("/var/db/softwareupdate/history.tsv")) orelse return error.ConfirmHistoryMissing;
+        const output = try u.readPath(a, try fmt("{s}/output", .{f.path}));
+        const calls = try std.mem.join(a, "\n", f.calls.items);
+        for ([_][]const u8{ "conflicting snapshot sealed", "wait_status=65280" }) |needle| {
+            for ([_][]const u8{ reason, history, output, calls }) |text| try expect(std.mem.indexOf(u8, text, needle) != null);
+        }
+        try expect(std.mem.indexOf(u8, calls, "/usr/bin/logger -t softwareupdate confirm-failed") != null);
+        try expect(std.mem.indexOf(u8, history, "confirm-failed") != null);
+        try expect(try f.root.stat("/var/db/rmxos/pending-target") != null);
+        try expect(c.ftruncate(out, 0) == 0 and c.lseek(out, 0, c.SEEK_SET) == 0);
+        try l.status(ctx, f.snap());
+        try expect(std.mem.indexOf(u8, try u.readPath(a, try fmt("{s}/output", .{f.path})), "action=run softwareupdate rollback") != null);
+    }
+}
+test "failedActivateKeepsBoot" {
+    try failedActivateKeepsBoot();
+}
+test "failedConfirmRecorded" {
+    try failedConfirmRecorded();
 }
 test "automatic confirmation is gated and failure remains pending" {
     try autoConfirm();

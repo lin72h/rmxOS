@@ -257,7 +257,7 @@ pub const Fake = struct {
                 try check(eq(argv[2], "-t"));
                 self.activated = true;
             }
-        } else if (eq(argv[0], "/usr/sbin/kldxref") and self.fail_hints) return error.FakeHintsFailed;
+        } else if (eq(argv[0], "/usr/sbin/kldxref") and self.fail_hints) return error.FakeHintsFailed else if (eq(argv[0], "/sbin/zfs") and eq(argv[1], "get")) return "1234567890\n";
         return "";
     }
 };

@@ -26,21 +26,81 @@ pub fn dataset(s: u.Snapshot) ![]const u8 {
     return ds;
 }
 pub fn create(a: A, backend: e.Backend, ds: []const u8) !void {
-    const name = try fmt(a, "{s}@sealed", .{ds});
-    _ = try backend.command(a, &.{ "/sbin/zfs", "snapshot", name });
-    _ = try backend.command(a, &.{ "/sbin/zfs", "hold", "softwareupdate", name });
+    var random: [16]u8 = undefined;
+    c.arc4random_buf(&random, random.len);
+    const temporary = try fmt(a, "{s}@seal-pending-{s}", .{ ds, std.fmt.bytesToHex(random, .lower) });
+    _ = try backend.command(a, &.{ "/sbin/zfs", "snapshot", temporary });
+    const id = try guid(a, backend, temporary);
+    const name = try fmt(a, "{s}@sealed-{s}", .{ ds, id });
+    _ = try backend.command(a, &.{ "/sbin/zfs", "hold", "softwareupdate", temporary });
+    try remember(a, backend, ds, id);
+    _ = try backend.command(a, &.{ "/sbin/zfs", "rename", temporary, name });
 }
-pub const Info = struct { name: [:0]const u8, created: []const u8 };
-pub fn info(a: A, backend: e.Backend, ds: []const u8) !?Info {
+const property = "org.rmxos:seal-guid";
+pub const Info = struct { name: [:0]const u8, created: []const u8, guid: []const u8 };
+fn validGuid(id: []const u8) !void {
+    if ((std.fmt.parseInt(u64, id, 10) catch return error.InvalidSealGUID) == 0) return error.InvalidSealGUID;
+    for (id) |ch| if (!std.ascii.isDigit(ch)) return error.InvalidSealGUID;
+}
+fn guid(a: A, backend: e.Backend, name: [:0]const u8) ![]const u8 {
+    const id = trim(try backend.command(a, &.{ "/sbin/zfs", "get", "-H", "-p", "-o", "value", "guid", name }));
+    try validGuid(id);
+    return id;
+}
+fn remember(a: A, backend: e.Backend, ds: []const u8, id: []const u8) !void {
+    _ = try backend.command(a, &.{ "/sbin/zfs", "set", try fmt(a, property ++ "={s}", .{id}), try a.dupeZ(u8, ds) });
+}
+fn legacy(a: A, backend: e.Backend, ds: []const u8) !?Info {
     const name = try fmt(a, "{s}@sealed", .{ds});
-    const text = try backend.command(a, &.{ "/sbin/zfs", "list", "-H", "-t", "snapshot", "-o", "name", "-d", "1", try a.dupeZ(u8, ds) });
+    const text = try backend.command(a, &.{ "/sbin/zfs", "list", "-H", "-p", "-t", "snapshot", "-o", "name,guid,creation", "-d", "1", try a.dupeZ(u8, ds) });
+    return find(a, text, name, null);
+}
+fn find(a: A, text: []const u8, name: ?[]const u8, id: ?[]const u8) !?Info {
+    var result: ?Info = null;
     var lines = std.mem.tokenizeAny(u8, text, "\r\n");
-    while (lines.next()) |line| if (eq(line, name)) {
-        const stamp = trim(try backend.command(a, &.{ "/sbin/zfs", "get", "-H", "-p", "-o", "value", "creation", name }));
-        _ = std.fmt.parseInt(u64, stamp, 10) catch return error.InvalidSealCreation;
-        return .{ .name = name, .created = stamp };
-    };
-    return null;
+    while (lines.next()) |line| {
+        var fields = std.mem.tokenizeScalar(u8, line, '\t');
+        const path = fields.next() orelse return error.InvalidSealListing;
+        const identifier = fields.next() orelse return error.InvalidSealListing;
+        const stamp = fields.next() orelse return error.InvalidSealListing;
+        if (fields.next() != null) return error.InvalidSealListing;
+        if ((name != null and eq(path, name.?)) or (id != null and eq(identifier, id.?))) {
+            if (result != null) return error.DuplicateSealIdentity;
+            try validGuid(identifier);
+            _ = std.fmt.parseInt(u64, stamp, 10) catch return error.InvalidSealCreation;
+            result = .{ .name = try a.dupeZ(u8, path), .created = stamp, .guid = identifier };
+        }
+    }
+    return result;
+}
+pub fn info(a: A, backend: e.Backend, ds: []const u8) !?Info {
+    const id = trim(try backend.command(a, &.{ "/sbin/zfs", "get", "-H", "-p", "-o", "value", "-s", "local", property, try a.dupeZ(u8, ds) }));
+    if (id.len == 0 or eq(id, "-")) return legacy(a, backend, ds);
+    try validGuid(id);
+    const parent = std.fs.path.dirname(ds) orelse return error.NotBootEnvironment;
+    const text = try backend.command(a, &.{ "/sbin/zfs", "list", "-H", "-p", "-t", "snapshot", "-o", "name,guid,creation", "-r", try a.dupeZ(u8, parent) });
+    return find(a, text, null, id);
+}
+// Bind legacy seals before promotion can move them. This also handles an
+// update staged by an older installer: its newly installed confirmer sees
+// @sealed on both the pending environment and its confirmed predecessor.
+pub fn migrate(a: A, backend: e.Backend, ds: []const u8) !void {
+    const old = try legacy(a, backend, ds);
+    const seal = old orelse (try info(a, backend, ds)) orelse return;
+    if (old != null) {
+        var ours = false;
+        const held = try backend.command(a, &.{ "/sbin/zfs", "holds", "-H", seal.name });
+        var lines = std.mem.tokenizeScalar(u8, held, '\n');
+        while (lines.next()) |line| {
+            var fields = std.mem.tokenizeAny(u8, line, " \t");
+            if (eq(fields.next() orelse "", seal.name) and eq(fields.next() orelse "", "softwareupdate")) ours = true;
+        }
+        if (!ours) return;
+    }
+    const at = std.mem.indexOfScalar(u8, seal.name, '@') orelse return error.InvalidSealListing;
+    const name = try fmt(a, "{s}@sealed-{s}", .{ seal.name[0..at], seal.guid });
+    try remember(a, backend, ds, seal.guid);
+    if (!eq(name, seal.name)) _ = try backend.command(a, &.{ "/sbin/zfs", "rename", seal.name, name });
 }
 pub fn release(a: A, backend: e.Backend, ds: []const u8) !void {
     if (try info(a, backend, ds)) |seal| {
@@ -51,9 +111,12 @@ pub fn release(a: A, backend: e.Backend, ds: []const u8) !void {
             var fields = std.mem.tokenizeAny(u8, line, " \t");
             if (eq(fields.next() orelse "", seal.name) and eq(fields.next() orelse "", "softwareupdate")) {
                 _ = try backend.command(a, &.{ "/sbin/zfs", "release", "softwareupdate", seal.name });
-                return;
+                break;
             }
         }
+        // Promotion can leave this environment's snapshot in another BE.
+        // Destroy that snapshot explicitly, without affecting its dataset.
+        _ = try backend.command(a, &.{ "/sbin/zfs", "destroy", seal.name });
     }
 }
 pub fn status(ctx: u.Context, s: u.Snapshot, backend: e.Backend) !void {
@@ -183,16 +246,59 @@ pub fn verify(ctx: u.Context, s: u.Snapshot, backend: e.Backend, quiet: bool) !u
     };
     const live = try e.inspectRunning(ctx.allocator, ctx.root);
     defer live.close();
-    const path = try fmt(ctx.allocator, "{s}/.zfs/snapshot/sealed", .{if (ctx.root.len == 0) "" else ctx.root});
+    const at = std.mem.indexOfScalar(u8, seal.name, '@') orelse return error.InvalidSealListing;
+    const owner = seal.name[0..at];
+    const owner_name = try ctx.allocator.dupeZ(u8, std.fs.path.basename(owner));
+    var mounted: ?[:0]const u8 = null;
+    var base = ctx.root;
+    defer if (mounted) |path| {
+        _ = backend.command(ctx.allocator, &.{ "/sbin/bectl", "unmount", owner_name }) catch {};
+        _ = c.rmdir(path);
+    };
+    if (!eq(owner, ds)) {
+        const mounts = try backend.command(ctx.allocator, &.{ "/sbin/mount", "-p" });
+        var lines = std.mem.tokenizeScalar(u8, mounts, '\n');
+        var found = false;
+        while (lines.next()) |line| {
+            var fields = std.mem.tokenizeAny(u8, line, " \t");
+            if (!eq(fields.next() orelse "", owner)) continue;
+            base = fields.next() orelse return error.InvalidMountListing;
+            if (!eq(fields.next() orelse "", "zfs")) return error.InvalidMountListing;
+            found = true;
+            break;
+        }
+        if (!found) {
+            const path = try ctx.allocator.dupeZ(u8, "/tmp/softwareupdate-seal-XXXXXX");
+            if (c.mkdtemp(path) == null) return error.TemporaryDirectory;
+            errdefer _ = c.rmdir(path);
+            _ = try backend.command(ctx.allocator, &.{ "/sbin/bectl", "mount", owner_name, path });
+            mounted = path;
+            base = path;
+        }
+    }
+    const path = try fmt(ctx.allocator, "{s}/.zfs/snapshot/{s}", .{ std.mem.trimEnd(u8, base, "/"), seal.name[at + 1 ..] });
     const sealed = try e.Root.open(ctx.allocator, path, false);
-    defer sealed.close();
+    var opened = true;
+    defer if (opened) sealed.close();
     // ZFS supplies underlying-dataset directory candidates, avoiding false
     // drift from devfs/tmpfs mounted over unchanged base directories. Regular
     // files are always hashed, independent of diff timestamps or candidates.
-    const diff = try backend.command(ctx.allocator, &.{ "/sbin/zfs", "diff", "-FH", seal.name });
-    var changed = try directoryCandidates(ctx.allocator, diff, ctx.root);
-    defer changed.deinit();
-    return comparePaths(ctx, live, sealed, quiet, changed);
+    // A moved seal's owner is not the live environment being verified. Its
+    // default zfs diff would therefore compare the wrong live dataset.
+    const result = if (!eq(owner, ds)) try comparePaths(ctx, live, sealed, quiet, null) else blk: {
+        const diff = try backend.command(ctx.allocator, &.{ "/sbin/zfs", "diff", "-FH", seal.name });
+        var changed = try directoryCandidates(ctx.allocator, diff, ctx.root);
+        defer changed.deinit();
+        break :blk try comparePaths(ctx, live, sealed, quiet, changed);
+    };
+    sealed.close();
+    opened = false;
+    if (mounted) |mount| {
+        _ = try backend.command(ctx.allocator, &.{ "/sbin/bectl", "unmount", owner_name });
+        mounted = null;
+        if (c.rmdir(mount) != 0) return error.TemporaryDirectoryCleanup;
+    }
+    return result;
 }
 pub fn directoryCandidates(a: A, diff: []const u8, prefix: []const u8) !std.StringHashMap(bool) {
     var changed = std.StringHashMap(bool).init(a);

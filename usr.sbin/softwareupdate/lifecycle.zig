@@ -93,6 +93,9 @@ pub fn status(ctx: u.Context, s: u.Snapshot) !void {
     if (try ctx.optional("/var/db/softwareupdate/boot-check-failed")) |why| try ctx.print(ctx.out, "good_boot=failed reason={s}\naction=run softwareupdate rollback\n", .{trim(why)});
 }
 fn logAction(ctx: u.Context, root: e.Root, backend: e.Backend, action: []const u8, target: []const u8) !void {
+    return logReason(ctx, root, backend, action, target, null);
+}
+fn logReason(ctx: u.Context, root: e.Root, backend: e.Backend, action: []const u8, target: []const u8, reason: ?[]const u8) !void {
     const previous = (try value(root, "/var/db/rmxos/previous-be")) orelse "-";
     const commit = (try value(root, "/var/db/rmxos/commit")) orelse "-";
     const old = (try root.read("/var/db/softwareupdate/history.tsv")) orelse "";
@@ -103,8 +106,22 @@ fn logAction(ctx: u.Context, root: e.Root, backend: e.Backend, action: []const u
     var stamp: [64]u8 = undefined;
     const n = c.strftime(&stamp, stamp.len, "%Y-%m-%dT%H:%M:%SZ", &utc);
     if (n == 0) return error.ClockFailed;
-    try root.write("/var/db/softwareupdate/history.tsv", try std.fmt.allocPrint(ctx.allocator, "{s}{s}\t{s}\t{s}\t{s}\t{s}\t{s}\t0\n", .{ old, stamp[0..n], action, commit, commit, previous, target }), 0o644);
-    _ = try backend.command(ctx.allocator, &.{ "/usr/bin/logger", "-t", "softwareupdate", try fmt(ctx.allocator, "{s} target={s} commit={s}", .{ action, target, commit }) });
+    const suffix = if (reason) |why| try fmt(ctx.allocator, "\treason={s}", .{why}) else "";
+    try root.write("/var/db/softwareupdate/history.tsv", try std.fmt.allocPrint(ctx.allocator, "{s}{s}\t{s}\t{s}\t{s}\t{s}\t{s}\t0{s}\n", .{ old, stamp[0..n], action, commit, commit, previous, target, suffix }), 0o644);
+    _ = try backend.command(ctx.allocator, &.{ "/usr/bin/logger", "-t", "softwareupdate", try fmt(ctx.allocator, "{s} target={s} commit={s}{s}", .{ action, target, commit, suffix }) });
+}
+fn failed(ctx: u.Context, root: e.Root, backend: e.Backend, action: []const u8, target: []const u8, err: anyerror) !u8 {
+    const detail = if (backend.failure) |slot| slot.* orelse "" else "";
+    const why = try std.fmt.allocPrint(ctx.allocator, "{s}{s}{s}", .{ @errorName(err), if (detail.len != 0) ": " else "", detail });
+    // Keep one history row and one diagnostic even for multiline stderr.
+    for (why) |*ch| if (ch.* == '\n' or ch.* == '\r' or ch.* == '\t') {
+        ch.* = ' ';
+    };
+    try root.write("/var/db/softwareupdate/boot-check-failed", try fmt(ctx.allocator, "{s}\n", .{why}), 0o444);
+    logReason(ctx, root, backend, action, target, why) catch |record_error| {
+        return ctx.diagnostic(try fmt(ctx.allocator, "{s}: {s}; recording failed: {s}; run softwareupdate rollback", .{ action, why, @errorName(record_error) }));
+    };
+    return ctx.diagnostic(try fmt(ctx.allocator, "{s}: {s}; run softwareupdate rollback", .{ action, why }));
 }
 pub fn operationLock(root: e.Root) !c_int {
     const parent = (try root.parent("/var/db/softwareupdate/operation.lock", true)).?;
@@ -306,6 +323,51 @@ pub fn refreshEFI(ctx: u.Context, root: e.Root, backend: e.Backend) !void {
     try root.write("/var/db/softwareupdate/efi-loader-changed", "no\n", 0o444);
     try logAction(ctx, root, backend, "efi-refreshed", dest);
 }
+fn confirmPending(ctx: u.Context, root: e.Root, s: u.Snapshot, bes: []const BE, backend: e.Backend) !void {
+    const current = std.fs.path.basename(s.dataset.?);
+    const previous = (try value(root, "/var/db/rmxos/previous-be")) orelse return error.PreviousBEAbsent;
+    if (!safeBE(previous) or !exists(bes, previous) or eq(current, previous)) return error.PreviousBEAbsent;
+    const parent = std.fs.path.dirname(s.dataset.?).?;
+    const pool = try ctx.allocator.dupeZ(u8, s.dataset.?[0..std.mem.indexOfScalar(u8, s.dataset.?, '/').?]);
+    const old_bootfs = trim(try backend.command(ctx.allocator, &.{ "/sbin/zpool", "get", "-H", "-o", "value", "bootfs", pool }));
+    if (!eq(old_bootfs, try fmt(ctx.allocator, "{s}/{s}", .{ parent, previous }))) return error.UnexpectedBootDefault;
+    // Before any promote, bind every still-local legacy seal, including the
+    // predecessor and a candidate sealed by the old installer after apply.
+    for (bes) |be| try u.seals.migrate(ctx.allocator, backend, try fmt(ctx.allocator, "{s}/{s}", .{ parent, be.name }));
+    try refreshEFI(ctx, root, backend);
+    _ = backend.command(ctx.allocator, &.{ "/sbin/bectl", "activate", try ctx.allocator.dupeZ(u8, current) }) catch |err| {
+        const original = if (backend.failure) |slot| slot.* orelse @errorName(err) else @errorName(err);
+        // be_activate changes bootfs before promotion and can then fail.
+        // Restore the property directly; activating the predecessor would
+        // itself promote and could fail again for the same snapshot reason.
+        const restore = backend.command(ctx.allocator, &.{ "/sbin/zpool", "set", try fmt(ctx.allocator, "bootfs={s}", .{old_bootfs}), pool });
+        if (restore) |_| {
+            const observed = backend.command(ctx.allocator, &.{ "/sbin/zpool", "get", "-H", "-o", "value", "bootfs", pool });
+            if (observed) |bootfs| {
+                if (!eq(trim(bootfs), old_bootfs)) {
+                    if (backend.failure) |slot| slot.* = try fmt(ctx.allocator, "{s}; bootfs restoration mismatch", .{original});
+                    return error.BootDefaultRestoreFailed;
+                }
+            } else |restore_error| {
+                if (backend.failure) |slot| slot.* = try fmt(ctx.allocator, "{s}; bootfs restoration verification: {s}", .{ original, @errorName(restore_error) });
+                return error.BootDefaultRestoreFailed;
+            }
+        } else |restore_error| {
+            const extra = if (backend.failure) |slot| slot.* orelse @errorName(restore_error) else @errorName(restore_error);
+            if (backend.failure) |slot| slot.* = try fmt(ctx.allocator, "{s}; bootfs restoration failed: {s}", .{ original, extra });
+            return error.BootDefaultRestoreFailed;
+        }
+        if (backend.failure) |slot| slot.* = original;
+        return err;
+    };
+    try root.write("/var/db/rmxos/confirmed-target", try fmt(ctx.allocator, "{s}\n", .{current}), 0o444);
+    try root.remove("/var/db/rmxos/pending-target");
+    try root.remove("/var/db/softwareupdate/boot-check-failed");
+    try root.remove("/var/db/softwareupdate/staged.tsv");
+    try logAction(ctx, root, backend, "confirmed", current);
+    try ctx.print(ctx.out, "confirmed={s}\n", .{current});
+    try prune(ctx, root, backend, s.dataset.?, previous);
+}
 pub fn command(ctx: u.Context, action: u.Action, s: u.Snapshot, backend: e.Backend, restart: bool) !u8 {
     // Only cancellation may clear an outstanding one-time selection.
     var checked = s;
@@ -334,17 +396,10 @@ pub fn command(ctx: u.Context, action: u.Action, s: u.Snapshot, backend: e.Backe
         const fd = try operationLock(root);
         defer _ = c.close(fd);
         try requirePending(root, current);
-        const previous = (try value(root, "/var/db/rmxos/previous-be")) orelse return error.PreviousBEAbsent;
-        if (!safeBE(previous) or !exists(bes, previous) or eq(current, previous)) return error.PreviousBEAbsent;
-        try refreshEFI(ctx, root, backend);
-        _ = try backend.command(ctx.allocator, &.{ "/sbin/bectl", "activate", try ctx.allocator.dupeZ(u8, current) });
-        try root.write("/var/db/rmxos/confirmed-target", try std.fmt.allocPrint(ctx.allocator, "{s}\n", .{current}), 0o444);
-        try root.remove("/var/db/rmxos/pending-target");
-        try root.remove("/var/db/softwareupdate/boot-check-failed");
-        try root.remove("/var/db/softwareupdate/staged.tsv");
-        try logAction(ctx, root, backend, "confirmed", current);
-        try ctx.print(ctx.out, "confirmed={s}\n", .{current});
-        try prune(ctx, root, backend, s.dataset.?, previous);
+        var detail: ?[]const u8 = null;
+        var tracked = backend;
+        if (tracked.failure == null) tracked.failure = &detail;
+        confirmPending(ctx, root, s, bes, tracked) catch |err| return failed(ctx, root, tracked, "confirm-failed", current, err);
         return 0;
     }
     if (action == .rollback or (action == .cancel and pending != null and eq(pending.?, current))) {
@@ -417,10 +472,9 @@ pub fn checkReady(ctx: u.Context, s: u.Snapshot, backend: e.Backend) !u8 {
     if (try uptime() < try delay(root)) return 0;
     // Re-read after waiting: manual confirm/cancel may have ended the window.
     if (!eq((try value(root, "/var/db/rmxos/pending-target")) orelse "", pending)) return 0;
-    goodBoot(ctx, root, backend) catch |err| {
-        try root.write("/var/db/softwareupdate/boot-check-failed", try std.fmt.allocPrint(ctx.allocator, "{s}\n", .{@errorName(err)}), 0o444);
-        try logAction(ctx, root, backend, "good-boot-failed", pending);
-        return ctx.diagnostic("good-boot check failed; run softwareupdate rollback");
-    };
-    return command(ctx, .confirm, s, backend, false);
+    var detail: ?[]const u8 = null;
+    var tracked = backend;
+    if (tracked.failure == null) tracked.failure = &detail;
+    goodBoot(ctx, root, tracked) catch |err| return failed(ctx, root, tracked, "good-boot-failed", pending, err);
+    return command(ctx, .confirm, s, tracked, false);
 }

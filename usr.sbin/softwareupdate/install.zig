@@ -658,11 +658,14 @@ pub fn verify(_: Bundle, root: Root, p: Planned) !void {
 /// Only tests inject an executor; the product constructs this with native argv.
 pub const Backend = struct {
     data: ?*anyopaque = null,
+    failure: ?*?[]const u8 = null,
     execute: *const fn (?*anyopaque, A, []const [:0]const u8) anyerror![]const u8 = native,
     fn native(_: ?*anyopaque, a: A, argv: []const [:0]const u8) ![]const u8 {
         return u.capture(a, argv);
     }
     pub fn command(self: Backend, a: A, argv: []const [:0]const u8) ![]const u8 {
+        if (self.failure) |slot| slot.* = null;
+        if (self.execute == native) return u.captureWithFailure(a, argv, self.failure);
         return self.execute(self.data, a, argv);
     }
 };

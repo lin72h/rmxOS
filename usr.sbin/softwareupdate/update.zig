@@ -228,6 +228,16 @@ pub fn hashPath(a: std.mem.Allocator, path: [:0]const u8) ![]const u8 {
     return a.dupe(u8, &std.fmt.bytesToHex(h.finalResult(), .lower));
 }
 pub fn capture(a: std.mem.Allocator, argv: []const [:0]const u8) ![]const u8 {
+    return captureWithFailure(a, argv, null);
+}
+pub fn captureWithFailure(a: std.mem.Allocator, argv: []const [:0]const u8, failure: ?*?[]const u8) ![]const u8 {
+    if (failure) |slot| slot.* = null;
+    // A temporary file keeps stderr separate without risking a two-pipe
+    // deadlock. tmpfile unlinks it immediately; fclose covers every exit.
+    const errors = if (failure != null) c.tmpfile() orelse return error.TemporaryFile else null;
+    defer if (errors) |file| {
+        _ = c.fclose(file);
+    };
     var pipes: [2]c_int = undefined;
     if (c.pipe(&pipes) != 0) return error.PipeFailed;
     defer _ = c.close(pipes[0]);
@@ -242,8 +252,14 @@ pub fn capture(a: std.mem.Allocator, argv: []const [:0]const u8) ![]const u8 {
         _ = c.close(pipes[0]);
         _ = c.dup2(pipes[1], 1);
         _ = c.close(pipes[1]);
-        const nullfd = c.open("/dev/null", c.O_WRONLY);
-        if (nullfd >= 0) _ = c.dup2(nullfd, 2);
+        if (errors) |file| {
+            const fd = c.fileno(file);
+            _ = c.dup2(fd, 2);
+            if (fd != 2) _ = c.close(fd);
+        } else {
+            const nullfd = c.open("/dev/null", c.O_WRONLY);
+            if (nullfd >= 0) _ = c.dup2(nullfd, 2);
+        }
         _ = c.execv(av[0].?, @ptrCast(av.ptr));
         c._exit(127);
     }
@@ -255,7 +271,17 @@ pub fn capture(a: std.mem.Allocator, argv: []const [:0]const u8) ![]const u8 {
         _ = c.waitpid(pid, &wait_status, 0);
         return err;
     };
-    if (c.waitpid(pid, &wait_status, 0) != pid or wait_status != 0) return error.CommandFailed;
+    if (c.waitpid(pid, &wait_status, 0) != pid or wait_status != 0) {
+        if (failure) |slot| {
+            const fd = c.fileno(errors.?);
+            if (c.lseek(fd, 0, c.SEEK_SET) < 0) return error.SeekFailed;
+            const stderr = try readFd(a, fd, 32 * 1024 * 1024);
+            const args = try a.alloc([]const u8, argv.len);
+            for (argv, 0..) |arg, i| args[i] = arg;
+            slot.* = try std.fmt.allocPrint(a, "{s}: wait_status={d} stderr={s}", .{ try std.mem.join(a, " ", args), wait_status, stderr });
+        }
+        return error.CommandFailed;
+    }
     return bytes;
 }
 pub fn dataset(mounts: []const u8) ?[]const u8 {

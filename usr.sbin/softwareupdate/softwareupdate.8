@@ -249,10 +249,13 @@ The derived linker.hints and appended loader.conf.local are checked in their
 generated form, rather than against their pre-generation archive hashes.
 .Pp
 The clone is unmounted, snapshotted as its root dataset's
-.Cm @sealed ,
+.Cm @sealed-GUID ,
 and held with the ZFS tag
 .Cm softwareupdate .
 Failure to snapshot or hold prevents activation.
+The snapshot GUID is recorded as the environment's local ZFS user property
+.Cm org.rmxos:seal-guid .
+The GUID determines both its final name and its identity after promotion.
 The sealed clone is selected for one boot with
 .Cm bectl activate -t .
 The command prints staged= and a reboot command.
@@ -292,6 +295,18 @@ pending-target. When installation changed /boot/loader.efi, its manifest
 identity is checked and the loader on the unique EFI system partition is
 replaced atomically, at efi/freebsd/loader.efi or EFI/BOOT/BOOTX64.EFI.
 Failure to locate or update the loader prevents confirmation.
+Before activation, legacy snapshots named
+.Cm @sealed
+and held with the softwareupdate tag are bound to their owning environments
+by GUID and renamed. This includes a pending environment staged by an older
+installer. The predecessor's identity remains on its dataset when promotion
+moves its snapshot, so rollback and verification can still locate that seal.
+If activation fails after changing the pool's bootfs, confirmation restores
+and checks the saved previous boot default without attempting another promote.
+The update remains pending.
+Manual and automatic confirmation failures record the error and command stderr
+in history, the softwareupdate log and boot-check-failed, and print the reason.
+Failure history rows append a reason field to the usual seven fields.
 .Pp
 .Cm cancel
 before reboot clears the one-time selection and destroys the verified owned
@@ -309,13 +324,19 @@ selected for a boot are never removed.
 Lifecycle operations take an exclusive operation lock.
 .Pp
 Retention releases the softwareupdate hold immediately before destroying an
-owned environment. Other ZFS holds still prevent destruction. Rollback is
-non-destructive and keeps its seal. Confirmation never destroys a seal.
+owned environment, locating and removing its seal by GUID even when promotion
+has moved the snapshot to another dataset. Other ZFS holds still prevent
+destruction. Rollback is
+non-destructive and keeps its seal. Confirmation preserves the current and
+previous environments' seals.
 .Sh SEAL VERIFICATION
 .Cm verify Op Fl -quiet
 requires root and compares the running boot environment with its
-.Cm @sealed
-snapshot. Status names the seal and reports its creation time as UTC Unix
+.Cm @sealed-GUID
+snapshot. Snapshot lookup uses the recorded GUID across the ROOT lineage,
+including snapshots moved into another environment by promotion.
+Legacy held snapshots named @sealed are bound before the next confirmation.
+Status names the seal and reports its creation time as UTC Unix
 seconds in seal_taken_unix.
 An environment installed before sealing was introduced has no seal.
 .Pp
