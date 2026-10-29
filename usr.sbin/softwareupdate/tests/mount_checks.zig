@@ -98,8 +98,11 @@ const Seal = struct {
     fn command(data: ?*anyopaque, alloc: std.mem.Allocator, argv: []const [:0]const u8) anyerror![]const u8 {
         const self: *Seal = @ptrCast(@alignCast(data.?));
         try check(eq(argv[0], "/sbin/zfs"));
-        if (eq(argv[1], "list")) return "zroot/ROOT/rmxos-aaaaaaaaaaaa@sealed\n";
-        if (eq(argv[1], "get")) return "1793000000\n";
+        if (eq(argv[1], "list")) {
+            for (argv) |arg| if (eq(arg, "name,guid,creation")) return "zroot/ROOT/rmxos-aaaaaaaaaaaa@sealed\t1793000000\t1793000000\n";
+            return "zroot/ROOT/rmxos-aaaaaaaaaaaa@sealed\n";
+        }
+        if (eq(argv[1], "get")) return if (eq(argv[argv.len - 2], "org.rmxos:seal-guid")) "-\n" else "1793000000\n";
         // zfs diff names each mount point directory and the hidden child, as
         // it does when they changed on the underlying dataset after sealing.
         if (eq(argv[1], "diff")) return std.fmt.allocPrint(alloc, "M\t/\t{0s}/mnt\nM\t/\t{0s}/var/tmp\nM\t/\t{0s}/var/tmp/vi.recover\n-\t/\t{0s}/usr/lib/op231-control\n", .{self.root});
