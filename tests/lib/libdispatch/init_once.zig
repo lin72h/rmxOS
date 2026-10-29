@@ -33,7 +33,7 @@ const Child = struct {
     done: bool = false,
     timed_out: bool = false,
     elapsed: i64 = 0,
-    text: [256]u8 = undefined,
+    text: [4096]u8 = undefined,
     len: usize = 0,
 };
 fn now() i64 {
@@ -94,12 +94,22 @@ fn initTwice(tc: [*c]const c.atf_tc_t) callconv(.c) void {
     var helper: [512]u8 = undefined;
     var lib: [512]u8 = undefined;
     _ = c.snprintf(&helper, helper.len, "%s/init_twice_child", srcdir);
-    _ = c.snprintf(&lib, lib.len, "%s/lib/libdispatch.so.5", srcdir);
+    // A base copy beside the program carries its own libdispatch, under its
+    // own soname (libdispatch_base.so.5) or the product's.
     var st: c.struct_stat = undefined;
-    // A base copy beside the program carries its own libdispatch.
+    _ = c.snprintf(&lib, lib.len, "%s/lib/libdispatch_base.so.5", srcdir);
+    if (c.stat(&lib, &st) != 0) _ = c.snprintf(&lib, lib.len, "%s/lib/libdispatch.so.5", srcdir);
     const expected: [*:0]const u8 = if (c.stat(&lib, &st) == 0) @ptrCast(&lib) else "/usr/lib/libdispatch.so.5";
     var want: [600]u8 = undefined;
     const want_len: usize = @intCast(c.snprintf(&want, want.len, "lib=%s\nmain queue ran\n", expected));
+    // The child's environment as this program passes it, and what it loaded.
+    var probe = [_]Child{spawn(@ptrCast(&helper), "env")};
+    reap(&probe);
+    var lines = std.mem.splitScalar(u8, probe[0].text[0..probe[0].len], '\n');
+    while (lines.next()) |l| {
+        if (l.len > 0) _ = c.printf("init_twice child %.*s\n", @as(c_int, @intCast(l.len)), l.ptr);
+    }
+    _ = c.printf("init_twice child status=%d\n", probe[0].status);
     const modes = [_][*:0]const u8{ "implicit", "explicit" };
     var children: [modes.len * runs]Child = undefined;
     for (&children, 0..) |*ch, i| ch.* = spawn(@ptrCast(&helper), modes[i / runs]);
