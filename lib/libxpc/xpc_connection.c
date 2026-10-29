@@ -77,6 +77,7 @@ static void xpc_connection_source_cancelled(void *context);
 static bool xpc_connection_attach(struct xpc_connection *conn);
 static void xpc_connection_release_sends(struct xpc_connection *conn);
 static void xpc_connection_release_rights(struct xpc_connection *conn);
+static void xpc_connection_release_local(mach_port_t port, bool send);
 static void xpc_connection_unlist(struct xpc_connection *conn);
 static dispatch_queue_t xpc_connection_reply_queue(struct xpc_connection *conn);
 static void xpc_send(xpc_connection_t xconn, xpc_object_t message, uint64_t id);
@@ -171,6 +172,7 @@ xpc_connection_create(const char *name, dispatch_queue_t targetq)
 		error = EPERM;
 		goto fail;
 	}
+	conn->xc_owns_local_send = true;
 
 	return (conn);
 
@@ -217,9 +219,11 @@ xpc_connection_attach(struct xpc_connection *conn)
 
 	if (conn->xc_flags & XPC_CONNECTION_MACH_SERVICE_LISTENER) {
 		if (conn->xc_owns_local_port) {
-			(void)mach_port_destroy(mach_task_self(), conn->xc_local_port);
+			xpc_connection_release_local(conn->xc_local_port,
+			    conn->xc_owns_local_send);
 			conn->xc_local_port = MACH_PORT_NULL;
 			conn->xc_owns_local_port = false;
+			conn->xc_owns_local_send = false;
 		}
 		kr = bootstrap_check_in(bootstrap_port,
 		    __DECONST(char *, conn->xc_name), &port);
@@ -822,6 +826,20 @@ xpc_connection_resume_all(struct xpc_connection *conn)
 	}
 }
 
+/*
+ * Release the receive right and the send right the connection made, not the
+ * name: a send right held elsewhere in this task becomes a dead name.
+ */
+static void
+xpc_connection_release_local(mach_port_t port, bool send)
+{
+
+	if (send)
+		(void)mach_port_deallocate(mach_task_self(), port);
+	(void)mach_port_mod_refs(mach_task_self(), port,
+	    MACH_PORT_RIGHT_RECEIVE, -1);
+}
+
 static void
 xpc_connection_release_sends(struct xpc_connection *conn)
 {
@@ -836,9 +854,11 @@ xpc_connection_drop_rights(void *context)
 {
 	struct xpc_connection *conn;
 	mach_port_t local, remote;
+	bool send;
 
 	conn = context;
 	local = remote = MACH_PORT_NULL;
+	send = false;
 	pthread_mutex_lock(&conn->xc_remote_lock);
 	if (conn->xc_owns_remote_port) {
 		remote = conn->xc_remote_port;
@@ -847,8 +867,10 @@ xpc_connection_drop_rights(void *context)
 	}
 	if (conn->xc_owns_local_port) {
 		local = conn->xc_local_port;
+		send = conn->xc_owns_local_send;
 		conn->xc_local_port = MACH_PORT_NULL;
 		conn->xc_owns_local_port = false;
+		conn->xc_owns_local_send = false;
 	}
 	pthread_mutex_unlock(&conn->xc_remote_lock);
 	if (remote != MACH_PORT_NULL) {
@@ -861,7 +883,7 @@ xpc_connection_drop_rights(void *context)
 #ifdef XPC_CONSUMER_TESTING
 		op500_port_release(conn, local, 2);
 #endif
-		(void)mach_port_destroy(mach_task_self(), local);
+		xpc_connection_release_local(local, send);
 	}
 	xpc_release(conn);
 }
@@ -1000,8 +1022,10 @@ xpc_connection_destroy(struct xpc_connection *conn)
 #ifdef XPC_CONSUMER_TESTING
 		op500_port_release(conn, conn->xc_local_port, 2);
 #endif
-		(void)mach_port_destroy(mach_task_self(), conn->xc_local_port);
+		xpc_connection_release_local(conn->xc_local_port,
+		    conn->xc_owns_local_send);
 		conn->xc_local_port = MACH_PORT_NULL;
+		conn->xc_owns_local_send = false;
 	}
 	if (conn->xc_send_queue != NULL) {
 		dispatch_release(conn->xc_send_queue);
@@ -1229,37 +1253,34 @@ xpc_connection_set_credentials(struct xpc_connection *conn, audit_token_t *tok)
 	pthread_mutex_unlock(&conn->xc_remote_lock);
 }
 
-static void
-xpc_connection_recv_message(void *context)
+/* Receive one message; false when none is left or the connection ended. */
+static bool
+xpc_connection_receive_one(struct xpc_connection *conn)
 {
 	struct xpc_pending_call *call;
-	struct xpc_connection *conn, *peer;
+	struct xpc_connection *peer;
 	xpc_handler_t handler;
 	xpc_object_t result;
 	mach_port_t remote;
 	kern_return_t kr;
 	uint64_t id;
 
-	debugf("connection=%p", context);
-
-	conn = context;
-#ifdef XPC_CONSUMER_TESTING
-	op500_before_handler(conn);
-#endif
 	kr = xpc_pipe_receive(conn->xc_local_port, &remote, &result, &id);
 #ifdef XPC_CONSUMER_TESTING
 	op500_after_receive(conn, kr);
 #endif
 	if (kr != KERN_SUCCESS) {
+		if (kr != MACH_RCV_TIMED_OUT)
+			debugf("receive failed, kr=%d", kr);
 		if (kr == MACH_RCV_PORT_DIED || kr == MACH_RCV_INVALID_NAME ||
 		    kr == MACH_RCV_PORT_CHANGED)
 			xpc_connection_cancel(conn);
-		return;
+		return (false);
 	}
 	if (atomic_load_acq_int(&conn->xc_cancelled)) {
 		xpc_release(result);
 		(void)mach_port_deallocate(mach_task_self(), remote);
-		return;
+		return (false);
 	}
 
 	debugf("message=%p, id=%d, remote=<%d>", result, id, remote);
@@ -1274,7 +1295,7 @@ xpc_connection_recv_message(void *context)
 					(void)mach_port_deallocate(mach_task_self(), remote);
 				pthread_mutex_unlock(&conn->xc_lock);
 				xpc_release(result);
-				return;
+				return (true);
 			}
 		}
 		pthread_mutex_unlock(&conn->xc_lock);
@@ -1286,7 +1307,7 @@ xpc_connection_recv_message(void *context)
 		if (peer == NULL) {
 			xpc_release(result);
 			(void)mach_port_deallocate(mach_task_self(), remote);
-			return;
+			return (true);
 		}
 		peer->xc_parent = conn;
 		peer->xc_remote_port = remote;
@@ -1326,7 +1347,7 @@ xpc_connection_recv_message(void *context)
 				call->xp_remote_port = remote;
 				pthread_mutex_unlock(&conn->xc_pending_lock);
 				xpc_connection_dispatch_pending(conn, call);
-				return;
+				return (true);
 			}
 		}
 		pthread_mutex_unlock(&conn->xc_pending_lock);
@@ -1334,6 +1355,26 @@ xpc_connection_recv_message(void *context)
 		xpc_connection_dispatch_event(conn, result, remote);
 		xpc_release(result);
 	}
+	return (true);
+}
+
+static void
+xpc_connection_recv_message(void *context)
+{
+	struct xpc_connection *conn;
+
+	debugf("connection=%p", context);
+
+	conn = context;
+#ifdef XPC_CONSUMER_TESTING
+	op500_before_handler(conn);
+#endif
+	/*
+	 * One source event can stand for several queued messages, and a full
+	 * queue takes no new message to raise another: receive until empty.
+	 */
+	while (xpc_connection_receive_one(conn))
+		;
 }
 
 #ifdef XPC_CONSUMER_TESTING

@@ -140,6 +140,7 @@ struct xpc_connection {
 	struct xpc_connection * xc_parent;
 	bool			xc_owns_local_port;
 	bool			xc_owns_remote_port;
+	bool			xc_owns_local_send;	/* our uref on xc_local_port */
 	bool			xc_mach_service;	/* attach at activation */
 	bool			xc_listed;	/* in xc_parent's xc_peers */
 	uid_t			xc_remote_euid;

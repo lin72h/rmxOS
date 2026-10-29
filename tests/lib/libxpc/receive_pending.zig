@@ -325,13 +325,17 @@ fn ownedTarget(_: [*c]const c.atf_tc_t) callconv(.c) void {
     dispatch_resume(sendq);
     dispatch_sync_f(sendq, null, &empty);
     xpc_release(conn);
-    wait(&destroyed);
-    need(@atomicLoad(u32, &slot.calls, .seq_cst) == 0, "blocker holds completion after connection destruction");
+    // op-246: the final INVALID is queued on the target queue too, so the
+    // connection lives until the blocker releases that queue.
+    _ = c.usleep(200_000);
+    need(c.sem_trywait(&destroyed) != 0, "connection held by its queued INVALID while the target queue is blocked");
+    need(@atomicLoad(u32, &slot.calls, .seq_cst) == 0, "blocker holds completion");
     _ = c.sem_post(&gate.release);
     wait(&done);
+    wait(&destroyed);
     wait(&queueDestroyed);
     need(slot.calls == 1 and slot.invalid == 1, "owned target completion exactly once");
-    _ = c.printf("queue_owned_target expected_handlers=1 observed_handlers=%u connection_destroyed_before_release=1 queue_finalized=1\n", slot.calls);
+    _ = c.printf("queue_owned_target expected_handlers=1 observed_handlers=%u connection_destroyed_after_release=1 queue_finalized=1\n", slot.calls);
     xpc_release(message);
     for ([_]*c.sem_t{ &gate.entered, &gate.release, &done, &destroyed, &queueDestroyed }) |sem| _ = c.sem_destroy(sem);
 }
