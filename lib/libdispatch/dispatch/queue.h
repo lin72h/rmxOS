@@ -203,6 +203,24 @@ dispatch_sync_f(dispatch_queue_t queue,
 	dispatch_function_t work);
 
 /*!
+ * @constant DISPATCH_APPLY_AUTO
+ *
+ * @abstract
+ * Constant to pass to dispatch_apply() or dispatch_apply_f() to request that
+ * the system automatically use worker threads that match the configuration of
+ * the current thread as closely as possible.
+ *
+ * @discussion
+ * When submitting a block for parallel invocation, passing this constant as the
+ * queue argument will automatically use the global concurrent queue that
+ * matches the Quality of Service of the caller most closely.
+ *
+ * No assumptions should be made about which global concurrent queue will
+ * actually be used.
+ */
+#define DISPATCH_APPLY_AUTO ((dispatch_queue_t _Nonnull)0)
+
+/*!
  * @function dispatch_apply
  *
  * @abstract

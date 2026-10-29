@@ -46,7 +46,9 @@ Not carried over from Apple:
 - `DISPATCH_ALIAS_V2`
 - `API_AVAILABLE`/`API_DEPRECATED`
 - `DISPATCH_SWIFT_NAME`, `DISPATCH_REFINED_FOR_SWIFT`
-- `DISPATCH_APPLY_AUTO` and `DISPATCH_APPLY_QUEUE_ARG_NULLABILITY`
+- `DISPATCH_APPLY_QUEUE_ARG_NULLABILITY`
+
+Carried over later: `DISPATCH_APPLY_AUTO` (D-6, op-261).
 
 Apple opens no region in `base.h`. rmxOS wraps `dispatch_function_t` in one.
 
@@ -129,3 +131,66 @@ What remains for parity (none of it was done by op-253):
     rejection. Changing either behaviour needs its own op and test change.
 - **`dispatch_data_create_subrange`:** rmxOS returns after
   `DISPATCH_CRASH`; Apple crashes and has no return.
+
+## D-5 `libdispatch_init` runs its body once (op-261)
+
+File: `src/queue.c`.
+
+What changed: `libdispatch_init` starts with an atomic exchange on a static
+flag, `_dispatch_init_started`, and returns at once if the flag was already
+set. `_libdispatch_init`, the constructor in `src/init.c`, calls
+`libdispatch_init`, so both names share the guard.
+
+Why: swift-corelibs-foundation 6.4.0 calls `libdispatch_init()` from
+`__CFInitialize` (`CFRuntime.c:1183`) on every platform except Apple's, after
+the constructor has run. A second run of the body:
+- creates a second `dispatch_queue_key` with the same destructor,
+  `_dispatch_queue_cleanup` (`queue.c`, `_dispatch_thread_key_create`);
+- stores `&_dispatch_main_q` under the new key as well.
+
+When `dispatch_main()` calls `pthread_exit`, both keys' destructors then run
+`_dispatch_queue_cleanup2`. The first takes `dq_running` from 1 to 0 and
+`do_suspend_cnt` from `DISPATCH_OBJECT_SUSPEND_LOCK` (1) to 0, and wakes the
+queue. The second takes both to -1 (4294967295) and skips the wakeup, so the
+main queue looks suspended and its work never runs. The second run also
+registers the `pthread_atfork` handlers again and re-creates the other keys.
+
+Compared with Apple 1542 and corelibs:
+- Neither has a guard. Apple's `libdispatch_init` (`queue.c:8756`) is called
+  once, by libSystem's initializer.
+- Corelibs (`queue.c:7356`) has a constructor and Foundation calls it again,
+  as here. Its per-thread values are fields of one `__thread` struct, not one
+  pthread key each, so the second run does not double the main queue's cleanup.
+- The guard is rmxOS-only. It is no longer needed once this tree moves to a
+  thread-storage scheme like corelibs', or once Foundation stops calling
+  `libdispatch_init` on rmxOS.
+
+Parity work left: none for this entry beyond the thread-storage scheme above.
+
+## D-6 `DISPATCH_APPLY_AUTO` in public `queue.h` (op-261)
+
+File: `dispatch/queue.h`.
+
+What changed: `DISPATCH_APPLY_AUTO` is defined as
+`((dispatch_queue_t _Nonnull)0)`, next to `dispatch_apply` and inside the
+header's assume-nonnull region. It has the same text as corelibs 6.4.0
+`queue.h:372` and Apple 1542 `queue.h:507`. The private
+`DISPATCH_APPLY_CURRENT_ROOT_QUEUE` (`private/queue_private.h`) stays `NULL`.
+`dispatch_apply` already treats a NULL queue as "the current root queue"
+(`apply.c`).
+
+Differences from Apple and corelibs:
+- Both define it only `#if DISPATCH_APPLY_AUTO_AVAILABLE`, and Apple then
+  spells the queue argument `DISPATCH_APPLY_QUEUE_ARG_NULLABILITY`. rmxOS
+  defines it unconditionally and keeps `_Nullable` on the argument (D-1).
+- Apple's private header (`queue_private.h:409-417`) says in its comment that
+  `DISPATCH_APPLY_CURRENT_ROOT_QUEUE` is deprecated in favour of
+  `DISPATCH_APPLY_AUTO`, and defines it as `((dispatch_queue_t _Nonnull)0)`. rmxOS keeps the donor's `NULL` and its
+  comment.
+
+Parity work left:
+- `DISPATCH_APPLY_AUTO_AVAILABLE` and `DISPATCH_APPLY_QUEUE_ARG_NULLABILITY`.
+- Apple 1542's `dispatch_apply` with `DISPATCH_APPLY_AUTO` picks the global
+  queue matching the caller's QoS. rmxOS's NULL path uses the current
+  thread's root queue, or the default-priority global queue; this behaviour is
+  not yet compared.

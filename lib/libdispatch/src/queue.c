@@ -912,10 +912,19 @@ _dispatch_root_queues_init(void *context DISPATCH_UNUSED)
 
 #define countof(x) (sizeof(x) / sizeof(x[0]))
 
+static unsigned int _dispatch_init_started;
+
 DISPATCH_EXPORT DISPATCH_NOTHROW
 void
 libdispatch_init(void)
 {
+	// The constructor runs this; later calls (swift-corelibs-foundation's
+	// __CFInitialize) must not create a second dispatch_queue_key, whose
+	// destructor would run _dispatch_queue_cleanup2 a second time.
+	if (dispatch_atomic_xchg(&_dispatch_init_started, 1, relaxed)) {
+		return;
+	}
+
 	dispatch_assert(DISPATCH_QUEUE_QOS_COUNT == 6);
 	dispatch_assert(DISPATCH_ROOT_QUEUE_COUNT == 12);
 
