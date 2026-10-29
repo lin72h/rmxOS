@@ -1,0 +1,17 @@
+module os [system] [extern_c] {
+	module base {
+		header "base.h"
+		export *
+	}
+	module object {
+		header "object.h"
+		export *
+	}
+	module log {
+		header "log.h"
+		export *
+	}
+	exclude header "assumes.h"
+	exclude header "trace.h"
+	export *
+}

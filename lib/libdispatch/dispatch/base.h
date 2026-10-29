@@ -25,6 +25,13 @@
 #error "Please #include <dispatch/dispatch.h> instead of this file directly."
 #endif
 
+#ifndef __has_feature
+#define __has_feature(x) 0
+#endif
+#ifndef __has_attribute
+#define __has_attribute(x) 0
+#endif
+
 #if __GNUC__
 #define DISPATCH_NORETURN __attribute__((__noreturn__))
 #define DISPATCH_NOTHROW __attribute__((__nothrow__))
@@ -112,6 +119,32 @@
 #define DISPATCH_EXPECT(x, v) (x)
 #endif
 
+#if __has_attribute(noescape)
+#define DISPATCH_NOESCAPE __attribute__((__noescape__))
+#else
+#define DISPATCH_NOESCAPE
+#endif
+
+#if __has_feature(assume_nonnull)
+#define DISPATCH_ASSUME_NONNULL_BEGIN _Pragma("clang assume_nonnull begin")
+#define DISPATCH_ASSUME_NONNULL_END   _Pragma("clang assume_nonnull end")
+#else
+#define DISPATCH_ASSUME_NONNULL_BEGIN
+#define DISPATCH_ASSUME_NONNULL_END
+#endif
+
+#if !__has_feature(nullability)
+#ifndef _Nullable
+#define _Nullable
+#endif
+#ifndef _Nonnull
+#define _Nonnull
+#endif
+#ifndef _Null_unspecified
+#define _Null_unspecified
+#endif
+#endif
+
 #ifdef USE_DISPATCH_RETURNS_RETAINED_BLOCK
 #ifndef DISPATCH_RETURNS_RETAINED_BLOCK
 #if defined(__has_attribute)
@@ -147,6 +180,10 @@
 #define DISPATCH_ENUM_AVAILABLE_STARTING(...)
 #endif
 
-typedef void (*dispatch_function_t)(void *);
+DISPATCH_ASSUME_NONNULL_BEGIN
+
+typedef void (*dispatch_function_t)(void *_Nullable);
+
+DISPATCH_ASSUME_NONNULL_END
 
 #endif

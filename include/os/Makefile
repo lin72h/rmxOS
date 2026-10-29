@@ -4,6 +4,7 @@
 
 NO_OBJ=
 INCS=	assumes.h \
+	module.modulemap \
 	base.h \
 	object.h \
 	log.h \

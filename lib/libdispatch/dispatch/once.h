@@ -26,6 +26,8 @@
 #include <dispatch/base.h> // for HeaderDoc
 #endif
 
+DISPATCH_ASSUME_NONNULL_BEGIN
+
 __BEGIN_DECLS
 
 /*!
@@ -58,11 +60,13 @@ typedef long dispatch_once_t;
 __OSX_AVAILABLE_STARTING(__MAC_10_6,__IPHONE_4_0)
 DISPATCH_EXPORT DISPATCH_NONNULL_ALL DISPATCH_NOTHROW
 void
-dispatch_once(dispatch_once_t *predicate, dispatch_block_t block);
+dispatch_once(dispatch_once_t *predicate,
+		DISPATCH_NOESCAPE dispatch_block_t block);
 
 DISPATCH_INLINE DISPATCH_ALWAYS_INLINE DISPATCH_NONNULL_ALL DISPATCH_NOTHROW
 void
-_dispatch_once(dispatch_once_t *predicate, dispatch_block_t block)
+_dispatch_once(dispatch_once_t *predicate,
+		DISPATCH_NOESCAPE dispatch_block_t block)
 {
 	if (DISPATCH_EXPECT(*predicate, ~0l) != ~0l) {
 		dispatch_once(predicate, block);
@@ -75,13 +79,13 @@ _dispatch_once(dispatch_once_t *predicate, dispatch_block_t block)
 __OSX_AVAILABLE_STARTING(__MAC_10_6,__IPHONE_4_0)
 DISPATCH_EXPORT DISPATCH_NONNULL1 DISPATCH_NONNULL3 DISPATCH_NOTHROW
 void
-dispatch_once_f(dispatch_once_t *predicate, void *context,
+dispatch_once_f(dispatch_once_t *predicate, void *_Nullable context,
 		dispatch_function_t function);
 
 DISPATCH_INLINE DISPATCH_ALWAYS_INLINE DISPATCH_NONNULL1 DISPATCH_NONNULL3
 DISPATCH_NOTHROW
 void
-_dispatch_once_f(dispatch_once_t *predicate, void *context,
+_dispatch_once_f(dispatch_once_t *predicate, void *_Nullable context,
 		dispatch_function_t function)
 {
 	if (DISPATCH_EXPECT(*predicate, ~0l) != ~0l) {
@@ -92,5 +96,7 @@ _dispatch_once_f(dispatch_once_t *predicate, void *context,
 #define dispatch_once_f _dispatch_once_f
 
 __END_DECLS
+
+DISPATCH_ASSUME_NONNULL_END
 
 #endif

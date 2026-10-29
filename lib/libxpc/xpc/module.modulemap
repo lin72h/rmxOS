@@ -1,0 +1,6 @@
+module XPC [system] [extern_c] {
+	umbrella header "xpc.h"
+	exclude header "launchd.h"
+	export *
+	link "xpc"
+}

@@ -46,6 +46,7 @@ SRCS+= coordination.c
 
 INCSDIR= ${INCLUDEDIR}/xpc
 INCS=	activity.h \
+	module.modulemap \
 	base.h \
 	connection.h \
 	debug.h \

@@ -35,6 +35,8 @@
 #include <sys/signal.h>
 #endif
 
+DISPATCH_ASSUME_NONNULL_BEGIN
+
 /*!
  * @header
  * The dispatch framework provides a suite of interfaces for monitoring low-
@@ -372,7 +374,7 @@ dispatch_source_t
 dispatch_source_create(dispatch_source_type_t type,
 	uintptr_t handle,
 	unsigned long mask,
-	dispatch_queue_t queue);
+	dispatch_queue_t _Nullable queue);
 
 /*!
  * @function dispatch_source_set_event_handler
@@ -392,7 +394,7 @@ __OSX_AVAILABLE_STARTING(__MAC_10_6,__IPHONE_4_0)
 DISPATCH_EXPORT DISPATCH_NONNULL1 DISPATCH_NOTHROW
 void
 dispatch_source_set_event_handler(dispatch_source_t source,
-	dispatch_block_t handler);
+	dispatch_block_t _Nullable handler);
 #endif /* __BLOCKS__ */
 
 /*!
@@ -415,7 +417,7 @@ __OSX_AVAILABLE_STARTING(__MAC_10_6,__IPHONE_4_0)
 DISPATCH_EXPORT DISPATCH_NONNULL1 DISPATCH_NOTHROW
 void
 dispatch_source_set_event_handler_f(dispatch_source_t source,
-	dispatch_function_t handler);
+	dispatch_function_t _Nullable handler);
 
 /*!
  * @function dispatch_source_set_cancel_handler
@@ -449,7 +451,7 @@ __OSX_AVAILABLE_STARTING(__MAC_10_6,__IPHONE_4_0)
 DISPATCH_EXPORT DISPATCH_NONNULL1 DISPATCH_NOTHROW
 void
 dispatch_source_set_cancel_handler(dispatch_source_t source,
-	dispatch_block_t handler);
+	dispatch_block_t _Nullable handler);
 #endif /* __BLOCKS__ */
 
 /*!
@@ -474,7 +476,7 @@ __OSX_AVAILABLE_STARTING(__MAC_10_6,__IPHONE_4_0)
 DISPATCH_EXPORT DISPATCH_NONNULL1 DISPATCH_NOTHROW
 void
 dispatch_source_set_cancel_handler_f(dispatch_source_t source,
-	dispatch_function_t handler);
+	dispatch_function_t _Nullable handler);
 
 /*!
  * @function dispatch_source_cancel
@@ -724,7 +726,7 @@ __OSX_AVAILABLE_STARTING(__MAC_10_7,__IPHONE_4_3)
 DISPATCH_EXPORT DISPATCH_NONNULL1 DISPATCH_NOTHROW
 void
 dispatch_source_set_registration_handler(dispatch_source_t source,
-	dispatch_block_t handler);
+	dispatch_block_t _Nullable handler);
 #endif /* __BLOCKS__ */
 
 /*!
@@ -749,8 +751,10 @@ __OSX_AVAILABLE_STARTING(__MAC_10_7,__IPHONE_4_3)
 DISPATCH_EXPORT DISPATCH_NONNULL1 DISPATCH_NOTHROW
 void
 dispatch_source_set_registration_handler_f(dispatch_source_t source,
-	dispatch_function_t handler);
+	dispatch_function_t _Nullable handler);
 
 __END_DECLS
+
+DISPATCH_ASSUME_NONNULL_END
 
 #endif

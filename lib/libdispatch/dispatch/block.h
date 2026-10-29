@@ -32,6 +32,8 @@
  * @group Dispatch block objects
  */
 
+DISPATCH_ASSUME_NONNULL_BEGIN
+
 __BEGIN_DECLS
 
 /*!
@@ -270,7 +272,8 @@ dispatch_block_create_with_qos_class(dispatch_block_flags_t flags,
 __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_8_0)
 DISPATCH_EXPORT DISPATCH_NONNULL2 DISPATCH_NOTHROW
 void
-dispatch_block_perform(dispatch_block_flags_t flags, dispatch_block_t block);
+dispatch_block_perform(dispatch_block_flags_t flags,
+		DISPATCH_NOESCAPE dispatch_block_t block);
 
 /*!
  * @function dispatch_block_wait
@@ -416,6 +419,8 @@ long
 dispatch_block_testcancel(dispatch_block_t block);
 
 __END_DECLS
+
+DISPATCH_ASSUME_NONNULL_END
 
 #endif // __BLOCKS__
 

@@ -26,6 +26,8 @@
 #include <dispatch/base.h> // for HeaderDoc
 #endif
 
+DISPATCH_ASSUME_NONNULL_BEGIN
+
 /*!
  * @typedef dispatch_object_t
  *
@@ -212,7 +214,7 @@ dispatch_release(dispatch_object_t object);
 __OSX_AVAILABLE_STARTING(__MAC_10_6,__IPHONE_4_0)
 DISPATCH_EXPORT DISPATCH_NONNULL_ALL DISPATCH_PURE DISPATCH_WARN_RESULT
 DISPATCH_NOTHROW
-void *
+void *_Nullable
 dispatch_get_context(dispatch_object_t object);
 
 /*!
@@ -231,7 +233,7 @@ dispatch_get_context(dispatch_object_t object);
 __OSX_AVAILABLE_STARTING(__MAC_10_6,__IPHONE_4_0)
 DISPATCH_EXPORT DISPATCH_NOTHROW //DISPATCH_NONNULL1
 void
-dispatch_set_context(dispatch_object_t object, void *context);
+dispatch_set_context(dispatch_object_t object, void *_Nullable context);
 
 /*!
  * @function dispatch_set_finalizer_f
@@ -258,7 +260,7 @@ __OSX_AVAILABLE_STARTING(__MAC_10_6,__IPHONE_4_0)
 DISPATCH_EXPORT DISPATCH_NOTHROW //DISPATCH_NONNULL1
 void
 dispatch_set_finalizer_f(dispatch_object_t object,
-		dispatch_function_t finalizer);
+		dispatch_function_t _Nullable finalizer);
 
 /*!
  * @function dispatch_activate
@@ -488,5 +490,7 @@ void
 dispatch_debugv(dispatch_object_t object, const char *message, va_list ap);
 
 __END_DECLS
+
+DISPATCH_ASSUME_NONNULL_END
 
 #endif
