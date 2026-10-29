@@ -97,13 +97,13 @@ dispatch_source_create(dispatch_source_type_t type,
 
 	// input validation
 	if (type == NULL || (mask & ~type->mask)) {
-		return NULL;
+		return DISPATCH_BAD_INPUT;
 	}
 
 	switch (type->ke.filter) {
 	case EVFILT_SIGNAL:
 		if (handle >= NSIG) {
-			return NULL;
+			return DISPATCH_BAD_INPUT;
 		}
 		break;
 	case EVFILT_FS:
@@ -117,12 +117,12 @@ dispatch_source_create(dispatch_source_type_t type,
 	case DISPATCH_EVFILT_CUSTOM_ADD:
 	case DISPATCH_EVFILT_CUSTOM_OR:
 		if (handle) {
-			return NULL;
+			return DISPATCH_BAD_INPUT;
 		}
 		break;
 	case DISPATCH_EVFILT_TIMER:
 		if (!!handle ^ !!type->ke.ident) {
-			return NULL;
+			return DISPATCH_BAD_INPUT;
 		}
 		break;
 	default:

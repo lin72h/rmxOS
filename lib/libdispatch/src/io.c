@@ -321,7 +321,7 @@ dispatch_io_create(dispatch_io_type_t type, dispatch_fd_t fd,
 		dispatch_queue_t queue, void (^cleanup_handler)(int))
 {
 	if (type != DISPATCH_IO_STREAM && type != DISPATCH_IO_RANDOM) {
-		return NULL;
+		return DISPATCH_BAD_INPUT;
 	}
 	_dispatch_fd_debug("io create", fd);
 	dispatch_io_t channel = _dispatch_io_create(type);
@@ -372,12 +372,12 @@ dispatch_io_create_with_path(dispatch_io_type_t type, const char *path,
 {
 	if ((type != DISPATCH_IO_STREAM && type != DISPATCH_IO_RANDOM) ||
 			!(path && *path == '/')) {
-		return NULL;
+		return DISPATCH_BAD_INPUT;
 	}
 	size_t pathlen = strlen(path);
 	dispatch_io_path_data_t path_data = malloc(sizeof(*path_data) + pathlen+1);
 	if (!path_data) {
-		return NULL;
+		return DISPATCH_BAD_INPUT;
 	}
 	_dispatch_fd_debug("io create with path %s", -1, path);
 	dispatch_io_t channel = _dispatch_io_create(type);
@@ -462,7 +462,7 @@ dispatch_io_create_with_io(dispatch_io_type_t type, dispatch_io_t in_channel,
 		dispatch_queue_t queue, void (^cleanup_handler)(int error))
 {
 	if (type != DISPATCH_IO_STREAM && type != DISPATCH_IO_RANDOM) {
-		return NULL;
+		return DISPATCH_BAD_INPUT;
 	}
 	_dispatch_fd_debug("io create with io %p", -1, in_channel);
 	dispatch_io_t channel = _dispatch_io_create(type);

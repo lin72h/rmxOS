@@ -161,7 +161,7 @@ dispatch_semaphore_create(long value)
 	// equal to the number of waiting threads. Therefore it is bogus to
 	// initialize the semaphore with a negative value.
 	if (value < 0) {
-		return NULL;
+		return DISPATCH_BAD_INPUT;
 	}
 
 	dsema = (dispatch_semaphore_t)_dispatch_alloc(DISPATCH_VTABLE(semaphore),

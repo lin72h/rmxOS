@@ -161,7 +161,7 @@ dispatch_data_create(const void* buffer, size_t size, dispatch_queue_t queue,
 		// copied.
 		data_buf = malloc(size);
 		if (slowpath(!data_buf)) {
-			return NULL;
+			return DISPATCH_BAD_INPUT;
 		}
 		buffer = memcpy(data_buf, buffer, size);
 		data = _dispatch_data_alloc(0, 0);
@@ -351,7 +351,7 @@ dispatch_data_create_subrange(dispatch_data_t dd, size_t offset,
 	}
 	// Crashing here indicates memory corruption of passed in data object
 	DISPATCH_CRASH("dispatch_data_create_subrange out of bounds");
-	return NULL;
+	return DISPATCH_BAD_INPUT;
 }
 
 // When mapping a leaf object or a subrange of a leaf object, return a direct

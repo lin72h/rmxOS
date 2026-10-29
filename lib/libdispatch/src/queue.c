@@ -568,7 +568,7 @@ dispatch_queue_t
 dispatch_get_global_queue(long priority, unsigned long flags)
 {
 	if (flags & ~(unsigned long)DISPATCH_QUEUE_OVERCOMMIT) {
-		return NULL;
+		return DISPATCH_BAD_INPUT;
 	}
 	dispatch_once_f(&_dispatch_root_queues_pred, NULL,
 			_dispatch_root_queues_init);
@@ -1113,7 +1113,7 @@ dispatch_queue_attr_t
 dispatch_queue_attr_make_with_qos_class(dispatch_queue_attr_t dqa,
 		dispatch_qos_class_t qos_class, int relative_priority)
 {
-	if (!_dispatch_qos_class_valid(qos_class, relative_priority)) return NULL;
+	if (!_dispatch_qos_class_valid(qos_class, relative_priority)) return DISPATCH_BAD_INPUT;
 	if (!slowpath(dqa)) {
 		dqa = _dispatch_get_queue_attr(0, 0, false, false, false);
 	} else if (dqa->do_vtable != DISPATCH_VTABLE(queue_attr)) {
@@ -1134,7 +1134,7 @@ dispatch_queue_attr_make_with_autorelease_frequency(dispatch_queue_attr_t dqa,
 	case DISPATCH_AUTORELEASE_FREQUENCY_NEVER:
 		break;
 	default:
-		return NULL;
+		return DISPATCH_BAD_INPUT;
 	}
 	if (!dqa) {
 		return _dispatch_get_queue_attr(0, 0, false, false, false);
@@ -2007,7 +2007,7 @@ _dispatch_block_create_with_voucher_and_priority(dispatch_block_flags_t flags,
 dispatch_block_t
 dispatch_block_create(dispatch_block_flags_t flags, dispatch_block_t block)
 {
-	if (!_dispatch_block_flags_valid(flags)) return NULL;
+	if (!_dispatch_block_flags_valid(flags)) return DISPATCH_BAD_INPUT;
 	return _dispatch_block_create_with_voucher_and_priority(flags, NULL, 0,
 			block);
 }
@@ -2017,8 +2017,8 @@ dispatch_block_create_with_qos_class(dispatch_block_flags_t flags,
 		dispatch_qos_class_t qos_class, int relative_priority,
 		dispatch_block_t block)
 {
-	if (!_dispatch_block_flags_valid(flags)) return NULL;
-	if (!_dispatch_qos_class_valid(qos_class, relative_priority)) return NULL;
+	if (!_dispatch_block_flags_valid(flags)) return DISPATCH_BAD_INPUT;
+	if (!_dispatch_qos_class_valid(qos_class, relative_priority)) return DISPATCH_BAD_INPUT;
 	flags |= DISPATCH_BLOCK_HAS_PRIORITY;
 	pthread_priority_t pri = 0;
 #if HAVE_PTHREAD_WORKQUEUE_QOS

@@ -698,6 +698,8 @@ extern bool _dispatch_safe_fork, _dispatch_child_of_unsafe_fork;
 	} while (0)
 #endif
 
+#define DISPATCH_BAD_INPUT		((void *_Nonnull)0)
+
 #define DISPATCH_CRASH(x) do { \
 		_dispatch_set_crash_log_message("BUG IN LIBDISPATCH: " x); \
 		_dispatch_hardware_crash(); \
