@@ -89,7 +89,8 @@ xpc_dictionary_destroy(struct xpc_object *dict)
 
 	TAILQ_FOREACH_SAFE(p, head, xo_link, ptmp) {
 		TAILQ_REMOVE(head, p, xo_link);
-		xpc_object_destroy(p->value);
+		xpc_release(p->value);
+		free(__DECONST(char *, p->key));
 		free(p);
 	}
 }
@@ -104,7 +105,9 @@ xpc_array_destroy(struct xpc_object *dict)
 
 	TAILQ_FOREACH_SAFE(p, head, xo_link, ptmp) {
 		TAILQ_REMOVE(head, p, xo_link);
-		xpc_object_destroy(p);
+		p->xo_link.tqe_next = NULL;
+		p->xo_link.tqe_prev = NULL;
+		xpc_release(p);
 	}
 }
 
@@ -140,7 +143,9 @@ xpc_unpack(void *buf, size_t size)
 	nv = nvlist_unpack(buf, size);
 	if (nv == NULL)
 		return (NULL);
+	/* nv2xpc copies everything it takes from the list. */
 	xo = nv2xpc(nv);
+	nvlist_destroy(nv);
 	return (xo);
 }
 
@@ -157,6 +162,14 @@ xpc_object_destroy(struct xpc_object *xo)
 
 	if (xo->xo_xpc_type == _XPC_TYPE_ARRAY)
 		xpc_array_destroy(xo);
+
+	/* Strings, data and descriptors own their buffer or duplicate. */
+	if (xo->xo_xpc_type == _XPC_TYPE_STRING ||
+	    xo->xo_xpc_type == _XPC_TYPE_DATA)
+		free((void *)xo->xo_ptr);
+
+	if (xo->xo_xpc_type == _XPC_TYPE_FD)
+		(void)close(xo->xo_fd);
 
 	if (xo->xo_reply_port != MACH_PORT_NULL)
 		(void)mach_port_deallocate(mach_task_self(), xo->xo_reply_port);
@@ -372,7 +385,11 @@ ld2xpc(launch_data_t ld)
 				return (NULL);
 			}
 			xpc_array_append_value(xo, item);
+			xpc_release(item);
 		}
+	} else if (ld->type == LAUNCH_DATA_FD) {
+		/* An fd object owns a duplicate; launch_data keeps its own. */
+		xo = xpc_fd_create(ld->fd);
 	} else {
 		val.ui = ld->mp;
 		xo = _xpc_prim_create(ld_to_xpc_type[ld->type], val, ld->string_len);	

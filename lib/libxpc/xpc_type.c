@@ -195,6 +195,9 @@ _xpc_prim_create_flags(int type, xpc_u value, size_t size, uint16_t flags)
 	xo->xo_refcnt = 1;
 	xo->xo_audit_token = NULL;
 	xo->xo_reply_port = MACH_PORT_NULL;
+	/* A NULL tqe_prev marks an object that is in no array. */
+	xo->xo_link.tqe_next = NULL;
+	xo->xo_link.tqe_prev = NULL;
 
 	if (type == _XPC_TYPE_DICTIONARY)
 		TAILQ_INIT(&xo->xo_dict);
@@ -336,10 +339,20 @@ xpc_date_get_value(xpc_object_t xdate)
 xpc_object_t
 xpc_data_create(const void *bytes, size_t length)
 {
+	struct xpc_object *xo;
+	void *copy;
 	xpc_u val;
 
-	val.ptr = (uintptr_t)bytes;
-	return _xpc_prim_create(_XPC_TYPE_DATA, val, length);
+	copy = NULL;
+	if (length > 0) {
+		if ((copy = malloc(length)) == NULL)
+			return (NULL);
+		memcpy(copy, bytes, length);
+	}
+	val.ptr = (uintptr_t)copy;
+	if ((xo = _xpc_prim_create(_XPC_TYPE_DATA, val, length)) == NULL)
+		free(copy);
+	return (xo);
 }
 
 xpc_object_t
@@ -384,34 +397,49 @@ xpc_data_get_bytes(xpc_object_t xdata, void *buffer, size_t off, size_t length)
 	return (0);
 }
 
+/* The object takes ownership of str, which destroy frees. */
+static struct xpc_object *
+xpc_string_own(char *str)
+{
+	struct xpc_object *xo;
+	xpc_u val;
+
+	if (str == NULL)
+		return (NULL);
+	val.str = str;
+	if ((xo = _xpc_prim_create(_XPC_TYPE_STRING, val, strlen(str))) == NULL)
+		free(str);
+	return (xo);
+}
+
 xpc_object_t
 xpc_string_create(const char *string)
 {
-	xpc_u val;
 
-	val.str = string;
-	return _xpc_prim_create(_XPC_TYPE_STRING, val, strlen(string));
+	return (xpc_string_own(strdup(string)));
 }
 
 xpc_object_t
 xpc_string_create_with_format(const char *fmt, ...)
 {
 	va_list ap;
-	xpc_u val;
+	char *str;
 
 	va_start(ap, fmt);
-	vasprintf(&val.str, fmt, ap);
+	if (vasprintf(&str, fmt, ap) < 0)
+		str = NULL;
 	va_end(ap);
-	return _xpc_prim_create(_XPC_TYPE_STRING, val, strlen(val.str));
+	return (xpc_string_own(str));
 }
 
 xpc_object_t
 xpc_string_create_with_format_and_arguments(const char *fmt, va_list ap)
 {
-	xpc_u val;
+	char *str;
 
-	vasprintf(&val.str, fmt, ap);
-	return _xpc_prim_create(_XPC_TYPE_STRING, val, strlen(val.str));
+	if (vasprintf(&str, fmt, ap) < 0)
+		str = NULL;
+	return (xpc_string_own(str));
 }
 
 size_t
@@ -464,6 +492,31 @@ xpc_uuid_get_bytes(xpc_object_t xuuid)
 		return ((uint8_t*)&xo->xo_uuid);
 
 	return (NULL);
+}
+
+/* The object holds its own duplicate, which destroy closes. */
+xpc_object_t
+xpc_fd_create(int fd)
+{
+	struct xpc_object *xo;
+	xpc_u val;
+
+	if (fd < 0 || (val.fd = dup(fd)) < 0)
+		return (NULL);
+	if ((xo = _xpc_prim_create(_XPC_TYPE_FD, val, 1)) == NULL)
+		(void)close(val.fd);
+	return (xo);
+}
+
+int
+xpc_fd_dup(xpc_object_t xfd)
+{
+	struct xpc_object *xo;
+
+	xo = xfd;
+	if (xo == NULL || xo->xo_xpc_type != _XPC_TYPE_FD)
+		return (-1);
+	return (dup(xo->xo_fd));
 }
 
 xpc_type_t

@@ -103,8 +103,7 @@ nv2xpc(const nvlist_t *nv)
 			break;
 
 		case NV_TYPE_DESCRIPTOR:
-			val.fd = nvlist_get_descriptor(nv, key);
-			xotmp = _xpc_prim_create(_XPC_TYPE_FD, val, 0);
+			xotmp = xpc_fd_create(nvlist_get_descriptor(nv, key));
 			break;
 
 		case NV_TYPE_PTR:
@@ -113,7 +112,7 @@ nv2xpc(const nvlist_t *nv)
 		case NV_TYPE_BINARY:
 			val.ptr = (uintptr_t)nvlist_get_binary(nv, key,
 			    &size);
-			xotmp = _xpc_prim_create(_XPC_TYPE_DATA, val, size);
+			xotmp = xpc_data_create((const void *)val.ptr, size);
 			break;
 
 		case NV_TYPE_UUID:
@@ -139,6 +138,7 @@ nv2xpc(const nvlist_t *nv)
 
 			if (nvlist_type(nv) == NV_TYPE_NVLIST_ARRAY)
 				xpc_array_append_value(xo, xotmp);
+			xpc_release(xotmp);
 		}
 	}
 
@@ -276,12 +276,22 @@ xpc_dictionary_create(const char * const *keys, const xpc_object_t *values,
 	size_t i;
 	xpc_u val;
 
-	xo = _xpc_prim_create(_XPC_TYPE_DICTIONARY, val, count);
-	
+	/* set_value counts each key it adds; a NULL value adds none. */
+	xo = _xpc_prim_create(_XPC_TYPE_DICTIONARY, val, 0);
+	if (xo == NULL)
+		return (NULL);
+
 	for (i = 0; i < count; i++)
 		xpc_dictionary_set_value(xo, keys[i], values[i]);
-	
+
 	return (xo);
+}
+
+xpc_object_t
+xpc_dictionary_create_empty(void)
+{
+
+	return (xpc_dictionary_create(NULL, NULL, 0));
 }
 
 xpc_object_t
@@ -335,8 +345,11 @@ xpc_dictionary_set_mach_send(xpc_object_t xdict, const char *key, mach_port_t po
 
 	val.port = port;
 	xotmp = _xpc_prim_create(_XPC_TYPE_ENDPOINT, val, 0);
+	if (xotmp == NULL)
+		return;
 
 	xpc_dictionary_set_value(xdict, key, xotmp);
+	xpc_release(xotmp);
 }
 
 mach_port_t
@@ -367,19 +380,34 @@ xpc_dictionary_set_value(xpc_object_t xdict, const char *key, xpc_object_t value
 	xo = xdict;
 	head = &xo->xo_dict;
 
+	/* The pair owns a copy of the key and a reference to the value. */
 	TAILQ_FOREACH(pair, head, xo_link) {
 		if (!strcmp(pair->key, key)) {
-			pair->value = value;
+			xotmp = pair->value;
+			if (value == NULL) {
+				TAILQ_REMOVE(head, pair, xo_link);
+				free(__DECONST(char *, pair->key));
+				free(pair);
+				xo->xo_size--;
+			} else
+				pair->value = xpc_retain(value);
+			xpc_release(xotmp);
 			return;
 		}
 	}
 
-	xo->xo_size++;
-	pair = malloc(sizeof(struct xpc_dict_pair));
-	pair->key = key;
-	pair->value = value;
+	/* A NULL value for an absent key changes nothing. */
+	if (value == NULL)
+		return;
+	if ((pair = malloc(sizeof(struct xpc_dict_pair))) == NULL)
+		return;
+	if ((pair->key = strdup(key)) == NULL) {
+		free(pair);
+		return;
+	}
+	pair->value = xpc_retain(value);
 	TAILQ_INSERT_TAIL(&xo->xo_dict, pair, xo_link);
-	xpc_retain(value);
+	xo->xo_size++;
 }
 
 xpc_object_t
@@ -400,6 +428,18 @@ xpc_dictionary_get_value(xpc_object_t xdict, const char *key)
 	return (NULL);
 }
 
+/* Borrowed (+0), as xpc_dictionary_get_value. */
+xpc_object_t
+xpc_dictionary_get_dictionary(xpc_object_t xdict, const char *key)
+{
+	struct xpc_object *xo;
+
+	xo = xpc_dictionary_get_value(xdict, key);
+	if (xo == NULL || xo->xo_xpc_type != _XPC_TYPE_DICTIONARY)
+		return (NULL);
+	return (xo);
+}
+
 size_t
 xpc_dictionary_get_count(xpc_object_t xdict)
 {
@@ -416,7 +456,10 @@ xpc_dictionary_set_bool(xpc_object_t xdict, const char *key, bool value)
 
 	xo = xdict;
 	xotmp = xpc_bool_create(value);
+	if (xotmp == NULL)
+		return;
 	xpc_dictionary_set_value(xdict, key, xotmp);
+	xpc_release(xotmp);
 }
 
 void
@@ -426,7 +469,10 @@ xpc_dictionary_set_int64(xpc_object_t xdict, const char *key, int64_t value)
 
 	xo = xdict;
 	xotmp = xpc_int64_create(value);
+	if (xotmp == NULL)
+		return;
 	xpc_dictionary_set_value(xdict, key, xotmp);
+	xpc_release(xotmp);
 }
 
 void
@@ -436,7 +482,10 @@ xpc_dictionary_set_uint64(xpc_object_t xdict, const char *key, uint64_t value)
 
 	xo = xdict;
 	xotmp = xpc_uint64_create(value);
-	xpc_dictionary_set_value(xdict, key, xotmp); 
+	if (xotmp == NULL)
+		return;
+	xpc_dictionary_set_value(xdict, key, xotmp);
+	xpc_release(xotmp);
 }
 
 void
@@ -446,7 +495,10 @@ xpc_dictionary_set_double(xpc_object_t xdict, const char *key, double value)
 
 	xo = xdict;
 	xotmp = xpc_double_create(value);
+	if (xotmp == NULL)
+		return;
 	xpc_dictionary_set_value(xdict, key, xotmp);
+	xpc_release(xotmp);
 }
 
 void
@@ -456,7 +508,10 @@ xpc_dictionary_set_date(xpc_object_t xdict, const char *key, int64_t value)
 
 	xo = xdict;
 	xotmp = xpc_date_create(value);
+	if (xotmp == NULL)
+		return;
 	xpc_dictionary_set_value(xdict, key, xotmp);
+	xpc_release(xotmp);
 }
 
 void
@@ -467,7 +522,10 @@ xpc_dictionary_set_data(xpc_object_t xdict, const char *key,
 
 	xo = xdict;
 	xotmp = xpc_data_create(bytes, length);
+	if (xotmp == NULL)
+		return;
 	xpc_dictionary_set_value(xdict, key, xotmp);
+	xpc_release(xotmp);
 }
 
 void
@@ -477,7 +535,10 @@ xpc_dictionary_set_uuid(xpc_object_t xdict, const char *key, const uuid_t uuid)
 
 	xo = xdict;
 	xotmp = xpc_uuid_create(uuid);
+	if (xotmp == NULL)
+		return;
 	xpc_dictionary_set_value(xdict, key, xotmp);
+	xpc_release(xotmp);
 }
 
 void
@@ -487,7 +548,10 @@ xpc_dictionary_set_string(xpc_object_t xdict, const char *key, const char *value
 
 	xo = xdict;
 	xotmp = xpc_string_create(value);
+	if (xotmp == NULL)
+		return;
 	xpc_dictionary_set_value(xdict, key, xotmp);
+	xpc_release(xotmp);
 }
 
 bool

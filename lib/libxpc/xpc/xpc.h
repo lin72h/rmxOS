@@ -36,6 +36,9 @@ __BEGIN_DECLS
 
 #define XPC_API_VERSION 20121012
 
+/* rmxOS xpc-lite level: 1 is the object core (stage A). */
+#define XPC_LITE_VERSION 1
+
 /*!
  * @typedef xpc_type_t
  * A type that describes XPC object types.
@@ -1819,6 +1822,23 @@ xpc_dictionary_create(const char * const *keys, const xpc_object_t *values,
 	size_t count);
 
 /*!
+ * @function xpc_dictionary_create_empty
+ *
+ * @abstract
+ * Creates an XPC object representing an empty dictionary.
+ *
+ * @result
+ * The new dictionary object.
+ *
+ * @discussion
+ * macOS declares it API_AVAILABLE(macos(11.0), ios(14.0), tvos(14.0),
+ * watchos(7.0)); this header has no availability macro for those versions.
+ */
+XPC_EXPORT XPC_MALLOC XPC_RETURNS_RETAINED XPC_WARN_RESULT
+xpc_object_t
+xpc_dictionary_create_empty(void);
+
+/*!
  * @function xpc_dictionary_create_reply
  * 
  * @abstract
@@ -1892,6 +1912,22 @@ __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0)
 XPC_EXPORT XPC_WARN_RESULT XPC_NONNULL1 XPC_NONNULL2
 xpc_object_t
 xpc_dictionary_get_value(xpc_object_t xdict, const char *key);
+
+/*!
+ * @function xpc_dictionary_get_dictionary
+ *
+ * @abstract
+ * Returns the dictionary value for the specified key, or NULL if the key is
+ * absent or its value is not a dictionary.
+ *
+ * @discussion
+ * This method does not grant the caller a reference to the underlying object.
+ * macOS declares it __OSX_AVAILABLE_STARTING(__MAC_10_11, __IPHONE_9_0) with a
+ * _Nullable result; this header carries neither.
+ */
+XPC_EXPORT XPC_WARN_RESULT XPC_NONNULL_ALL
+xpc_object_t
+xpc_dictionary_get_dictionary(xpc_object_t xdict, const char *key);
 
 /*!
  * @function xpc_dictionary_get_count

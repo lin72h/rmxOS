@@ -30,6 +30,22 @@
 #include <xpc/launchd.h>
 #include "xpc_internal.h"
 
+/*
+ * Arrays link through the element's xo_link, so an object can be in one
+ * array at a time. A second insert is refused, leaving both lists intact.
+ */
+static bool
+xpc_array_admit(struct xpc_object *value)
+{
+
+	if ((value->xo_flags & _XPC_GLOBAL_OBJECT_FLAG) == 0 &&
+	    value->xo_link.tqe_prev == NULL)
+		return (true);
+	fprintf(stderr, "xpc_array: object %p is already in an array; "
+	    "insert refused\n", value);
+	return (false);
+}
+
 xpc_object_t
 xpc_array_create(const xpc_object_t *objects, size_t count)
 {
@@ -66,10 +82,14 @@ xpc_array_set_value(xpc_object_t xarray, size_t index, xpc_object_t value)
 		if (i++ == index) {
 			if (xotmp == (struct xpc_object *)value)
 				return;
+			if (!xpc_array_admit(value))
+				return;
 			xpc_retain(value);
 			TAILQ_INSERT_AFTER(arr, xotmp,
 			    (struct xpc_object *)value, xo_link);
 			TAILQ_REMOVE(arr, xotmp, xo_link);
+			xotmp->xo_link.tqe_next = NULL;
+			xotmp->xo_link.tqe_prev = NULL;
 			xpc_release(xotmp);
 			break;
 		}
@@ -85,6 +105,8 @@ xpc_array_append_value(xpc_object_t xarray, xpc_object_t value)
 	xo = xarray;
 	arr = &xo->xo_array;
 
+	if (!xpc_array_admit(value))
+		return;
 	TAILQ_INSERT_TAIL(arr, (struct xpc_object *)value, xo_link);
 	xpc_retain(value);
 	xo->xo_size++;
@@ -129,7 +151,10 @@ xpc_array_set_bool(xpc_object_t xarray, size_t index, bool value)
 
 	xo = xarray;
 	xotmp = xpc_bool_create(value);
-	return (xpc_array_set_value(xarray, index, xotmp));
+	if (xotmp == NULL)
+		return;
+	xpc_array_set_value(xarray, index, xotmp);
+	xpc_release(xotmp);
 }
 
 
@@ -140,7 +165,10 @@ xpc_array_set_int64(xpc_object_t xarray, size_t index, int64_t value)
 
 	xo = xarray;
 	xotmp = xpc_int64_create(value);
-	return (xpc_array_set_value(xarray, index, xotmp));
+	if (xotmp == NULL)
+		return;
+	xpc_array_set_value(xarray, index, xotmp);
+	xpc_release(xotmp);
 }
 
 void
@@ -150,7 +178,10 @@ xpc_array_set_uint64(xpc_object_t xarray, size_t index, uint64_t value)
 
 	xo = xarray;
 	xotmp = xpc_uint64_create(value);
-	return (xpc_array_set_value(xarray, index, xotmp));
+	if (xotmp == NULL)
+		return;
+	xpc_array_set_value(xarray, index, xotmp);
+	xpc_release(xotmp);
 }
 
 void
@@ -160,7 +191,10 @@ xpc_array_set_double(xpc_object_t xarray, size_t index, double value)
 
 	xo = xarray;
 	xotmp = xpc_double_create(value);
-	return (xpc_array_set_value(xarray, index, xotmp));
+	if (xotmp == NULL)
+		return;
+	xpc_array_set_value(xarray, index, xotmp);
+	xpc_release(xotmp);
 }
 
 void
@@ -170,7 +204,10 @@ xpc_array_set_date(xpc_object_t xarray, size_t index, int64_t value)
 
 	xo = xarray;
 	xotmp = xpc_date_create(value);
-	return (xpc_array_set_value(xarray, index, xotmp));
+	if (xotmp == NULL)
+		return;
+	xpc_array_set_value(xarray, index, xotmp);
+	xpc_release(xotmp);
 }
 
 void
@@ -181,7 +218,10 @@ xpc_array_set_data(xpc_object_t xarray, size_t index, const void *data,
 
 	xo = xarray;
 	xotmp = xpc_data_create(data, length);
-	return (xpc_array_set_value(xarray, index, xotmp));
+	if (xotmp == NULL)
+		return;
+	xpc_array_set_value(xarray, index, xotmp);
+	xpc_release(xotmp);
 }
 
 void
@@ -191,7 +231,10 @@ xpc_array_set_string(xpc_object_t xarray, size_t index, const char *string)
 
 	xo = xarray;
 	xotmp = xpc_string_create(string);
-	return (xpc_array_set_value(xarray, index, xotmp));
+	if (xotmp == NULL)
+		return;
+	xpc_array_set_value(xarray, index, xotmp);
+	xpc_release(xotmp);
 }
 
 void
@@ -201,7 +244,10 @@ xpc_array_set_uuid(xpc_object_t xarray, size_t index, const uuid_t value)
 
 	xo = xarray;
 	xotmp = xpc_uuid_create(value);
-	return (xpc_array_set_value(xarray, index, xotmp));
+	if (xotmp == NULL)
+		return;
+	xpc_array_set_value(xarray, index, xotmp);
+	xpc_release(xotmp);
 }
 
 void
