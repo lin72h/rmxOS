@@ -93,3 +93,24 @@ RSS via `ps`, and use `launchctl list` as a final MIG barrier.
 The fixture DSO must use the distinct SONAME `libxpc_fixture.so.5`, and test
 binaries must name that dependency explicitly. Reusing the system library's
 SONAME can select an already-loaded system `libxpc` before RUNPATH is used.
+
+# Connection contracts (op-246)
+
+`stage_a.zig` also holds the stage A connection cases. Listeners check in
+with PID 1 launchd and clients look the name up through it; each case uses
+its own name, `org.rmxos.op246.<case>.<pid>`, and runs as root under the
+guest batch. Handlers are Blocks ABI literals built in Zig, so a handler can
+retain the connection it serves the way a capturing Swift closure does.
+
+- `tokenFields` re-executes the program as a client. The client looks the
+  name up as root and then drops to the `tests` user (977:977) before it
+  sends: launchd sends a non-root anonymous caller to a per-user bootstrap
+  (`sbin/launchd/core.c:9293`). The kernel stamps the audit token at send.
+- `retentionCheckInFails` holds `org.rmxos.logd.retention` itself, loads a
+  job running logd-retention, and reads the job's `LastExitStatus` from
+  `launchctl list <label>`.
+- The base programs under `/usr/tests/op246-base/` bind the 8e9c9656
+  fixture libxpc and the parent image's `libbsm.so.3` through their run path,
+  and `retentionCheckInFails` runs the parent image's logd-retention there.
+
+These cases need Mach and launchd; they run in the guest only.

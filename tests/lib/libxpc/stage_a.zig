@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause
-// xpc-lite-v1 stage A object-core contracts. SDK citations refer to the staged
+// xpc-lite-v1 stage A object-core and connection contracts. SDK citations refer to the staged
 // macOS 27 xpc/xpc.h. New entry points are looked up at run time so that a
 // library without them fails a named check instead of failing to link.
 const std = @import("std");
@@ -13,6 +13,14 @@ const c = @cImport({
     @cInclude("unistd.h");
     @cInclude("dlfcn.h");
     @cInclude("sys/wait.h");
+    @cInclude("stdio.h");
+    @cInclude("fcntl.h");
+    @cInclude("grp.h");
+    @cInclude("pthread.h");
+    @cInclude("pthread_np.h");
+    @cInclude("semaphore.h");
+    @cInclude("time.h");
+    @cInclude("signal.h");
 });
 const O = c.xpc_object_t;
 extern const _xpc_type_dictionary: u8;
@@ -167,6 +175,844 @@ pub fn secondArrayInsertRefused() !void {
     try check("refusal message", std.mem.indexOf(u8, buf[0..len], "already in an array") != null);
 }
 
+// ---------------------------------------------------------------------------
+// Connections (op-246). Listeners check in with PID 1 launchd and clients look
+// the name up through it; each case uses its own name. connection.h citations
+// are the staged macOS 27 xpc/connection.h. Blocks are built here by the
+// Blocks ABI so a handler can retain the connection it serves, as a Swift
+// closure capturing it does.
+extern fn xpc_connection_create_mach_service([*:0]const u8, O, u64) O;
+extern fn xpc_connection_set_event_handler(O, ?*anyopaque) void;
+extern fn xpc_connection_set_target_queue(O, O) void;
+extern fn xpc_connection_set_context(O, ?*anyopaque) void;
+extern fn xpc_connection_set_finalizer_f(O, *const fn (?*anyopaque) callconv(.c) void) void;
+extern fn xpc_connection_resume(O) void;
+extern fn xpc_connection_suspend(O) void;
+extern fn xpc_connection_cancel(O) void;
+extern fn xpc_connection_send_message(O, O) void;
+extern fn xpc_connection_send_message_with_reply(O, O, O, ?*anyopaque) void;
+extern fn xpc_connection_send_message_with_reply_sync(O, O) O;
+extern fn xpc_connection_get_euid(O) u32;
+extern fn xpc_connection_get_pid(O) c_int;
+extern fn xpc_dictionary_get_audit_token(O, *Token) void;
+extern fn dispatch_queue_create([*:0]const u8, O) O;
+extern fn dispatch_release(O) void;
+extern fn dispatch_get_global_queue(c_long, c_ulong) O;
+extern fn dispatch_async_f(O, ?*anyopaque, *const fn (?*anyopaque) callconv(.c) void) void;
+extern fn audit_token_to_au32(Token, ?*u32, ?*u32, ?*u32, ?*u32, ?*u32, ?*c_int, ?*c_int, ?*anyopaque) void;
+extern const _xpc_error_connection_invalid: u8;
+extern const _xpc_error_connection_interrupted: u8;
+extern const _xpc_type_connection: u8;
+extern var _NSConcreteStackBlock: [32]?*anyopaque;
+extern fn _Block_copy(?*const anyopaque) ?*anyopaque;
+extern fn _Block_release(?*const anyopaque) void;
+const Token = extern struct { val: [8]u32 };
+const LISTENER: u64 = 1;
+const INVALID: u64 = 1 << 32;
+const INTERRUPTED: u64 = (1 << 32) + 1;
+const PEER: u64 = (1 << 32) + 2;
+const tests_user: u32 = 977;
+var self_path: [*:0]const u8 = "stage_a_test";
+
+fn invalidObject() O {
+    return @ptrCast(@constCast(&_xpc_error_connection_invalid));
+}
+fn eventCode(o: O) u64 {
+    if (o == invalidObject()) return INVALID;
+    if (o == @as(O, @ptrCast(@constCast(&_xpc_error_connection_interrupted)))) return INTERRUPTED;
+    if (c.xpc_get_type(o) == @as(c.xpc_type_t, @ptrCast(&_xpc_type_connection))) return PEER;
+    return c.xpc_dictionary_get_uint64(o, "value");
+}
+fn bump(p: *u64) void {
+    _ = @atomicRmw(u64, p, .Add, 1, .seq_cst);
+}
+fn load(p: *u64) u64 {
+    return @atomicLoad(u64, p, .seq_cst);
+}
+fn waitMs(s: *c.sem_t, ms: u64) bool {
+    var t: c.timespec = undefined;
+    _ = c.clock_gettime(c.CLOCK_REALTIME, &t);
+    const ns: u64 = @as(u64, @intCast(t.tv_nsec)) + ms * 1_000_000;
+    t.tv_sec += @intCast(ns / 1_000_000_000);
+    t.tv_nsec = @intCast(ns % 1_000_000_000);
+    return c.sem_timedwait(s, &t) == 0;
+}
+fn sleepMs(ms: u32) void {
+    _ = c.usleep(ms * 1000);
+}
+
+// An ordered record of the events one handler saw.
+const Events = struct {
+    sem: c.sem_t = undefined,
+    log: [512]u64 = @splat(0),
+    n: u64 = 0,
+    main_thread: u64 = 0,
+    fn init(e: *Events) void {
+        e.* = .{};
+        _ = c.sem_init(&e.sem, 0, 0);
+    }
+    fn record(e: *Events, o: O) void {
+        if (c.pthread_main_np() == 1) bump(&e.main_thread);
+        const i = @atomicRmw(u64, &e.n, .Add, 1, .seq_cst);
+        if (i < e.log.len) e.log[@intCast(i)] = eventCode(o);
+        _ = c.sem_post(&e.sem);
+    }
+    fn count(e: *Events) u64 {
+        return load(&e.n);
+    }
+    fn waitFor(e: *Events, n: u64, ms: u64) bool {
+        var seen: u64 = 0;
+        while (seen < n) : (seen += 1) if (!waitMs(&e.sem, ms)) return false;
+        return true;
+    }
+    fn show(e: *Events, label: []const u8) void {
+        const n: usize = @intCast(@min(e.count(), 16));
+        std.debug.print("stage_a events {s} count={d} log={any}\n", .{ label, e.count(), e.log[0..n] });
+    }
+};
+
+// Blocks ABI (BlocksRuntime runtime.c): a stack literal with copy/dispose
+// helpers, copied to the heap once. `retains` makes the block hold `conn`.
+const Fn = *const fn (?*anyopaque, O, O) callconv(.c) void;
+const Descriptor = extern struct {
+    reserved: c_ulong,
+    size: c_ulong,
+    copy: *const fn (*Block, *const Block) callconv(.c) void,
+    dispose: *const fn (*Block) callconv(.c) void,
+};
+const Block = extern struct {
+    isa: ?*anyopaque,
+    flags: c_int,
+    reserved: c_int,
+    invoke: *const fn (*Block, O) callconv(.c) void,
+    descriptor: *const Descriptor,
+    f: Fn,
+    ctx: ?*anyopaque,
+    conn: O,
+    retains: bool,
+    released: ?*u64,
+};
+fn blockInvoke(b: *Block, o: O) callconv(.c) void {
+    b.f(b.ctx, b.conn, o);
+}
+fn blockCopy(_: *Block, src: *const Block) callconv(.c) void {
+    if (src.retains) _ = c.xpc_retain(src.conn);
+}
+fn blockDispose(b: *Block) callconv(.c) void {
+    if (b.retains) c.xpc_release(b.conn);
+    if (b.released) |r| bump(r);
+}
+const descriptor = Descriptor{ .reserved = 0, .size = @sizeOf(Block), .copy = &blockCopy, .dispose = &blockDispose };
+fn block(f: Fn, ctx: ?*anyopaque, conn: O, retains: bool, released: ?*u64) ?*anyopaque {
+    var literal = Block{ .isa = @ptrCast(&_NSConcreteStackBlock), .flags = 1 << 25, .reserved = 0, .invoke = &blockInvoke, .descriptor = &descriptor, .f = f, .ctx = ctx, .conn = conn, .retains = retains, .released = released };
+    return _Block_copy(&literal);
+}
+fn setHandler(conn: O, f: Fn, ctx: ?*anyopaque, retains: bool, released: ?*u64) void {
+    const b = block(f, ctx, conn, retains, released);
+    xpc_connection_set_event_handler(conn, b);
+    _Block_release(b);
+}
+fn recordEvent(ctx: ?*anyopaque, _: O, o: O) callconv(.c) void {
+    const e: *Events = @ptrCast(@alignCast(ctx.?));
+    e.record(o);
+}
+fn sendReply(conn: O, value: u64, events: *Events) void {
+    const m = c.xpc_dictionary_create(null, null, 0);
+    c.xpc_dictionary_set_uint64(m, "value", value);
+    const b = block(&recordEvent, events, null, false, null);
+    xpc_connection_send_message_with_reply(conn, m, null, b);
+    _Block_release(b);
+    c.xpc_release(m);
+}
+fn sendValue(conn: O, value: u64) void {
+    const m = c.xpc_dictionary_create(null, null, 0);
+    c.xpc_dictionary_set_uint64(m, "value", value);
+    xpc_connection_send_message(conn, m);
+    c.xpc_release(m);
+}
+fn exchange(conn: O, value: u64) Failure!void {
+    const m = c.xpc_dictionary_create(null, null, 0);
+    c.xpc_dictionary_set_uint64(m, "value", value);
+    const r = xpc_connection_send_message_with_reply_sync(conn, m);
+    c.xpc_release(m);
+    try check("reply received", r != null);
+    defer c.xpc_release(r);
+    std.debug.print("stage_a exchange expected={d} observed={d}\n", .{ value, eventCode(r) });
+    try check("reply echoes the request", eventCode(r) == value);
+}
+
+// A listener and what its peers did.
+const Mode = enum { echo, retain, hold, task, swap, burst, token };
+const Server = struct {
+    mode: Mode,
+    listener: O = null,
+    events: Events = .{},
+    listener_events: Events = .{},
+    peer_sem: c.sem_t = undefined,
+    peer: O = null,
+    peer_disposed: u64 = 0,
+    peer_finalized: u64 = 0,
+    finalized_sem: c.sem_t = undefined,
+    token: Token = .{ .val = @splat(0) },
+    conn_euid: u32 = 0,
+    conn_pid: c_int = 0,
+};
+fn serverInit(s: *Server, mode: Mode) void {
+    s.* = .{ .mode = mode };
+    s.events.init();
+    s.listener_events.init();
+    _ = c.sem_init(&s.peer_sem, 0, 0);
+    _ = c.sem_init(&s.finalized_sem, 0, 0);
+}
+fn peerFinalized(ctx: ?*anyopaque) callconv(.c) void {
+    const s: *Server = @ptrCast(@alignCast(ctx.?));
+    bump(&s.peer_finalized);
+    _ = c.sem_post(&s.finalized_sem);
+}
+fn peerEcho(ctx: ?*anyopaque, peer: O, o: O) callconv(.c) void {
+    const s: *Server = @ptrCast(@alignCast(ctx.?));
+    if (s.mode == .token and eventCode(o) < INVALID) {
+        xpc_dictionary_get_audit_token(o, &s.token);
+        s.conn_euid = xpc_connection_get_euid(peer);
+        s.conn_pid = xpc_connection_get_pid(peer);
+    }
+    if (s.mode == .burst and eventCode(o) < INVALID) {
+        const n = c.xpc_dictionary_get_uint64(o, "burst");
+        var i: u64 = 1;
+        while (i <= n) : (i += 1) sendValue(peer, i);
+    }
+    if (eventCode(o) < INVALID) {
+        const r = c.xpc_dictionary_create_reply(o);
+        if (r != null) {
+            c.xpc_dictionary_set_uint64(r, "value", eventCode(o));
+            xpc_connection_send_message(peer, r);
+            c.xpc_release(r);
+        }
+    }
+    s.events.record(o);
+}
+fn swapSecond(ctx: ?*anyopaque, _: O, o: O) callconv(.c) void {
+    const s: *Server = @ptrCast(@alignCast(ctx.?));
+    if (eventCode(o) < INVALID) {
+        const i = @atomicRmw(u64, &s.events.n, .Add, 1, .seq_cst);
+        if (i < s.events.log.len) s.events.log[@intCast(i)] = 100 + eventCode(o);
+        _ = c.sem_post(&s.events.sem);
+    }
+}
+fn swapFirst(ctx: ?*anyopaque, peer: O, o: O) callconv(.c) void {
+    const s: *Server = @ptrCast(@alignCast(ctx.?));
+    if (eventCode(o) >= INVALID) return;
+    s.events.record(o);
+    // The listener receives the next messages meanwhile.
+    sleepMs(300);
+    setHandler(peer, &swapSecond, s, false, null);
+}
+fn setupPeer(ctx: ?*anyopaque) callconv(.c) void {
+    const s: *Server = @ptrCast(@alignCast(ctx.?));
+    const peer = @atomicLoad(O, &s.peer, .seq_cst);
+    setHandler(peer, &peerEcho, s, false, &s.peer_disposed);
+    xpc_connection_resume(peer);
+    if (s.mode == .task) c.xpc_release(peer);
+}
+fn listenerEvent(ctx: ?*anyopaque, _: O, o: O) callconv(.c) void {
+    const s: *Server = @ptrCast(@alignCast(ctx.?));
+    if (eventCode(o) != PEER) {
+        s.listener_events.record(o);
+        return;
+    }
+    const peer = o;
+    switch (s.mode) {
+        .echo, .burst, .token => {
+            setHandler(peer, &peerEcho, s, false, &s.peer_disposed);
+            xpc_connection_resume(peer);
+        },
+        .retain => {
+            xpc_connection_set_context(peer, s);
+            xpc_connection_set_finalizer_f(peer, &peerFinalized);
+            setHandler(peer, &peerEcho, s, true, &s.peer_disposed);
+            xpc_connection_resume(peer);
+        },
+        .swap => {
+            setHandler(peer, &swapFirst, s, false, null);
+            xpc_connection_resume(peer);
+        },
+        // The peer's handler is set later, by the test or from a task.
+        .hold, .task => {
+            @atomicStore(O, &s.peer, c.xpc_retain(peer), .seq_cst);
+            if (s.mode == .task) dispatch_async_f(dispatch_get_global_queue(0, 0), s, &setupPeer);
+        },
+    }
+    _ = c.sem_post(&s.peer_sem);
+}
+fn serviceName(buf: *[96]u8, tag: []const u8) [*:0]const u8 {
+    const n = c.snprintf(buf, buf.len, "org.rmxos.op246.%.*s.%d", @as(c_int, @intCast(tag.len)), tag.ptr, c.getpid());
+    std.debug.assert(n > 0 and n < buf.len);
+    return @ptrCast(buf);
+}
+fn listen(s: *Server, name: [*:0]const u8, q: O) Failure!void {
+    s.listener = xpc_connection_create_mach_service(name, q, LISTENER);
+    try check("listener created", s.listener != null);
+    setHandler(s.listener, &listenerEvent, s, false, null);
+    xpc_connection_resume(s.listener);
+}
+fn client(name: [*:0]const u8, q: O, events: *Events) Failure!O {
+    const conn = xpc_connection_create_mach_service(name, q, 0);
+    try check("client created", conn != null);
+    setHandler(conn, &recordEvent, events, false, null);
+    return conn;
+}
+fn stop(conn: O) void {
+    if (conn == null) return;
+    xpc_connection_cancel(conn);
+    c.xpc_release(conn);
+}
+fn serialQueue() O {
+    return dispatch_queue_create("org.rmxos.op246.queue", null);
+}
+
+// connection.h:343-366: activation; a second activation has no effect, even on
+// a suspended connection.
+pub fn activateInactive() !void {
+    const activate = try entry(*const fn (O) callconv(.c) void, "xpc_connection_activate");
+    var buf: [96]u8 = undefined;
+    const name = serviceName(&buf, "activate");
+    var s: Server = undefined;
+    serverInit(&s, .echo);
+    const q = serialQueue();
+    s.listener = xpc_connection_create_mach_service(name, q, LISTENER);
+    try check("listener created", s.listener != null);
+    setHandler(s.listener, &listenerEvent, &s, false, null);
+    activate(s.listener);
+    var events: Events = undefined;
+    events.init();
+    const conn = try client(name, q, &events);
+    activate(conn);
+    activate(conn);
+    try exchange(conn, 7);
+    xpc_connection_suspend(conn);
+    activate(conn);
+    var replies: Events = undefined;
+    replies.init();
+    sendReply(conn, 8, &replies);
+    const held = !replies.waitFor(1, 500);
+    std.debug.print("stage_a suspended reply held={}\n", .{held});
+    try check("activating a suspended connection has no effect", held);
+    xpc_connection_resume(conn);
+    try check("reply after resume", replies.waitFor(1, 3000) and replies.log[0] == 8);
+    stop(conn);
+    stop(s.listener);
+    dispatch_release(q);
+}
+
+// connection.h:151-155: creation succeeds for an absent name; the look-up at
+// activation fails with one INVALID, to the handler and to queued replies. A
+// listener whose check-in fails gets one INVALID as well.
+pub fn absentServiceInvalid() !void {
+    var buf: [96]u8 = undefined;
+    const name = serviceName(&buf, "absent");
+    const q = serialQueue();
+    var events: Events = undefined;
+    events.init();
+    const conn = xpc_connection_create_mach_service(name, q, 0);
+    try check("create returns a connection for an absent name", conn != null);
+    setHandler(conn, &recordEvent, &events, false, null);
+    var replies: Events = undefined;
+    replies.init();
+    sendReply(conn, 1, &replies);
+    xpc_connection_resume(conn);
+    try check("event handler told", events.waitFor(1, 3000));
+    try check("queued reply told", replies.waitFor(1, 3000));
+    sleepMs(300);
+    events.show("client");
+    replies.show("reply");
+    try check("one INVALID to the event handler", events.count() == 1 and events.log[0] == INVALID);
+    try check("one INVALID to the queued reply", replies.count() == 1 and replies.log[0] == INVALID);
+    c.xpc_release(conn);
+
+    var buf2: [96]u8 = undefined;
+    const taken = serviceName(&buf2, "taken");
+    var s: Server = undefined;
+    serverInit(&s, .echo);
+    try listen(&s, taken, q);
+    var probe: Events = undefined;
+    probe.init();
+    const c2 = try client(taken, q, &probe);
+    xpc_connection_resume(c2);
+    try exchange(c2, 3);
+    stop(c2);
+    var second: Server = undefined;
+    serverInit(&second, .echo);
+    try listen(&second, taken, q);
+    try check("second listener told", second.listener_events.waitFor(1, 3000));
+    sleepMs(300);
+    second.listener_events.show("second listener");
+    try check("one INVALID when the check-in fails", second.listener_events.count() == 1 and second.listener_events.log[0] == INVALID);
+    c.xpc_release(second.listener);
+    stop(s.listener);
+    dispatch_release(q);
+}
+
+// connection.h:140-145: a NULL target queue is DISPATCH_TARGET_QUEUE_DEFAULT.
+// Nothing here drains the main queue.
+pub fn defaultTargetQueue() !void {
+    var buf: [96]u8 = undefined;
+    const name = serviceName(&buf, "default");
+    var s: Server = undefined;
+    serverInit(&s, .echo);
+    try listen(&s, name, null);
+    var events: Events = undefined;
+    events.init();
+    const conn = try client(name, null, &events);
+    xpc_connection_resume(conn);
+    var replies: Events = undefined;
+    replies.init();
+    sendReply(conn, 5, &replies);
+    try check("reply delivered on the default target queue", replies.waitFor(1, 3000) and replies.log[0] == 5);
+    const q = serialQueue();
+    var events2: Events = undefined;
+    events2.init();
+    const conn2 = try client(name, q, &events2);
+    xpc_connection_set_target_queue(conn2, null);
+    xpc_connection_resume(conn2);
+    sendReply(conn2, 6, &replies);
+    try check("reply after setting a NULL target queue", replies.waitFor(1, 3000) and replies.log[1] == 6);
+    xpc_connection_cancel(conn);
+    try check("event delivered on the default target queue", events.waitFor(1, 3000) and events.log[0] == INVALID);
+    std.debug.print("stage_a main_thread replies={d} events={d}\n", .{ replies.main_thread, events.main_thread });
+    try check("not on the main thread", replies.main_thread == 0 and events.main_thread == 0);
+    c.xpc_release(conn);
+    stop(conn2);
+    stop(s.listener);
+    dispatch_release(q);
+}
+
+// A new peer holds its messages until it is activated, here from a task after
+// the listener's handler has returned.
+pub fn peerHoldsUntilActivated() !void {
+    var buf: [96]u8 = undefined;
+    const name = serviceName(&buf, "hold");
+    var s: Server = undefined;
+    serverInit(&s, .hold);
+    const q = serialQueue();
+    try listen(&s, name, q);
+    var events: Events = undefined;
+    events.init();
+    const conn = try client(name, q, &events);
+    xpc_connection_resume(conn);
+    for (1..4) |i| sendValue(conn, i);
+    try check("peer offered to the listener", waitMs(&s.peer_sem, 3000));
+    sleepMs(200);
+    dispatch_async_f(dispatch_get_global_queue(0, 0), &s, &setupPeer);
+    const got = s.events.waitFor(3, 3000);
+    s.events.show("peer");
+    try check("held messages delivered after activation", got);
+    try check("in order", s.events.log[0] == 1 and s.events.log[1] == 2 and s.events.log[2] == 3);
+    stop(conn);
+    try check("peer INVALID", s.events.waitFor(1, 3000) and s.events.log[3] == INVALID);
+    c.xpc_release(s.peer);
+    stop(s.listener);
+    dispatch_release(q);
+}
+
+var client_finalized: c.sem_t = undefined;
+fn clientFinalized(_: ?*anyopaque) callconv(.c) void {
+    _ = c.sem_post(&client_finalized);
+}
+
+// connection.h:333-335: a peer is released after its final INVALID; a
+// handler that captures its own connection is released then too.
+pub fn peerReleasedAfterInvalid() !void {
+    var buf: [96]u8 = undefined;
+    const name = serviceName(&buf, "release");
+    var s: Server = undefined;
+    serverInit(&s, .retain);
+    const q = serialQueue();
+    try listen(&s, name, q);
+    _ = c.sem_init(&client_finalized, 0, 0);
+    var events: Events = undefined;
+    events.init();
+    var disposed: u64 = 0;
+    const conn = xpc_connection_create_mach_service(name, q, 0);
+    try check("client created", conn != null);
+    xpc_connection_set_finalizer_f(conn, &clientFinalized);
+    setHandler(conn, &recordEvent, &events, true, &disposed);
+    xpc_connection_resume(conn);
+    try exchange(conn, 3);
+    xpc_connection_cancel(conn);
+    c.xpc_release(conn);
+    try check("client INVALID", events.waitFor(1, 3000) and events.log[0] == INVALID);
+    const freed = waitMs(&client_finalized, 3000);
+    std.debug.print("stage_a client finalized={} disposed={d}\n", .{ freed, load(&disposed) });
+    try check("a handler capturing its connection does not keep it", freed and load(&disposed) == 1);
+    try check("peer INVALID", s.events.waitFor(2, 3000) and s.events.log[1] == INVALID);
+    const peer_freed = waitMs(&s.finalized_sem, 3000);
+    std.debug.print("stage_a peer finalized={} disposed={d}\n", .{ peer_freed, load(&s.peer_disposed) });
+    try check("peer released after its final event while the listener lives", peer_freed and load(&s.peer_disposed) == 1);
+    stop(s.listener);
+    dispatch_release(q);
+}
+
+// Cancel releases the client's rights at once: the server's peer gets INVALID
+// while the client still holds its reference.
+pub fn cancelNotifiesPeer() !void {
+    var buf: [96]u8 = undefined;
+    const name = serviceName(&buf, "cancel");
+    var s: Server = undefined;
+    serverInit(&s, .echo);
+    const q = serialQueue();
+    try listen(&s, name, q);
+    var events: Events = undefined;
+    events.init();
+    const conn = try client(name, q, &events);
+    xpc_connection_resume(conn);
+    try exchange(conn, 1);
+    xpc_connection_cancel(conn);
+    const told = s.events.waitFor(2, 3000);
+    s.events.show("peer");
+    try check("peer told at cancel", told and s.events.log[1] == INVALID);
+    c.xpc_release(conn);
+    stop(s.listener);
+    dispatch_release(q);
+}
+
+// One connection shared by four threads; the server sets each peer's handler
+// from a task; replies go to the default target queue.
+var shared_replies: Events = undefined;
+var shared_conn: O = null;
+fn sender(arg: ?*anyopaque) callconv(.c) ?*anyopaque {
+    const t = @intFromPtr(arg);
+    for (0..25) |i| sendReply(shared_conn, t * 100 + i + 1, &shared_replies);
+    return null;
+}
+pub fn concurrentSends() !void {
+    var buf: [96]u8 = undefined;
+    const name = serviceName(&buf, "concurrent");
+    var s: Server = undefined;
+    serverInit(&s, .task);
+    const q = serialQueue();
+    try listen(&s, name, q);
+    shared_replies.init();
+    var events: Events = undefined;
+    events.init();
+    shared_conn = try client(name, null, &events);
+    xpc_connection_resume(shared_conn);
+    var threads: [4]c.pthread_t = undefined;
+    for (&threads, 0..) |*t, i| try check("sender thread", c.pthread_create(t, null, &sender, @ptrFromInt(i)) == 0);
+    for (threads) |t| _ = c.pthread_join(t, null);
+    const all = shared_replies.waitFor(100, 5000);
+    shared_replies.show("replies");
+    try check("100 replies", all and shared_replies.count() == 100);
+    var seen: [400]u8 = @splat(0);
+    for (shared_replies.log[0..100]) |v| {
+        if (v >= 1 and v < 400) seen[@intCast(v)] += 1;
+    }
+    var each = true;
+    for (0..4) |t| for (0..25) |i| {
+        each = each and seen[t * 100 + i + 1] == 1;
+    };
+    try check("each request answered once", each);
+    stop(shared_conn);
+    stop(s.listener);
+    dispatch_release(q);
+}
+
+// Cancel while the handler runs: it finishes, then the INVALID is the only
+// further event, then the handler is released.
+var running_entered: c.sem_t = undefined;
+var running_gate: c.sem_t = undefined;
+var running_busy: u64 = 0;
+var running_overlap: u64 = 0;
+fn blockingEvent(ctx: ?*anyopaque, _: O, o: O) callconv(.c) void {
+    const e: *Events = @ptrCast(@alignCast(ctx.?));
+    if (@atomicRmw(u64, &running_busy, .Add, 1, .seq_cst) != 0) bump(&running_overlap);
+    e.record(o);
+    if (e.count() == 1) {
+        _ = c.sem_post(&running_entered);
+        _ = waitMs(&running_gate, 5000);
+    }
+    _ = @atomicRmw(u64, &running_busy, .Sub, 1, .seq_cst);
+}
+pub fn cancelWhileHandlerRuns() !void {
+    var buf: [96]u8 = undefined;
+    const name = serviceName(&buf, "running");
+    var s: Server = undefined;
+    serverInit(&s, .burst);
+    const q = serialQueue();
+    try listen(&s, name, q);
+    _ = c.sem_init(&running_entered, 0, 0);
+    _ = c.sem_init(&running_gate, 0, 0);
+    var events: Events = undefined;
+    events.init();
+    var disposed: u64 = 0;
+    const conn = xpc_connection_create_mach_service(name, q, 0);
+    try check("client created", conn != null);
+    setHandler(conn, &blockingEvent, &events, false, &disposed);
+    xpc_connection_resume(conn);
+    const m = c.xpc_dictionary_create(null, null, 0);
+    c.xpc_dictionary_set_uint64(m, "burst", 3);
+    xpc_connection_send_message(conn, m);
+    c.xpc_release(m);
+    try check("handler running", waitMs(&running_entered, 3000));
+    sleepMs(100);
+    xpc_connection_cancel(conn);
+    sleepMs(100);
+    const during = events.count();
+    _ = c.sem_post(&running_gate);
+    _ = events.waitFor(2, 3000);
+    sleepMs(300);
+    events.show("client");
+    std.debug.print("stage_a during={d} overlap={d} disposed={d}\n", .{ during, load(&running_overlap), load(&disposed) });
+    try check("nothing delivered while the handler runs", during == 1 and load(&running_overlap) == 0);
+    try check("INVALID is the only event after cancel", events.count() == 2 and events.log[1] == INVALID);
+    try check("handler released after the final event", load(&disposed) == 1);
+    c.xpc_release(conn);
+    stop(s.listener);
+    dispatch_release(q);
+}
+
+// connection.h:268-275: a swap from inside the handler takes effect from the
+// next event; swaps racing deliveries lose no event and release every block.
+var swap_counts: [2]u64 = .{ 0, 0 };
+var swap_created: u64 = 0;
+var swap_disposed: u64 = 0;
+var swap_stop: u32 = 0;
+var swap_conn: O = null;
+var swap_total: c.sem_t = undefined;
+var swap_events: Events = undefined;
+fn countA(_: ?*anyopaque, _: O, o: O) callconv(.c) void {
+    countInto(0, o);
+}
+fn countB(_: ?*anyopaque, _: O, o: O) callconv(.c) void {
+    countInto(1, o);
+}
+fn countInto(i: usize, o: O) void {
+    if (eventCode(o) >= INVALID) {
+        swap_events.record(o);
+        return;
+    }
+    bump(&swap_counts[i]);
+    _ = c.sem_post(&swap_total);
+}
+fn swapper(_: ?*anyopaque) callconv(.c) ?*anyopaque {
+    var i: usize = 0;
+    while (@atomicLoad(u32, &swap_stop, .seq_cst) == 0 and i < 100_000) : (i += 1) {
+        bump(&swap_created);
+        setHandler(swap_conn, if (i % 2 == 0) &countA else &countB, null, false, &swap_disposed);
+    }
+    return null;
+}
+pub fn handlerSwapWhileActive() !void {
+    var buf: [96]u8 = undefined;
+    const name = serviceName(&buf, "swap");
+    var s: Server = undefined;
+    serverInit(&s, .swap);
+    const q = serialQueue();
+    try listen(&s, name, q);
+    var events: Events = undefined;
+    events.init();
+    const conn = try client(name, q, &events);
+    xpc_connection_resume(conn);
+    for (1..4) |i| sendValue(conn, i);
+    const got = s.events.waitFor(3, 3000);
+    s.events.show("peer");
+    try check("three events", got);
+    try check("swap inside the handler takes effect from the next event", s.events.log[0] == 1 and s.events.log[1] == 102 and s.events.log[2] == 103);
+    stop(conn);
+
+    var b: Server = undefined;
+    serverInit(&b, .burst);
+    var buf2: [96]u8 = undefined;
+    const name2 = serviceName(&buf2, "swaprace");
+    try listen(&b, name2, q);
+    _ = c.sem_init(&swap_total, 0, 0);
+    swap_events.init();
+    swap_conn = xpc_connection_create_mach_service(name2, q, 0);
+    try check("client created", swap_conn != null);
+    bump(&swap_created);
+    setHandler(swap_conn, &countA, null, false, &swap_disposed);
+    xpc_connection_resume(swap_conn);
+    var t: c.pthread_t = undefined;
+    try check("swapper thread", c.pthread_create(&t, null, &swapper, null) == 0);
+    const m = c.xpc_dictionary_create(null, null, 0);
+    c.xpc_dictionary_set_uint64(m, "burst", 200);
+    xpc_connection_send_message(swap_conn, m);
+    c.xpc_release(m);
+    var n: u32 = 0;
+    while (n < 200 and waitMs(&swap_total, 5000)) n += 1;
+    @atomicStore(u32, &swap_stop, 1, .seq_cst);
+    _ = c.pthread_join(t, null);
+    xpc_connection_cancel(swap_conn);
+    const ended = swap_events.waitFor(1, 3000);
+    sleepMs(300);
+    std.debug.print("stage_a swaps created={d} disposed={d} a={d} b={d}\n", .{ load(&swap_created), load(&swap_disposed), load(&swap_counts[0]), load(&swap_counts[1]) });
+    try check("every message delivered once across swaps", n == 200 and load(&swap_counts[0]) + load(&swap_counts[1]) == 200);
+    try check("final INVALID", ended and swap_events.count() == 1);
+    try check("every handler block released", load(&swap_created) == load(&swap_disposed));
+    c.xpc_release(swap_conn);
+    stop(b.listener);
+    stop(s.listener);
+    dispatch_release(q);
+}
+
+// Nothing on standard output: ten messages with stdout on a pipe.
+pub fn noStdout() !void {
+    var buf: [96]u8 = undefined;
+    const name = serviceName(&buf, "stdout");
+    var s: Server = undefined;
+    serverInit(&s, .echo);
+    const q = serialQueue();
+    try listen(&s, name, q);
+    var events: Events = undefined;
+    events.init();
+    const conn = try client(name, q, &events);
+    xpc_connection_resume(conn);
+    var p: [2]c_int = undefined;
+    try check("pipe", c.pipe(&p) == 0);
+    _ = c.fflush(null);
+    const saved = c.dup(1);
+    try check("stdout on the pipe", saved >= 0 and c.dup2(p[1], 1) == 1);
+    var ok = true;
+    for (1..11) |i| exchange(conn, i) catch {
+        ok = false;
+    };
+    _ = c.fflush(null);
+    _ = c.dup2(saved, 1);
+    _ = c.close(saved);
+    _ = c.close(p[1]);
+    var out: [4096]u8 = undefined;
+    const n = c.read(p[0], &out, out.len);
+    _ = c.close(p[0]);
+    const len: usize = if (n > 0) @intCast(n) else 0;
+    std.debug.print("stage_a stdout bytes={d} first=\"{s}\"\n", .{ len, out[0..@min(len, 80)] });
+    try check("ten exchanges", ok);
+    try check("standard output stays empty", n == 0);
+    stop(conn);
+    stop(s.listener);
+    dispatch_release(q);
+}
+
+// libbsm accessors on the token a client running as the tests user sent.
+fn clientRole(name: [*:0]const u8) u8 {
+    const conn = xpc_connection_create_mach_service(name, null, 0);
+    if (conn == null) return 2;
+    var events: Events = undefined;
+    events.init();
+    setHandler(conn, &recordEvent, &events, false, null);
+    // Look the name up as root: launchd sends a non-root anonymous caller
+    // to a per-user bootstrap (core.c:9293), which is not under test.
+    xpc_connection_resume(conn);
+    const groups = [_]c.gid_t{tests_user};
+    if (c.setgroups(1, &groups) != 0 or c.setgid(tests_user) != 0 or c.setuid(tests_user) != 0) return 3;
+    const m = c.xpc_dictionary_create(null, null, 0);
+    c.xpc_dictionary_set_uint64(m, "value", @intCast(c.getpid()));
+    const r = xpc_connection_send_message_with_reply_sync(conn, m);
+    if (r == null or eventCode(r) != @as(u64, @intCast(c.getpid()))) return 4;
+    return 0;
+}
+pub fn tokenFields() !void {
+    const Get = *const fn (Token) callconv(.c) u32;
+    const auid = try entry(Get, "audit_token_to_auid");
+    const euid = try entry(Get, "audit_token_to_euid");
+    const egid = try entry(Get, "audit_token_to_egid");
+    const ruid = try entry(Get, "audit_token_to_ruid");
+    const rgid = try entry(Get, "audit_token_to_rgid");
+    const pid = try entry(*const fn (Token) callconv(.c) c_int, "audit_token_to_pid");
+    const asid = try entry(*const fn (Token) callconv(.c) c_int, "audit_token_to_asid");
+    var buf: [96]u8 = undefined;
+    const name = serviceName(&buf, "token");
+    var s: Server = undefined;
+    serverInit(&s, .token);
+    const q = serialQueue();
+    try listen(&s, name, q);
+    const child = c.fork();
+    try check("fork", child >= 0);
+    if (child == 0) {
+        const argv = [_:null]?[*:0]const u8{ self_path, "--op246-client", name };
+        _ = c.execv(self_path, @ptrCast(&argv));
+        c._exit(127);
+    }
+    var status: c_int = 0;
+    var waited: c_int = 0;
+    var ms: u32 = 0;
+    while (ms < 8000) : (ms += 10) {
+        waited = c.waitpid(child, &status, c.WNOHANG);
+        if (waited != 0) break;
+        sleepMs(10);
+    }
+    if (waited == 0) {
+        _ = c.kill(child, c.SIGKILL);
+        _ = c.waitpid(child, &status, 0);
+    }
+    std.debug.print("stage_a client status={d}\n", .{status});
+    try check("client ran as the tests user and got its reply", waited == child and status == 0);
+    try check("server saw the request", s.events.waitFor(1, 1000));
+    var a: [7]u32 = undefined;
+    var p32: c_int = 0;
+    var s32: c_int = 0;
+    audit_token_to_au32(s.token, &a[0], &a[1], &a[2], &a[3], &a[4], &p32, &s32, null);
+    const got = [_]u32{ auid(s.token), euid(s.token), egid(s.token), ruid(s.token), rgid(s.token) };
+    std.debug.print("stage_a token au32={any} pid={d} asid={d} accessors={any} pid={d} asid={d} child={d} conn_euid={d} conn_pid={d}\n", .{ a[0..5], p32, s32, got, pid(s.token), asid(s.token), child, s.conn_euid, s.conn_pid });
+    try check("accessors match audit_token_to_au32", std.mem.eql(u32, got[0..], a[0..5]) and pid(s.token) == p32 and asid(s.token) == s32);
+    try check("client uid and gid", got[1] == tests_user and got[2] == tests_user and got[3] == tests_user and got[4] == tests_user);
+    try check("client pid", pid(s.token) == child);
+    try check("connection credentials agree", s.conn_euid == tests_user and s.conn_pid == child);
+    stop(s.listener);
+    dispatch_release(q);
+}
+
+// logd-retention's managed server exits non-zero when its check-in fails: this
+// process holds the service name first. The base program runs the parent
+// image's logd-retention, staged beside it.
+fn exitStatus(text: []const u8) ?i64 {
+    if (std.mem.indexOf(u8, text, "\"PID\"") != null) return null;
+    const key = "\"LastExitStatus\":";
+    const at = std.mem.indexOf(u8, text, key) orelse return null;
+    var rest = std.mem.trimStart(u8, text[at + key.len ..], " ");
+    var end: usize = 0;
+    while (end < rest.len and (rest[end] == '-' or (rest[end] >= '0' and rest[end] <= '9'))) end += 1;
+    rest = rest[0..end];
+    const v = std.fmt.parseInt(i64, rest, 10) catch return null;
+    return if (v == 0) null else v;
+}
+pub fn retentionCheckInFails() !void {
+    var s: Server = undefined;
+    serverInit(&s, .echo);
+    const q = serialQueue();
+    try listen(&s, "org.rmxos.logd.retention", q);
+    var events: Events = undefined;
+    events.init();
+    const probe = try client("org.rmxos.logd.retention", q, &events);
+    xpc_connection_resume(probe);
+    try exchange(probe, 9);
+    stop(probe);
+    const base = std.mem.startsWith(u8, std.mem.span(self_path), "/usr/tests/op246-base/");
+    const program: []const u8 = if (base) "/usr/tests/op246-base/logd-retention" else "/usr/libexec/logd-retention";
+    const plist = "/tmp/op246-retention.plist";
+    const f = c.fopen(plist, "w");
+    try check("job plist", f != null);
+    _ = c.fprintf(f, "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>Label</key><string>org.rmxos.op246.retention</string><key>ProgramArguments</key><array><string>%.*s</string></array><key>RunAtLoad</key><true/></dict></plist>\n", @as(c_int, @intCast(program.len)), program.ptr);
+    _ = c.fclose(f);
+    try check("launchctl load", c.system("launchctl load " ++ plist) == 0);
+    var status: ?i64 = null;
+    var text: [8192]u8 = undefined;
+    var len: usize = 0;
+    var tries: u32 = 0;
+    while (status == null and tries < 50) : (tries += 1) {
+        sleepMs(100);
+        const pipe = c.popen("launchctl list org.rmxos.op246.retention", "r");
+        if (pipe == null) continue;
+        len = c.fread(&text, 1, text.len, pipe);
+        _ = c.pclose(pipe);
+        status = exitStatus(text[0..len]);
+    }
+    _ = c.system("launchctl unload " ++ plist);
+    _ = c.unlink(plist);
+    std.debug.print("stage_a retention program={s} status={?d}\n", .{ program, status });
+    try check("logd-retention exits 1 when its check-in fails", status != null and status.? == 256);
+    stop(s.listener);
+    dispatch_release(q);
+}
+
 test "dictionaryCreateEmpty" {
     try dictionaryCreateEmpty();
 }
@@ -187,8 +1033,8 @@ const atf = if (builtin.is_test) struct {} else @cImport({
     @cInclude("atf-c.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]atf.atf_tp_t) callconv(.c) atf.atf_error_t) c_int;
-const names = [_][*:0]const u8{ "dictionaryCreateEmpty", "dictionaryGetDictionary", "fdLocal", "setValueNullRemoves", "secondArrayInsertRefused" };
-const functions = [_]*const fn () anyerror!void{ &dictionaryCreateEmpty, &dictionaryGetDictionary, &fdLocal, &setValueNullRemoves, &secondArrayInsertRefused };
+const names = [_][*:0]const u8{ "dictionaryCreateEmpty", "dictionaryGetDictionary", "fdLocal", "setValueNullRemoves", "secondArrayInsertRefused", "activateInactive", "absentServiceInvalid", "defaultTargetQueue", "peerHoldsUntilActivated", "peerReleasedAfterInvalid", "cancelNotifiesPeer", "concurrentSends", "cancelWhileHandlerRuns", "handlerSwapWhileActive", "noStdout", "tokenFields", "retentionCheckInFails" };
+const functions = [_]*const fn () anyerror!void{ &dictionaryCreateEmpty, &dictionaryGetDictionary, &fdLocal, &setValueNullRemoves, &secondArrayInsertRefused, &activateInactive, &absentServiceInvalid, &defaultTargetQueue, &peerHoldsUntilActivated, &peerReleasedAfterInvalid, &cancelNotifiesPeer, &concurrentSends, &cancelWhileHandlerRuns, &handlerSwapWhileActive, &noStdout, &tokenFields, &retentionCheckInFails };
 var cases: if (builtin.is_test) void else [names.len]atf.atf_tc_t = undefined;
 fn body(t: [*c]const atf.atf_tc_t) callconv(.c) void {
     _ = c.alarm(15);
@@ -207,6 +1053,8 @@ fn add(tp: [*c]atf.atf_tp_t) callconv(.c) atf.atf_error_t {
     return atf.atf_no_error();
 }
 pub fn main(argc: c_int, argv: [*c][*c]u8) callconv(.c) c_int {
+    self_path = @ptrCast(argv[0]);
+    if (argc == 3 and std.mem.eql(u8, std.mem.span(argv[1]), "--op246-client")) return clientRole(argv[2]);
     return atf_tp_main(argc, argv, &add);
 }
 comptime {
