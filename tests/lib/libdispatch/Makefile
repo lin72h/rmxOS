@@ -41,7 +41,7 @@ simple_asl_unit: ${.CURDIR}/simple_asl.zig simple_asl.o
 SCRIPTS+= init_once_test
 SCRIPTS+= init_twice_child
 apply_auto.o: ${.CURDIR}/apply_auto.c
-	${CC} ${CFLAGS} -fPIC -c ${.ALLSRC} -o ${.TARGET}
+	${CC} ${CFLAGS} -I${SYSROOT}/usr/include -fPIC -c ${.ALLSRC} -o ${.TARGET}
 init_once_test: ${.CURDIR}/init_once.zig apply_auto.o
 	${ZIG} build-exe ${.CURDIR}/init_once.zig apply_auto.o ${DISPATCH_SO} ${SYSROOT}/usr/lib/libBlocksRuntime.so.0 ${SYSROOT}/usr/lib/libmach.so.5 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET} -rdynamic
 
