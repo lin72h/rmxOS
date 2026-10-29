@@ -343,6 +343,33 @@ void
 xpc_connection_suspend(xpc_connection_t connection);
 
 /*!
+ * @function xpc_connection_activate
+ * Activates the connection. Connections start in an inactive state, so you must
+ * call xpc_connection_activate() on a connection before it will send or receive
+ * any messages.
+ *
+ * @param connection
+ * The connection object which is to be manipulated.
+ *
+ * @discussion
+ * Calling xpc_connection_activate() on an active connection has no effect.
+ * Releasing the last reference on an inactive connection that was created with
+ * an xpc_connection_create*() call is undefined.
+ *
+ * For backward compatibility reasons, xpc_connection_resume() on an inactive
+ * and not otherwise suspended xpc connection has the same effect as calling
+ * xpc_connection_activate(). For new code, using xpc_connection_activate()
+ * is preferred.
+ *
+ * macOS declares it __OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0)
+ * __TVOS_AVAILABLE(10.0) __WATCHOS_AVAILABLE(3.0); this header has no
+ * availability macro for those versions.
+ */
+XPC_EXPORT XPC_NONNULL_ALL
+void
+xpc_connection_activate(xpc_connection_t connection);
+
+/*!
  * @function xpc_connection_resume
  * Resumes the connection. Connections start in a suspended state, so you must
  * call xpc_connection_resume() on a connection before it will send or receive

@@ -1776,6 +1776,8 @@ main(int argc, char *argv[])
 	listener = xpc_connection_create_mach_service("org.rmxos.logd.retention", serverq, XPC_CONNECTION_MACH_SERVICE_LISTENER);
 	xpc_connection_set_event_handler(listener, ^(xpc_object_t peer) {
 		if (xpc_get_type(peer) == XPC_TYPE_CONNECTION) accept_connection(peer);
+		/* The check-in, made at activation, did not succeed. */
+		else if (peer == XPC_ERROR_CONNECTION_INVALID) exit(1);
 	});
 	xpc_connection_resume(listener);
 

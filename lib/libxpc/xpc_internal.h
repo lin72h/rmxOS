@@ -124,6 +124,7 @@ struct xpc_connection {
 	dispatch_source_t	xc_send_source;
 	pthread_mutex_t		xc_remote_lock;
 	pthread_mutex_t		xc_pending_lock;
+	pthread_mutex_t		xc_lock;	/* handler and peer list */
 	dispatch_source_t	xc_proc_source;
 	volatile u_int		xc_suspend_count;
 	int			xc_transaction_count;
@@ -133,11 +134,14 @@ struct xpc_connection {
 	volatile u_int		xc_started;
 	volatile u_int		xc_sources_cancelled;
 	volatile u_int		xc_source_cancel_count;
+	volatile u_int		xc_sends_held;
 	volatile uint64_t	xc_last_id;
 	void *			xc_context;
 	struct xpc_connection * xc_parent;
 	bool			xc_owns_local_port;
 	bool			xc_owns_remote_port;
+	bool			xc_mach_service;	/* attach at activation */
+	bool			xc_listed;	/* in xc_parent's xc_peers */
 	uid_t			xc_remote_euid;
 	gid_t			xc_remote_guid;
 	pid_t			xc_remote_pid;

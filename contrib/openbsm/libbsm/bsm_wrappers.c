@@ -494,6 +494,76 @@ audit_token_to_au32(audit_token_t atoken, uid_t *auidp, uid_t *euidp,
 	}
 }
 
+uid_t
+audit_token_to_auid(audit_token_t atoken)
+{
+	uid_t auid;
+
+	audit_token_to_au32(atoken, &auid, NULL, NULL, NULL, NULL, NULL, NULL,
+	    NULL);
+	return (auid);
+}
+
+uid_t
+audit_token_to_euid(audit_token_t atoken)
+{
+	uid_t euid;
+
+	audit_token_to_au32(atoken, NULL, &euid, NULL, NULL, NULL, NULL, NULL,
+	    NULL);
+	return (euid);
+}
+
+gid_t
+audit_token_to_egid(audit_token_t atoken)
+{
+	gid_t egid;
+
+	audit_token_to_au32(atoken, NULL, NULL, &egid, NULL, NULL, NULL, NULL,
+	    NULL);
+	return (egid);
+}
+
+uid_t
+audit_token_to_ruid(audit_token_t atoken)
+{
+	uid_t ruid;
+
+	audit_token_to_au32(atoken, NULL, NULL, NULL, &ruid, NULL, NULL, NULL,
+	    NULL);
+	return (ruid);
+}
+
+gid_t
+audit_token_to_rgid(audit_token_t atoken)
+{
+	gid_t rgid;
+
+	audit_token_to_au32(atoken, NULL, NULL, NULL, NULL, &rgid, NULL, NULL,
+	    NULL);
+	return (rgid);
+}
+
+pid_t
+audit_token_to_pid(audit_token_t atoken)
+{
+	pid_t pid;
+
+	audit_token_to_au32(atoken, NULL, NULL, NULL, NULL, NULL, &pid, NULL,
+	    NULL);
+	return (pid);
+}
+
+au_asid_t
+audit_token_to_asid(audit_token_t atoken)
+{
+	au_asid_t asid;
+
+	audit_token_to_au32(atoken, NULL, NULL, NULL, NULL, NULL, NULL, &asid,
+	    NULL);
+	return (asid);
+}
+
 int
 audit_get_cond(int *cond)
 {
