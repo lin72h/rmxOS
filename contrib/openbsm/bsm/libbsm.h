@@ -48,6 +48,11 @@
 
 #ifdef __APPLE__
 #include <mach/mach.h>		/* audit_token_t */
+#elif defined(__has_include)
+#if __has_include(<mach/message.h>)
+#include <mach/message.h>	/* audit_token_t, where Mach is installed (rmxOS) */
+#define	_LIBBSM_AUDIT_TOKEN
+#endif
 #endif
 
 /*
@@ -1301,7 +1306,9 @@ void audit_token_to_au32(
 	pid_t		*pidp,
 	au_asid_t	*asidp,
 	au_tid_t	*tidp);
+#endif /* !__APPLE__ */
 
+#if defined(__APPLE__) || defined(_LIBBSM_AUDIT_TOKEN)
 /*
  * audit_token_to_auid(), audit_token_to_euid(), audit_token_to_egid(),
  * audit_token_to_ruid(), audit_token_to_rgid(), audit_token_to_pid(),
@@ -1319,7 +1326,7 @@ uid_t	 audit_token_to_ruid(audit_token_t atoken);
 gid_t	 audit_token_to_rgid(audit_token_t atoken);
 pid_t	 audit_token_to_pid(audit_token_t atoken);
 au_asid_t audit_token_to_asid(audit_token_t atoken);
-#endif /* !__APPLE__ */
+#endif /* __APPLE__ || _LIBBSM_AUDIT_TOKEN */
 
 /*
  * Wrapper functions to auditon(2).
