@@ -73,7 +73,6 @@ fail_log(const char *exp)
 {
 	syslog(LOG_ERR, "%s", exp);
 	//sleep(1);
-	printf("%s", exp);
 	//abort();
 }
 

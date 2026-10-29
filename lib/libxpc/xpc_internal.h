@@ -32,12 +32,17 @@
 #include "nv_impl.h"
 #include <pthread.h>
 
+/* A trace on stderr, only in builds that define XPC_DEBUG. */
+#ifdef XPC_DEBUG
 #define debugf(...) 				\
     do { 					\
     	fprintf(stderr, "%s: ", __func__);	\
     	fprintf(stderr, __VA_ARGS__);		\
     	fprintf(stderr, "\n");			\
     } while(0);
+#else
+#define debugf(...)	do { } while (0)
+#endif
 
 #define _XPC_TYPE_INVALID		0
 #define _XPC_TYPE_DICTIONARY		1
