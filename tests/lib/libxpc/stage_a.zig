@@ -381,7 +381,9 @@ fn peerEcho(ctx: ?*anyopaque, peer: O, o: O) callconv(.c) void {
         var i: u64 = 1;
         while (i <= n) : (i += 1) sendValue(peer, i);
     }
-    if (eventCode(o) < INVALID) {
+    // rmxOS create_reply answers any wire message with an ID; the burst
+    // request expects none.
+    if (eventCode(o) < INVALID and s.mode != .burst) {
         const r = c.xpc_dictionary_create_reply(o);
         if (r != null) {
             c.xpc_dictionary_set_uint64(r, "value", eventCode(o));
@@ -671,6 +673,58 @@ pub fn cancelNotifiesPeer() !void {
     s.events.show("peer");
     try check("peer told at cancel", told and s.events.log[1] == INVALID);
     c.xpc_release(conn);
+    stop(s.listener);
+    dispatch_release(q);
+}
+
+// The same with the client in a child process: the child cancels, keeps its
+// reference and stays alive; the peer is told before the child exits.
+fn cancelRole(name: [*:0]const u8) u8 {
+    const conn = xpc_connection_create_mach_service(name, null, 0);
+    if (conn == null) return 2;
+    var events: Events = undefined;
+    events.init();
+    setHandler(conn, &recordEvent, &events, false, null);
+    xpc_connection_resume(conn);
+    exchange(conn, 4) catch return 3;
+    xpc_connection_cancel(conn);
+    sleepMs(3000);
+    c.xpc_release(conn);
+    return 0;
+}
+pub fn cancelNotifiesPeerChild() !void {
+    var buf: [96]u8 = undefined;
+    const name = serviceName(&buf, "cancelchild");
+    var s: Server = undefined;
+    serverInit(&s, .echo);
+    const q = serialQueue();
+    try listen(&s, name, q);
+    const child = c.fork();
+    try check("fork", child >= 0);
+    if (child == 0) {
+        const argv = [_:null]?[*:0]const u8{ self_path, "--op257-cancel", name };
+        _ = c.execv(self_path, @ptrCast(&argv));
+        c._exit(127);
+    }
+    const told = s.events.waitFor(2, 2500);
+    var status: c_int = 0;
+    const alive = c.waitpid(child, &status, c.WNOHANG) == 0;
+    s.events.show("peer");
+    std.debug.print("stage_a child alive_at_invalid={}\n", .{alive});
+    var ms: u32 = 0;
+    var waited: c_int = if (alive) 0 else child;
+    while (waited == 0 and ms < 6000) : (ms += 10) {
+        waited = c.waitpid(child, &status, c.WNOHANG);
+        if (waited == 0) sleepMs(10);
+    }
+    if (waited == 0) {
+        _ = c.kill(child, c.SIGKILL);
+        _ = c.waitpid(child, &status, 0);
+    }
+    std.debug.print("stage_a child status={d}\n", .{status});
+    try check("peer told at cancel", told and s.events.log[0] == 4 and s.events.log[1] == INVALID);
+    try check("before the client exits", alive);
+    try check("client completed", status == 0);
     stop(s.listener);
     dispatch_release(q);
 }
@@ -1033,8 +1087,8 @@ const atf = if (builtin.is_test) struct {} else @cImport({
     @cInclude("atf-c.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]atf.atf_tp_t) callconv(.c) atf.atf_error_t) c_int;
-const names = [_][*:0]const u8{ "dictionaryCreateEmpty", "dictionaryGetDictionary", "fdLocal", "setValueNullRemoves", "secondArrayInsertRefused", "activateInactive", "absentServiceInvalid", "defaultTargetQueue", "peerHoldsUntilActivated", "peerReleasedAfterInvalid", "cancelNotifiesPeer", "concurrentSends", "cancelWhileHandlerRuns", "handlerSwapWhileActive", "noStdout", "tokenFields", "retentionCheckInFails" };
-const functions = [_]*const fn () anyerror!void{ &dictionaryCreateEmpty, &dictionaryGetDictionary, &fdLocal, &setValueNullRemoves, &secondArrayInsertRefused, &activateInactive, &absentServiceInvalid, &defaultTargetQueue, &peerHoldsUntilActivated, &peerReleasedAfterInvalid, &cancelNotifiesPeer, &concurrentSends, &cancelWhileHandlerRuns, &handlerSwapWhileActive, &noStdout, &tokenFields, &retentionCheckInFails };
+const names = [_][*:0]const u8{ "dictionaryCreateEmpty", "dictionaryGetDictionary", "fdLocal", "setValueNullRemoves", "secondArrayInsertRefused", "activateInactive", "absentServiceInvalid", "defaultTargetQueue", "peerHoldsUntilActivated", "peerReleasedAfterInvalid", "cancelNotifiesPeer", "cancelNotifiesPeerChild", "concurrentSends", "cancelWhileHandlerRuns", "handlerSwapWhileActive", "noStdout", "tokenFields", "retentionCheckInFails" };
+const functions = [_]*const fn () anyerror!void{ &dictionaryCreateEmpty, &dictionaryGetDictionary, &fdLocal, &setValueNullRemoves, &secondArrayInsertRefused, &activateInactive, &absentServiceInvalid, &defaultTargetQueue, &peerHoldsUntilActivated, &peerReleasedAfterInvalid, &cancelNotifiesPeer, &cancelNotifiesPeerChild, &concurrentSends, &cancelWhileHandlerRuns, &handlerSwapWhileActive, &noStdout, &tokenFields, &retentionCheckInFails };
 var cases: if (builtin.is_test) void else [names.len]atf.atf_tc_t = undefined;
 fn body(t: [*c]const atf.atf_tc_t) callconv(.c) void {
     _ = c.alarm(15);
@@ -1055,6 +1109,7 @@ fn add(tp: [*c]atf.atf_tp_t) callconv(.c) atf.atf_error_t {
 pub fn main(argc: c_int, argv: [*c][*c]u8) callconv(.c) c_int {
     self_path = @ptrCast(argv[0]);
     if (argc == 3 and std.mem.eql(u8, std.mem.span(argv[1]), "--op246-client")) return clientRole(argv[2]);
+    if (argc == 3 and std.mem.eql(u8, std.mem.span(argv[1]), "--op257-cancel")) return cancelRole(argv[2]);
     return atf_tp_main(argc, argv, &add);
 }
 comptime {

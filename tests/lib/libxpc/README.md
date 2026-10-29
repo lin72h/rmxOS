@@ -114,3 +114,14 @@ retain the connection it serves the way a capturing Swift closure does.
   and `retentionCheckInFails` runs the parent image's logd-retention there.
 
 These cases need Mach and launchd; they run in the guest only.
+
+op-257 adds `cancelNotifiesPeerChild`: the client of `cancelNotifiesPeer` runs
+in a child process, cancels, keeps its reference and stays alive while the
+server's peer must be told. The in-process cases stay in one process: macOS
+supports both ends in one task. In the burst cases the server does not reply
+to the burst request; rmxOS `xpc_dictionary_create_reply` answers any wire
+message that carries an ID.
+
+`bsm_header_test` includes only `<bsm/libbsm.h>` and calls the audit-token
+field accessors: it builds only where the header declares them with
+`audit_token_t` visible.
