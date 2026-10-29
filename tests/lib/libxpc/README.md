@@ -125,3 +125,7 @@ message that carries an ID.
 `bsm_header_test` includes only `<bsm/libbsm.h>` and calls the audit-token
 field accessors: it builds only where the header declares them with
 `audit_token_t` visible.
+
+op-260 adds `noStderr` beside `noStdout`: a client and server exchange ten
+messages with standard error on a pipe, and the pipe must stay empty. libxpc's
+`debugf` trace exists only in builds that define `XPC_DEBUG`.

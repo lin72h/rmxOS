@@ -945,6 +945,58 @@ pub fn noStdout() !void {
     dispatch_release(q);
 }
 
+// Nothing on standard error either: ten exchanges with stderr on a pipe. The
+// exchanges here print nothing themselves.
+fn quietExchange(conn: O, value: u64) bool {
+    const m = c.xpc_dictionary_create(null, null, 0);
+    c.xpc_dictionary_set_uint64(m, "value", value);
+    const r = xpc_connection_send_message_with_reply_sync(conn, m);
+    c.xpc_release(m);
+    if (r == null) return false;
+    defer c.xpc_release(r);
+    return eventCode(r) == value;
+}
+pub fn noStderr() !void {
+    var buf: [96]u8 = undefined;
+    const name = serviceName(&buf, "stderr");
+    var p: [2]c_int = undefined;
+    try check("pipe", c.pipe(&p) == 0);
+    _ = c.fflush(null);
+    const saved = c.dup(2);
+    try check("stderr on the pipe", saved >= 0 and c.dup2(p[1], 2) == 2);
+    var s: Server = undefined;
+    serverInit(&s, .echo);
+    const q = serialQueue();
+    var ok = true;
+    if (xpc_connection_create_mach_service(name, q, LISTENER)) |l| {
+        s.listener = l;
+        setHandler(l, &listenerEvent, &s, false, null);
+        xpc_connection_resume(l);
+        var events: Events = undefined;
+        events.init();
+        if (xpc_connection_create_mach_service(name, q, 0)) |conn| {
+            setHandler(conn, &recordEvent, &events, false, null);
+            xpc_connection_resume(conn);
+            for (1..11) |i| ok = quietExchange(conn, i) and ok;
+            stop(conn);
+        } else ok = false;
+        stop(l);
+    } else ok = false;
+    sleepMs(200);
+    _ = c.fflush(null);
+    _ = c.dup2(saved, 2);
+    _ = c.close(saved);
+    _ = c.close(p[1]);
+    var out: [4096]u8 = undefined;
+    const n = c.read(p[0], &out, out.len);
+    _ = c.close(p[0]);
+    const len: usize = if (n > 0) @intCast(n) else 0;
+    std.debug.print("stage_a stderr bytes={d} first=\"{s}\"\n", .{ len, out[0..@min(len, 80)] });
+    try check("ten exchanges", ok);
+    try check("standard error stays empty", n == 0);
+    dispatch_release(q);
+}
+
 // libbsm accessors on the token a client running as the tests user sent.
 fn clientRole(name: [*:0]const u8) u8 {
     const conn = xpc_connection_create_mach_service(name, null, 0);
@@ -1087,8 +1139,8 @@ const atf = if (builtin.is_test) struct {} else @cImport({
     @cInclude("atf-c.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]atf.atf_tp_t) callconv(.c) atf.atf_error_t) c_int;
-const names = [_][*:0]const u8{ "dictionaryCreateEmpty", "dictionaryGetDictionary", "fdLocal", "setValueNullRemoves", "secondArrayInsertRefused", "activateInactive", "absentServiceInvalid", "defaultTargetQueue", "peerHoldsUntilActivated", "peerReleasedAfterInvalid", "cancelNotifiesPeer", "cancelNotifiesPeerChild", "concurrentSends", "cancelWhileHandlerRuns", "handlerSwapWhileActive", "noStdout", "tokenFields", "retentionCheckInFails" };
-const functions = [_]*const fn () anyerror!void{ &dictionaryCreateEmpty, &dictionaryGetDictionary, &fdLocal, &setValueNullRemoves, &secondArrayInsertRefused, &activateInactive, &absentServiceInvalid, &defaultTargetQueue, &peerHoldsUntilActivated, &peerReleasedAfterInvalid, &cancelNotifiesPeer, &cancelNotifiesPeerChild, &concurrentSends, &cancelWhileHandlerRuns, &handlerSwapWhileActive, &noStdout, &tokenFields, &retentionCheckInFails };
+const names = [_][*:0]const u8{ "dictionaryCreateEmpty", "dictionaryGetDictionary", "fdLocal", "setValueNullRemoves", "secondArrayInsertRefused", "activateInactive", "absentServiceInvalid", "defaultTargetQueue", "peerHoldsUntilActivated", "peerReleasedAfterInvalid", "cancelNotifiesPeer", "cancelNotifiesPeerChild", "concurrentSends", "cancelWhileHandlerRuns", "handlerSwapWhileActive", "noStdout", "noStderr", "tokenFields", "retentionCheckInFails" };
+const functions = [_]*const fn () anyerror!void{ &dictionaryCreateEmpty, &dictionaryGetDictionary, &fdLocal, &setValueNullRemoves, &secondArrayInsertRefused, &activateInactive, &absentServiceInvalid, &defaultTargetQueue, &peerHoldsUntilActivated, &peerReleasedAfterInvalid, &cancelNotifiesPeer, &cancelNotifiesPeerChild, &concurrentSends, &cancelWhileHandlerRuns, &handlerSwapWhileActive, &noStdout, &noStderr, &tokenFields, &retentionCheckInFails };
 var cases: if (builtin.is_test) void else [names.len]atf.atf_tc_t = undefined;
 fn body(t: [*c]const atf.atf_tc_t) callconv(.c) void {
     _ = c.alarm(15);
