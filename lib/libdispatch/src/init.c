@@ -737,13 +737,11 @@ _dispatch_call_block_and_release(void *block)
 
 #if !USE_OBJC
 struct dispatch_queue_attr_s _dispatch_queue_attr_concurrent;
-#ifdef notyet
-// The compiler hides the name of the function it generates, and changes it if
-// we try to reference it directly, but the linker still sees it.
-extern void DISPATCH_BLOCK_SPECIAL_INVOKE(void *)
-		asm("____dispatch_block_create_block_invoke");
-void (*_dispatch_block_special_invoke)(void*) = DISPATCH_BLOCK_SPECIAL_INVOKE;
-#endif
+// The invoke function of every block _dispatch_block_create returns, read
+// from one such block by libdispatch_init. Apple names it by its Mach-O
+// symbol, which ELF does not have, and the compiler's name for it is not
+// an interface.
+dispatch_function_t _dispatch_block_special_invoke;
 
 dispatch_block_t
 _dispatch_block_create(dispatch_block_flags_t flags, voucher_t voucher,
@@ -764,6 +762,14 @@ _dispatch_block_create(dispatch_block_flags_t flags, voucher_t voucher,
 	});
 	Block_release(copy_block);
 	return new_block;
+}
+
+void
+_dispatch_block_special_invoke_init(void)
+{
+	dispatch_block_t db = _dispatch_block_create(0, NULL, 0, ^{});
+	_dispatch_block_special_invoke = _dispatch_Block_invoke(db);
+	Block_release(db);
 }
 
 #endif // !USE_OBJC

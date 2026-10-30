@@ -991,6 +991,9 @@ libdispatch_init(void)
 	_os_object_init();
 	_voucher_init();
 	_dispatch_introspection_init();
+#if __BLOCKS__ && !USE_OBJC
+	_dispatch_block_special_invoke_init();
+#endif
 }
 
 #if HAVE_MACH

@@ -347,6 +347,8 @@ typedef struct dispatch_block_private_data_s *dispatch_block_private_data_t;
 
 dispatch_block_t _dispatch_block_create(dispatch_block_flags_t flags,
 		voucher_t voucher, pthread_priority_t priority, dispatch_block_t block);
+extern dispatch_function_t _dispatch_block_special_invoke;
+void _dispatch_block_special_invoke_init(void);
 void _dispatch_block_invoke(const struct dispatch_block_private_data_s *dbcpd);
 
 #endif /* __BLOCKS__ */

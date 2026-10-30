@@ -194,3 +194,48 @@ Parity work left:
   queue matching the caller's QoS. rmxOS's NULL path uses the current
   thread's root queue, or the default-priority global queue; this behaviour is
   not yet compared.
+
+## D-7 Dispatch blocks recognized by their invoke function, read at init (op-268)
+
+Files: `src/init.c`, `src/inline_internal.h`, `src/queue.c`, `src/queue_internal.h`.
+
+What changed:
+- `_dispatch_block_special_invoke` is a `dispatch_function_t` that
+  `_dispatch_block_special_invoke_init` sets.
+  - It makes one block with `_dispatch_block_create(0, NULL, 0, ^{})`, reads that
+    block's invoke function and releases the block.
+  - `libdispatch_init` calls it once, after the op-261 guard (D-5).
+- `_dispatch_block_has_private_data` compares a block's invoke function with that
+  pointer again.
+- Both `#ifdef notyet` blocks from NextBSD are gone. One was the comparison; the other
+  was the definition by the Mach-O symbol `____dispatch_block_create_block_invoke`,
+  which does not exist on ELF.
+- `_dispatch_block_get_data` keeps its `DISPATCH_BLOCK_PRIVATE_DATA_MAGIC` check.
+
+Before this, no block was ever recognized:
+- `dispatch_block_wait`, `_notify`, `_cancel` and `_testcancel` crashed with "Invalid
+  block object".
+- `dispatch_async` and the sync functions ran dispatch blocks as plain blocks.
+
+Compared with Apple 1542 and corelibs 6.4.0: both define a `const` pointer from the
+compiler-generated function by its assembler name in the translation unit that holds
+the literal: `__asm__(OS_STRINGIFY(__USER_LABEL_PREFIX__)
+"___dispatch_block_create_block_invoke")` in `src/block.cpp`.
+- **Our build:** `init.o` has that function as a LOCAL `___dispatch_block_create_block_invoke`,
+  so the name would resolve today.
+- **Why read it at run time instead:** the name is the compiler's choice, not an
+  interface, and the run-time read does not depend on it.
+- **Cost:** the pointer is writable and NULL until `libdispatch_init` runs, so a block
+  passed in before then is treated as plain.
+- **Layout:** the captured `dbpds` sits 40 bytes into the block (32-byte
+  `Block_layout` + `copy_block`), as `_dispatch_block_get_data` expects; the invoke
+  function adds `0x28`.
+
+Parity work left:
+- Apple keeps the private data in a C++ object (`block.cpp`) with a destructor that
+  leaves the group and releases the queue, block and voucher. rmxOS keeps the C struct
+  copied into the block, with no destructor.
+- Vouchers are not captured (`USE_OBJC` is 0 and `VOUCHER_USE_MACH_VOUCHER` is 0).
+- QoS adoption and the wait boost call rmxOS libthr entry points that return 0 without
+  acting: `_pthread_set_properties_self` and `_pthread_override_qos_class_start_direct`
+  (`lib/libthr/thread/thr_workq.c:1415`, `:1461`).
