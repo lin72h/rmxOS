@@ -82,14 +82,6 @@ static struct twq_runtime twq_runtime = {
 };
 
 #define	TWQ_REAPER_PERIOD_MSEC	100
-/*
- * A request the kernel refused (its lane busy, or a worker blocked within
- * kern.twq.busy_window_usecs) is retried only by the reaper. XNU re-offers
- * pending requests the moment a worker blocks; this runtime is not told of a
- * block, so while a lane holds pending work and no ready worker the reaper
- * retries every millisecond instead of every TWQ_REAPER_PERIOD_MSEC.
- */
-#define	TWQ_REDRIVE_PERIOD_MSEC	1
 #define	TWQ_RUNTIME_NUM_LANES	(TWQ_NUM_BUCKETS * 2)
 
 static uint16_t twq_lane_desired_locked(struct twq_runtime *rt, int lane);
@@ -291,13 +283,12 @@ twq_pick_redrive_lane_locked(struct twq_runtime *rt)
 }
 
 static void
-twq_reaper_pause(bool redrive)
+twq_reaper_pause(void)
 {
 	struct timespec ts;
 
 	ts.tv_sec = 0;
-	ts.tv_nsec = (long)(redrive ? TWQ_REDRIVE_PERIOD_MSEC :
-	    TWQ_REAPER_PERIOD_MSEC) * 1000000L;
+	ts.tv_nsec = (long)TWQ_REAPER_PERIOD_MSEC * 1000000L;
 	(void)_nanosleep(&ts, NULL);
 }
 
@@ -585,11 +576,7 @@ twq_reaper_main(void *arg)
 	curthread = _get_curthread();
 
 	for (;;) {
-		THR_UMUTEX_LOCK(curthread, &rt->tr_lock);
-		redrive = rt->tr_initialized &&
-		    twq_pick_redrive_lane_locked(rt) >= 0;
-		THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
-		twq_reaper_pause(redrive);
+		twq_reaper_pause();
 		retire_count = 0;
 		redrive = false;
 		redrive_lane = -1;
