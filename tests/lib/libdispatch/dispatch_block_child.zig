@@ -36,6 +36,7 @@ extern fn dispatch_suspend(Object) void;
 extern fn dispatch_resume(Object) void;
 extern fn dispatch_time(u64, i64) u64;
 extern fn _Block_release(*const anyopaque) void;
+extern fn _Block_copy(*const anyopaque) *const Block;
 
 const DISPATCH_BLOCK_ENFORCE_QOS_CLASS: c_ulong = 0x20;
 const QOS_CLASS_USER_INITIATED: c_uint = 0x19;
@@ -72,6 +73,9 @@ fn check(ok: bool, comptime name: []const u8) void {
     say("check {s} {s}", .{ name, if (ok) "ok" else "FAIL" });
     if (!ok) failed = true;
 }
+fn reset() void {
+    count.store(0, .seq_cst);
+}
 fn seen() []const u8 {
     return events[0..@min(count.load(.seq_cst), events.len)];
 }
@@ -105,6 +109,28 @@ fn wait(kind: []const u8, q: Object) void {
     dispatch_resume(q);
     settle(q);
     _Block_release(pending);
+    // The creator releases its reference right after dispatch_async; a waiter
+    // holding its own reference still sees the block finish.
+    reset();
+    const released = make(kind);
+    const waiter_ref = _Block_copy(released);
+    dispatch_suspend(q);
+    dispatch_async(q, released);
+    _Block_release(released);
+    var result: c_long = -1;
+    const waiter = std.Thread.spawn(.{}, waitOn, .{ waiter_ref, &result }) catch {
+        check(false, "waiter_thread");
+        return;
+    };
+    _ = c.usleep(100_000);
+    dispatch_resume(q);
+    waiter.join();
+    check(result == 0, "wait_returns_0_after_creator_released");
+    check(std.mem.eql(u8, seen(), "B"), "released_body_ran_once");
+    _Block_release(waiter_ref);
+}
+fn waitOn(db: *const Block, result: *c_long) void {
+    result.* = dispatch_block_wait(db, dispatch_time(0, 5000 * ms));
 }
 
 fn notify(kind: []const u8, q: Object) void {
@@ -121,6 +147,33 @@ fn notify(kind: []const u8, q: Object) void {
     settle(q);
     check(std.mem.eql(u8, seen(), "BN"), "notify_once_after_block");
     _Block_release(db);
+    // The creator releases its reference right after dispatch_async.
+    reset();
+    const released = make(kind);
+    dispatch_block_notify(released, q, &notify_block);
+    dispatch_suspend(q);
+    dispatch_async(q, released);
+    _Block_release(released);
+    dispatch_resume(q);
+    for (0..500) |_| {
+        if (count.load(.seq_cst) >= 2) break;
+        _ = c.usleep(10_000);
+    }
+    _ = c.usleep(100_000);
+    settle(q);
+    check(std.mem.eql(u8, seen(), "BN"), "notify_once_after_released_block");
+    // A block released without ever running still fires its notify block.
+    reset();
+    const unrun = make(kind);
+    dispatch_block_notify(unrun, q, &notify_block);
+    _Block_release(unrun);
+    for (0..500) |_| {
+        if (count.load(.seq_cst) >= 1) break;
+        _ = c.usleep(10_000);
+    }
+    _ = c.usleep(100_000);
+    settle(q);
+    check(std.mem.eql(u8, seen(), "N"), "notify_once_for_unrun_released_block");
 }
 
 fn cancel(kind: []const u8, q: Object) void {
