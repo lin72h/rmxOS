@@ -21,6 +21,7 @@ TESTS_SUBDIRS+=		kqueue
 TESTS_SUBDIRS+=		launchd
 TESTS_SUBDIRS+=		mac
 TESTS_SUBDIRS+=		mach
+TESTS_SUBDIRS+=		rmxos
 TESTS_SUBDIRS+=		mqueue
 TESTS_SUBDIRS+=		net
 TESTS_SUBDIRS+=		${_netgraph}
