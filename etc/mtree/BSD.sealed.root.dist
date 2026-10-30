@@ -1,0 +1,24 @@
+# Publisher layout, applied after stock make distribution and Data templating.
+. type=dir uname=root gname=wheel mode=0755
+./System type=dir uname=root gname=wheel mode=0755
+./System/Library type=dir uname=root gname=wheel mode=0755
+./System/Library/LaunchDaemons type=dir uname=root gname=wheel mode=0755
+./System/Library/Templates type=dir uname=root gname=wheel mode=0755
+./System/Library/Templates/Data type=dir uname=root gname=wheel mode=0755
+./private type=dir uname=root gname=wheel mode=0755
+./Users type=dir uname=root gname=wheel mode=0755
+./usr/local type=dir uname=root gname=wheel mode=0755
+./Library type=dir uname=root gname=wheel mode=0755
+./dev type=dir uname=root gname=wheel mode=0555
+./mnt type=dir uname=root gname=wheel mode=0755
+./media type=dir uname=root gname=wheel mode=0755
+./proc type=dir uname=root gname=wheel mode=0555
+./net type=dir uname=root gname=wheel mode=0755
+./etc type=link uname=root gname=wheel link=private/etc
+./var type=link uname=root gname=wheel link=private/var
+./tmp type=link uname=root gname=wheel link=private/tmp
+./root type=link uname=root gname=wheel link=private/var/root
+./home type=link uname=root gname=wheel link=Users
+./usr/home type=link uname=root gname=wheel link=/Users
+./opt type=link uname=root gname=wheel link=private/opt
+./compat type=link uname=root gname=wheel link=private/compat

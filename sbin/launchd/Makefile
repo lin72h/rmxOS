@@ -1,4 +1,15 @@
 PROG= launchd
+PROGNAME= rmxos-launchd
+BINDIR= /usr/libexec
+
+# A libc-free entry stage mounts Data before the dynamic linker starts.
+all: rmxos-data-tools
+.PHONY: rmxos-data-tools
+rmxos-data-tools:
+	mkdir -p ${.OBJDIR}/rmxos-data
+	${MAKE} -C ${.CURDIR}/../../usr.libexec/rmxos MAKEOBJDIR=${.OBJDIR}/rmxos-data all
+afterinstall:
+	${MAKE} -C ${.CURDIR}/../../usr.libexec/rmxos MAKEOBJDIR=${.OBJDIR}/rmxos-data install
 
 .PATH: .
 .PATH: ${.CURDIR}
@@ -101,7 +112,7 @@ CLEANFILES+= *Server.c *User.c job.h helper.h job_reply.h job_forward.h notify.h
 	internal.h mach_exc.h *Server.h *~ cscope.*
 FILESGROUPS+= LAUNCHD
 LAUNCHD= com.rmxos.console-getty.plist
-LAUNCHDDIR= /etc/launchd.d
+LAUNCHDDIR= /System/Library/LaunchDaemons
 LAUNCHDMODE= 0644
 
 .include <bsd.prog.mk>

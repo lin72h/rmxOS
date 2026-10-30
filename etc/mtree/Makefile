@@ -9,6 +9,7 @@ FILES=	\
 	BSD.debug.dist \
 	BSD.include.dist \
 	BSD.root.dist \
+	BSD.sealed.root.dist \
 	${_BSD.libcompats.dist} \
 	${_BSD.sendmail.dist} \
 	${_BSD.tests.dist} \

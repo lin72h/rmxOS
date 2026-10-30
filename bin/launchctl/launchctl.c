@@ -70,6 +70,7 @@ static int submit_job(launch_data_t job);
 static launch_data_t read_job_file(const char *filename, bool materialize_sockets);
 static int load_job(const char *filename);
 static int unload_job(const char *filename);
+static int load_path(const char *path);
 static bool bootstrap_scan_has_plist_peer(struct dirent **files, int nfiles,
     const char *name);
 
@@ -802,16 +803,104 @@ unload_job(const char *filename)
  * of stuff.  Not sure what we do want to do.
  */
 static int
+load_path(const char *directory)
+{
+	struct dirent **files;
+	struct stat st;
+	char *path;
+	int n, j, failed = 0;
+
+	if (stat(directory, &st) != 0)
+		return (-1);
+	if (!S_ISDIR(st.st_mode))
+		return (load_job(directory));
+	n = scandir(directory, &files, NULL, alphasort);
+	if (n < 0)
+		return (-1);
+	for (j = 0; j < n; j++) {
+		if (files[j]->d_name[0] == '.' ||
+		    (!has_suffix(files[j]->d_name, ".plist") &&
+		    !has_suffix(files[j]->d_name, ".json")) ||
+		    bootstrap_scan_has_plist_peer(files, n, files[j]->d_name))
+			continue;
+		if (asprintf(&path, "%s/%s", directory, files[j]->d_name) < 0) {
+			failed = -1;
+			continue;
+		}
+		printf("Loading job: %s: ", files[j]->d_name);
+		if (load_job(path) != 0) {
+			printf("failed: %s\n", strerror(errno));
+			failed = -1;
+		} else {
+			printf("ok\n");
+		}
+		free(path);
+	}
+	for (j = 0; j < n; j++)
+		free(files[j]);
+	free(files);
+	return (failed);
+}
+
+/* The sealed configuration is a list of launchctl commands, never a shell. */
+static int
+bootstrap_config(void)
+{
+	FILE *fp;
+	char *line = NULL, *command, *argument, *end;
+	size_t capacity = 0, i;
+	int failed = 0;
+
+	fp = fopen("/etc/launchd.conf", "r");
+	if (fp == NULL) {
+		if (errno != ENOENT)
+			return (-1);
+		/* Keep the file-based installation's bootstrap until migration. */
+		for (i = 0; i < N(bootstrap_paths); i++) {
+			if (load_path(bootstrap_paths[i]) != 0 && errno != ENOENT)
+				failed = -1;
+		}
+		return (failed);
+	}
+	while (getline(&line, &capacity, fp) >= 0) {
+		command = line + strspn(line, " \t\r\n");
+		if (*command == '\0' || *command == '#')
+			continue;
+		argument = strpbrk(command, " \t");
+		if (argument == NULL) {
+			failed = -1;
+			break;
+		}
+		*argument++ = '\0';
+		argument += strspn(argument, " \t");
+		end = argument + strcspn(argument, " \t\r\n");
+		if (*end != '\0')
+			*end++ = '\0';
+		/* No quoting or shell expansion: one absolute directory/file. */
+		if (strcmp(command, "load") != 0 || *argument != '/' ||
+		    (*end != '\0' && strspn(end, " \t\r\n") != strlen(end))) {
+			failed = -1;
+			break;
+		}
+		if (load_path(argument) != 0)
+			failed = -1;
+	}
+	if (ferror(fp))
+		failed = -1;
+	free(line);
+	fclose(fp);
+	if (failed != 0)
+		warnx("cannot load /etc/launchd.conf");
+	return (failed);
+}
+
+static int
 cmd_bootstrap(int argc, char * const argv[])
 {
 	char *session = NULL;
 	bool sflag = false;
 	int ch;
 	
-	struct dirent **files;
-	char *name, *path;
-	unsigned long i;
-	int file_count, j, n;
 
 	while ((ch = getopt(argc, __DECONST(char **, argv), "sS:")) != -1) {
 		switch (ch) {
@@ -839,37 +928,7 @@ cmd_bootstrap(int argc, char * const argv[])
 		do_single_user_mode(sflag);
 		if (runcom() != 0)
 			return (1);
-		/* Only the System bootstrap loads the system job definitions. */
-		for (i = 0; i < N(bootstrap_paths); i++) {
-			n = scandir(bootstrap_paths[i], &files, NULL, alphasort);
-			if (n < 0)
-				continue;
-			file_count = n;
-			while (n--) {
-				name = files[n]->d_name;
-				if (name[0] == '.')
-					continue;
-				if (bootstrap_scan_has_plist_peer(files,
-				    file_count, name))
-					continue;
-				
-				printf("Loading job: %s: ", name);
-				if (asprintf(&path, "%s/%s", bootstrap_paths[i],
-				    name) == -1) {
-					printf("failed: %s\n", strerror(errno));
-					continue;
-				}
-				if (load_job(path) == 0)
-					printf("ok\n");
-				else
-					printf("failed: %s\n", strerror(errno));
-				free(path);
-			}
-			for (j = 0; j < file_count; j++)
-				free(files[j]);
-			free(files);
-		}
-
+		return (bootstrap_config() == 0 ? 0 : 1);
 	}
 	return (0);
 }
@@ -883,7 +942,7 @@ cmd_load(int argc, char * const argv[])
 		errx(EX_USAGE, "Usage: launchctl load <plist> [<plist> ...]");
 
 	for (i = 1; i < argc; i++) {
-		if (load_job(argv[i]) != 0)
+		if (load_path(argv[i]) != 0)
 			err(EX_OSERR, "Cannot load job from %s", argv[i]);
 	}
 
