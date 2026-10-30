@@ -7,4 +7,5 @@ atf_test_program{name="time_clocks_test"}
 atf_test_program{name="swift_exports_test"}
 atf_test_program{name="root_setup_test"}
 atf_test_program{name="init_once_test"}
+atf_test_program{name="dispatch_block_test"}
 plain_test_program{name="simple_asl_unit"}

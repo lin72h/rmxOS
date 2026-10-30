@@ -48,4 +48,12 @@ init_once_test: ${.CURDIR}/init_once.zig apply_auto.o
 init_twice_child: ${.CURDIR}/init_twice_child.zig
 	${ZIG} build-exe ${.CURDIR}/init_twice_child.zig ${DISPATCH_SO} ${SYSROOT}/usr/lib/libmach.so.5 -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -femit-bin=${.TARGET}
 
+SCRIPTS+= dispatch_block_test
+SCRIPTS+= dispatch_block_child
+dispatch_block_test: ${.CURDIR}/dispatch_block.zig
+	${ZIG} build-exe ${.CURDIR}/dispatch_block.zig ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}
+
+dispatch_block_child: ${.CURDIR}/dispatch_block_child.zig
+	${ZIG} build-exe ${.CURDIR}/dispatch_block_child.zig ${DISPATCH_SO} ${SYSROOT}/usr/lib/libBlocksRuntime.so.0 -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -femit-bin=${.TARGET}
+
 .include <bsd.test.mk>

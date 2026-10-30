@@ -20,3 +20,7 @@ data_replace: latest full-width merge replaces pending values; zero suppresses d
 data_munmap: both mmap pages remain through a retained reference and unmap after final data release
 initTwice: swift-sdk's dispatch_after-then-main-queue program as a child, 10 runs without and 10 with a second libdispatch_init(); each exits 0 within 10 s with "main queue ran"
 applyAuto: dispatch_apply(8, DISPATCH_APPLY_AUTO) from public queue.h covers every index once
+blockWait: on blocks from dispatch_block_create and dispatch_block_create_with_qos_class(ENFORCE, USER_INITIATED), wait returns 0 after the block ran from dispatch_async, and non-zero on a 100 ms timeout for a block held on a suspended queue; each in its own child
+blockNotify: the notify block runs once, after the block, for both create functions; each in its own child
+blockCancel: dispatch_block_testcancel is 0 before and non-zero after dispatch_block_cancel, and the cancelled block submitted afterwards does not run its body, for both create functions; each in its own child
+blockPerform: dispatch_block_perform runs the body of a dispatch block once, for both create functions; each in its own child
