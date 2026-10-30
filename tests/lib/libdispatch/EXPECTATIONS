@@ -25,3 +25,5 @@ blockNotify: the notify block runs once, after the block, for both create functi
 blockCancel: dispatch_block_testcancel is 0 before and non-zero after dispatch_block_cancel, and the cancelled block submitted afterwards does not run its body, for both create functions; each in its own child
 blockPerform: dispatch_block_perform runs the body of a dispatch block once, for both create functions; each in its own child
 ioPipeClose: swift-corelibs-libdispatch 6.4.0 dispatch_io_pipe_close in a child per variant: upstream (with dispatch_resume(io)), close (without it), stop (DISPATCH_IO_STOP while the read is pending); each variant's cleanup handler runs with err 0 and the child exits 0
+resumeNonQueue: dispatch_suspend, dispatch_resume and an unbalanced dispatch_resume return on a group, a semaphore, a data object and an I/O channel, each in its own child, and the object still works (group wait, semaphore signal and wait, data size, channel close with cleanup err 0)
+resumeQueueStillChecked: an unbalanced dispatch_resume of a plain queue still stops the child (SIGILL or SIGTRAP) with "Over-resume of an object"
