@@ -12,7 +12,7 @@ fn call(n: usize, a: usize, b: usize, d: usize, e: usize) isize {
           [e] "{r10}" (e),
         : .{ .rcx = true, .r11 = true, .memory = true });
 }
-fn fork() isize {
+pub fn fork() isize {
     return asm volatile ("syscall\n\tjc 2f\n\ttestq %%rdx, %%rdx\n\tje 1f\n\txorq %%rax, %%rax\n\tjmp 1f\n2:\n\tnegq %%rax\n1:"
         : [ret] "={rax}" (-> isize),
         : [n] "{rax}" (@as(usize, 2)),
@@ -24,7 +24,7 @@ fn ptr(p: anytype) usize {
 fn vector(s: [:0]const u8) Iovec {
     return .{ .base = s.ptr, .len = s.len + 1 };
 }
-fn mount(kind: [:0]const u8, from: [:0]const u8, path: [:0]const u8) isize {
+pub fn mount(kind: [:0]const u8, from: [:0]const u8, path: [:0]const u8) isize {
     const v = [_]Iovec{ vector("fstype"), vector(kind), vector("from"), vector(from), vector("fspath"), vector(path) };
     return call(378, ptr(&v), v.len, 0, 0);
 }
@@ -66,10 +66,13 @@ fn run(path: [:0]const u8) bool {
         return rc == child and status == 0;
     }
 }
+pub fn mountfrom(root: *[1024:0]u8) isize {
+    return call(390, 0, ptr("vfs.root.mountfrom"), ptr(root), root.len);
+}
 export fn rmxos_start(stack: [*]const usize) callconv(.c) noreturn {
     const pid1 = call(20, 0, 0, 0, 0) == 1;
     var root: [1024:0]u8 = @splat(0);
-    const count = if (pid1) call(390, 1, ptr("vfs.root.mountfrom"), ptr(&root), root.len) else 0;
+    const count = if (pid1) mountfrom(&root) else 0;
     var is_volatile = false;
     if (count > 4 and count < root.len and std.mem.startsWith(u8, &root, "zfs:")) {
         const dataset = std.mem.sliceTo(root[4..], 0);
@@ -111,7 +114,10 @@ export fn rmxos_start(stack: [*]const usize) callconv(.c) noreturn {
     _ = call(59, ptr("/usr/libexec/rmxos-launchd"), argv, ptr(&env), 0);
     stop("rmxos: cannot exec launchd\n");
 }
-pub export fn _start() callconv(.naked) noreturn {
+fn entry() callconv(.naked) noreturn {
     // FreeBSD supplies the initial argument block in rdi (crt1_s.S).
     asm volatile ("andq $-16, %rsp\n\tcallq rmxos_start");
+}
+comptime {
+    if (!@import("builtin").is_test) @export(&entry, .{ .name = "_start" });
 }
