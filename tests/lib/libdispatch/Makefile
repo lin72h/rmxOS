@@ -80,4 +80,8 @@ pool_test: ${.CURDIR}/pool.zig
 pool_child: ${.CURDIR}/pool_child.zig
 	${ZIG} build-exe ${.CURDIR}/pool_child.zig ${DISPATCH_SO} ${SYSROOT}/usr/lib/libBlocksRuntime.so.0 -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -rdynamic -femit-bin=${.TARGET}
 
+SCRIPTS+= twq_capture
+twq_capture: ${.CURDIR}/twq_capture.zig
+	${ZIG} build-exe ${.CURDIR}/twq_capture.zig -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -femit-bin=${.TARGET}
+
 .include <bsd.test.mk>
