@@ -293,3 +293,33 @@ Ownership:
 
 Parity work left: the `USE_OBJC` layout (voucher captured before the private data) is
 not built on rmxOS.
+
+## D-9 dispatch_suspend and dispatch_resume act on the queue cluster only (op-288)
+
+File: `src/object.c`.
+
+What changed:
+- `dispatch_suspend` and `dispatch_resume` return at once unless
+  `_dispatch_object_is_suspendable` holds. That is true when the object's type has
+  the queue or source meta-type (`_DISPATCH_QUEUE_TYPE`, `_DISPATCH_SOURCE_TYPE`; mach
+  channels are sources) and not `_DISPATCH_ATTR_TYPE`.
+  - Queue attributes carry the queue meta-type too, which is why the attribute bit is
+    excluded.
+  - For channels, data, groups and semaphores both calls do nothing.
+- Queues and sources keep the previous behaviour: the global and root-queue returns,
+  "Over-resume of an object", and the inactive-source rule.
+- `dispatch_activate` is unchanged.
+
+Before: `dispatch_resume` on any unsuspended object stopped with "Over-resume", and
+upstream `dispatch_io_pipe_close` calls `dispatch_resume(io)` (op-272). Even a balanced
+pair on a group, semaphore or data object faulted: the resume to zero reached
+`_dispatch_wakeup`, which calls `dx_probe`, and those vtables have no `do_probe`.
+
+Compared with Apple 1542 and corelibs 6.4.0 (`object.c`, `dispatch_suspend` and
+`dispatch_resume`): both return unless `dx_cluster(dou) == _DISPATCH_QUEUE_CLUSTER`.
+The 442-era vtables here have no cluster field, so membership is decided by the
+type constants, in one helper.
+
+Parity work left:
+- Apple routes the calls through `_dispatch_lane_suspend`/`_resume` and the
+  workloop check; this tree keeps its 442 suspend-count implementation.

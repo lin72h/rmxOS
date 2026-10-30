@@ -214,10 +214,30 @@ dispatch_set_finalizer_f(dispatch_object_t dou, dispatch_function_t finalizer)
 	dou._do->do_finalizer = finalizer;
 }
 
+// Suspension applies to the queue cluster only: queues and sources (kevent
+// sources and mach channels), as Apple and corelibs dx_cluster() ==
+// _DISPATCH_QUEUE_CLUSTER. The 442-era vtables have no cluster field, so
+// membership is the meta-type, with queue attributes (which also carry the
+// queue meta-type) excluded. For channels, data, groups and semaphores
+// dispatch_suspend and dispatch_resume do nothing.
+DISPATCH_ALWAYS_INLINE
+static inline bool
+_dispatch_object_is_suspendable(dispatch_object_t dou)
+{
+	unsigned long type = dx_type(dou._do);
+	unsigned long metatype = type & _DISPATCH_META_TYPE_MASK;
+	return !(type & _DISPATCH_ATTR_TYPE) &&
+			(metatype == _DISPATCH_QUEUE_TYPE ||
+			metatype == _DISPATCH_SOURCE_TYPE);
+}
+
 void
 dispatch_suspend(dispatch_object_t dou)
 {
 	DISPATCH_OBJECT_TFB(_dispatch_objc_suspend, dou);
+	if (slowpath(!_dispatch_object_is_suspendable(dou))) {
+		return;
+	}
 	if (slowpath(dou._do->do_ref_cnt == DISPATCH_OBJECT_GLOBAL_REFCNT) ||
 			slowpath(dx_type(dou._do) == DISPATCH_QUEUE_ROOT_TYPE)) {
 		return;
@@ -261,6 +281,9 @@ void
 dispatch_resume(dispatch_object_t dou)
 {
 	DISPATCH_OBJECT_TFB(_dispatch_objc_resume, dou);
+	if (slowpath(!_dispatch_object_is_suspendable(dou))) {
+		return;
+	}
 	// Global objects cannot be suspended or resumed. This also has the
 	// side effect of saturating the suspend count of an object and
 	// guarding against resuming due to overflow.
