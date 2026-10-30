@@ -27,3 +27,6 @@ blockPerform: dispatch_block_perform runs the body of a dispatch block once, for
 ioPipeClose: swift-corelibs-libdispatch 6.4.0 dispatch_io_pipe_close in a child per variant: upstream (with dispatch_resume(io)), close (without it), stop (DISPATCH_IO_STOP while the read is pending); each variant's cleanup handler runs with err 0 and the child exits 0
 resumeNonQueue: dispatch_suspend, dispatch_resume and an unbalanced dispatch_resume return on a group, a semaphore, a data object and an I/O channel, each in its own child, and the object still works (group wait, semaphore signal and wait, data size, channel close with cleanup err 0)
 resumeQueueStillChecked: an unbalanced dispatch_resume of a plain queue still stops the child (SIGILL or SIGTRAP) with "Over-resume of an object"
+poolGrowsWhileWorkerSleeps: one submitter on the default global queue and on a DISPATCH_QUEUE_CONCURRENT queue asyncs 4 items of usleep(1000) and sleeps 10 ms; all 4 complete during the sleep (dispatch_concur's async shape), each in its own child
+overcommitRendezvous: 64 blocks on the high-priority overcommit global queue are all running at once within 5 s (dispatch_readsync's start), in a child
+quietRootQueueStart: a program that runs work on global queues makes no syslog(3) or simple ASL call, in a child; control: dispatch_debug's log call reaches the same interposed definitions

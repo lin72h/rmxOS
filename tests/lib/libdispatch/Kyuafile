@@ -10,4 +10,5 @@ atf_test_program{name="init_once_test"}
 atf_test_program{name="dispatch_block_test"}
 atf_test_program{name="io_pipe_close_test"}
 atf_test_program{name="suspend_resume_test"}
+atf_test_program{name="pool_test"}
 plain_test_program{name="simple_asl_unit"}

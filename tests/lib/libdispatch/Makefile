@@ -72,4 +72,12 @@ suspend_resume_test: ${.CURDIR}/suspend_resume.zig
 suspend_resume_child: ${.CURDIR}/suspend_resume_child.zig
 	${ZIG} build-exe ${.CURDIR}/suspend_resume_child.zig ${DISPATCH_SO} ${SYSROOT}/usr/lib/libBlocksRuntime.so.0 -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -femit-bin=${.TARGET}
 
+SCRIPTS+= pool_test
+SCRIPTS+= pool_child
+pool_test: ${.CURDIR}/pool.zig
+	${ZIG} build-exe ${.CURDIR}/pool.zig ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}
+
+pool_child: ${.CURDIR}/pool_child.zig
+	${ZIG} build-exe ${.CURDIR}/pool_child.zig ${DISPATCH_SO} ${SYSROOT}/usr/lib/libBlocksRuntime.so.0 -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -rdynamic -femit-bin=${.TARGET}
+
 .include <bsd.test.mk>
