@@ -111,6 +111,31 @@ SYSCTL_PROC(_kern_twq, OID_AUTO, max_lane_threads,
 SYSCTL_UINT(_kern_twq, OID_AUTO, max_proc_threads, CTLFLAG_RD,
     (u_int *)NULL, TWQ_MAX_PROC_THREADS, "maximum registered workers per process");
 
+/*
+ * macOS's workqueue limits, with macOS's names and process-wide meanings.
+ * kern.wq_max_threads is this pool's per-process ceiling. The constrained
+ * ceiling here is per lane (twq_constrained_limit() for each of the
+ * TWQ_NUM_BUCKETS constrained lanes), so kern.wq_max_constrained_threads
+ * reports what one process can hold across them.
+ */
+SYSCTL_INT(_kern, OID_AUTO, wq_max_threads, CTLFLAG_RD,
+    SYSCTL_NULL_INT_PTR, TWQ_MAX_PROC_THREADS,
+    "maximum workqueue threads per process (macOS)");
+
+static int
+sysctl_kern_wq_max_constrained_threads(SYSCTL_HANDLER_ARGS)
+{
+	int limit;
+
+	limit = (int)MIN(TWQ_MAX_PROC_THREADS,
+	    TWQ_NUM_BUCKETS * twq_constrained_limit());
+	return (sysctl_handle_int(oidp, &limit, 0, req));
+}
+SYSCTL_PROC(_kern, OID_AUTO, wq_max_constrained_threads,
+    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_kern_wq_max_constrained_threads, "I",
+    "maximum constrained workqueue threads per process (macOS)");
+
 SYSCTL_LONG(_kern_twq, OID_AUTO, proc_alloc_count, CTLFLAG_RD,
     &twq_proc_alloc_count, 0, "twq proc state allocations");
 SYSCTL_LONG(_kern_twq, OID_AUTO, proc_free_count, CTLFLAG_RD,

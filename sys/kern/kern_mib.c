@@ -171,6 +171,36 @@ SYSCTL_ULONG(_kern, KERN_MAXPHYS, maxphys,
 SYSCTL_INT(_hw, HW_NCPU, ncpu, CTLFLAG_RD|CTLFLAG_CAPRD,
     &mp_ncpus, 0, "Number of active CPUs");
 
+/*
+ * macOS's CPU counts, with macOS's names and meanings, for Darwin code
+ * (libdispatch, Swift's runtime, ports) that reads them. CPUs are not taken
+ * offline here, so the online and maximum counts are the same.
+ */
+SYSCTL_INT(_hw, OID_AUTO, activecpu, CTLFLAG_RD|CTLFLAG_CAPRD,
+    &mp_ncpus, 0, "Number of CPUs currently available (macOS)");
+SYSCTL_INT(_hw, OID_AUTO, logicalcpu, CTLFLAG_RD|CTLFLAG_CAPRD,
+    &mp_ncpus, 0, "Number of logical CPUs online (macOS)");
+SYSCTL_INT(_hw, OID_AUTO, logicalcpu_max, CTLFLAG_RD|CTLFLAG_CAPRD,
+    &mp_ncpus, 0, "Maximum number of logical CPUs (macOS)");
+
+static int
+sysctl_hw_physicalcpu(SYSCTL_HANDLER_ARGS)
+{
+	int cores;
+
+	/* Cores from the CPU topology, SMT siblings counted once. */
+	cores = mp_ncores > 0 ? mp_ncores :
+	    mp_ncpus / MAX(1, smp_threads_per_core);
+	cores = MAX(1, cores);
+	return (sysctl_handle_int(oidp, &cores, 0, req));
+}
+SYSCTL_PROC(_hw, OID_AUTO, physicalcpu,
+    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_CAPRD | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_hw_physicalcpu, "I", "Number of physical CPU cores online (macOS)");
+SYSCTL_PROC(_hw, OID_AUTO, physicalcpu_max,
+    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_CAPRD | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_hw_physicalcpu, "I", "Maximum number of physical CPU cores (macOS)");
+
 SYSCTL_INT(_hw, HW_BYTEORDER, byteorder, CTLFLAG_RD|CTLFLAG_CAPRD,
     SYSCTL_NULL_INT_PTR, BYTE_ORDER, "System byte order");
 
