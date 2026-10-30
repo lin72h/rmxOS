@@ -323,3 +323,41 @@ type constants, in one helper.
 Parity work left:
 - Apple routes the calls through `_dispatch_lane_suspend`/`_resume` and the
   workloop check; this tree keeps its 442 suspend-count implementation.
+
+## D-10 macOS's CPU names in `_dispatch_hw_get_config` (op-299)
+
+File: `src/shims/hw_config.h`.
+
+What changed:
+- On rmxOS (`__FreeBSD__`), `_dispatch_hw_get_config` reads macOS's names, as the
+  `__APPLE__` branch does:
+  - `hw.logicalcpu_max` for logical CPUs;
+  - `hw.physicalcpu_max` for physical CPUs;
+  - `hw.activecpu` for active CPUs.
+- The FreeBSD-only `kern.smp.cpus` case, which answered every query with one number, is
+  gone.
+- Same as Apple 1542's `src/shims/hw_config.h`.
+- The kernel provides the names (`sys/kern/kern_mib.c`, op-299). A libdispatch built
+  this way on a kernel without them falls back to 1, so the two ship together.
+
+Sysctl names rmxOS (rx) now has that FreeBSD (fx) does not. Each has macOS's name, type
+(int32, read-only) and meaning:
+
+| Name | rx | fx | macOS meaning |
+|---|---|---|---|
+| `hw.activecpu` | `mp_ncpus` (as `hw.ncpu`) | absent | CPUs currently available |
+| `hw.logicalcpu` | `mp_ncpus` | absent | logical CPUs online |
+| `hw.logicalcpu_max` | `mp_ncpus` (no CPU offlining) | absent | maximum logical CPUs |
+| `hw.physicalcpu` | `mp_ncores` (topology; else `mp_ncpus / smp_threads_per_core`) | absent (`kern.smp.cores`) | physical cores online |
+| `hw.physicalcpu_max` | same as `hw.physicalcpu` | absent | maximum physical cores |
+| `kern.wq_max_threads` | `TWQ_MAX_PROC_THREADS` (512, `kern.twq.max_proc_threads`) | absent | workqueue threads per process (macOS 27: 512) |
+| `kern.wq_max_constrained_threads` | `MIN(512, TWQ_NUM_BUCKETS × twq_constrained_limit())` | absent | constrained workqueue threads per process (macOS 27: 64) |
+
+`kern.wq_max_constrained_threads` differs in shape from macOS:
+- rmxOS's constrained ceiling applies per lane: `twq_constrained_limit()`,
+  `max(64, ncpu × 5)`, for each of the 6 QoS buckets' constrained lanes
+  (`kern.twq.max_lane_threads`).
+- macOS's is one process-wide pool. The node reports the process-wide sum: 384 on up to
+  12 CPUs.
+- Parity work left: a single process-wide constrained pool, if Darwin code is found to
+  depend on 64.

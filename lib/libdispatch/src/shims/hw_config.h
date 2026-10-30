@@ -83,9 +83,8 @@ _dispatch_hw_get_config(_dispatch_hw_config_t c)
 	uint32_t val = 1;
 	const char *name = NULL;
 	int r;
-#if defined(__FreeBSD__)
-	(void)c; name = "kern.smp.cpus";
-#elif defined(__APPLE__)
+#if defined(__APPLE__) || defined(__FreeBSD__)
+	// rmxOS provides macOS's names with macOS's meanings (sys/kern/kern_mib.c).
 	switch (c) {
 	case _dispatch_hw_config_logical_cpus:
 		name = "hw.logicalcpu_max"; break;
