@@ -321,7 +321,7 @@ struct dispatch_block_private_data_s {
 	pthread_priority_t dbpd_priority;
 	voucher_t dbpd_voucher;
 	dispatch_block_t dbpd_block;
-	struct dispatch_semaphore_s dbpd_group;
+	dispatch_group_t dbpd_group;
 	dispatch_queue_t volatile dbpd_queue;
 	mach_port_t dbpd_thread;
 };
@@ -342,13 +342,19 @@ typedef struct dispatch_block_private_data_s *dispatch_block_private_data_t;
 			.dbpd_priority = (prio), \
 			.dbpd_voucher = (voucher), \
 			.dbpd_block = (block), \
-			.dbpd_group = DISPATCH_GROUP_INITIALIZER(1), \
 		}
 
 dispatch_block_t _dispatch_block_create(dispatch_block_flags_t flags,
 		voucher_t voucher, pthread_priority_t priority, dispatch_block_t block);
-extern dispatch_function_t _dispatch_block_special_invoke;
-void _dispatch_block_special_invoke_init(void);
+extern const dispatch_function_t _dispatch_block_special_invoke;
+
+// A block from _dispatch_block_create: the block header, then its private
+// data. dispatch_block_perform's private data lives on the stack instead and
+// has no group.
+struct dispatch_block_layout_s {
+	struct Block_layout dbl_layout;
+	struct dispatch_block_private_data_s dbl_dbpd;
+};
 void _dispatch_block_invoke(const struct dispatch_block_private_data_s *dbcpd);
 
 #endif /* __BLOCKS__ */

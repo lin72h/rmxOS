@@ -808,17 +808,8 @@ _dispatch_block_get_data(const dispatch_block_t db)
 		return NULL;
 	}
 	// Keep in sync with _dispatch_block_create implementation
-	uint8_t *x = (uint8_t *)db;
-	// x points to base of struct Block_layout
-	x += sizeof(struct Block_layout);
-	// x points to addresss of captured block
-	x += sizeof(dispatch_block_t);
-#if USE_OBJC
-	// x points to addresss of captured voucher
-	x += sizeof(voucher_t);
-#endif
-	// x points to base of captured dispatch_block_private_data_s structure
-	dispatch_block_private_data_t dbpd = (dispatch_block_private_data_t)(uintptr_t)x;
+	dispatch_block_private_data_t dbpd =
+			&((struct dispatch_block_layout_s *)(void *)db)->dbl_dbpd;
 	if (dbpd->dbpd_magic != DISPATCH_BLOCK_PRIVATE_DATA_MAGIC) {
 		DISPATCH_CRASH("Corruption of dispatch block object");
 	}

@@ -737,39 +737,78 @@ _dispatch_call_block_and_release(void *block)
 
 #if !USE_OBJC
 struct dispatch_queue_attr_s _dispatch_queue_attr_concurrent;
-// The invoke function of every block _dispatch_block_create returns, read
-// from one such block by libdispatch_init. Apple names it by its Mach-O
-// symbol, which ELF does not have, and the compiler's name for it is not
-// an interface.
-dispatch_function_t _dispatch_block_special_invoke;
+// A C block literal has no hook that runs when the block is freed, and the
+// private data's group must be released then. So the block
+// _dispatch_block_create returns is built from its own descriptor: the copy
+// helper retains what the private data holds, and the dispose helper releases
+// it, as Apple's C++ dispatch_block_private_data_s destructor does. Its invoke
+// function, named here, identifies these blocks.
+static void
+_dispatch_block_create_invoke(void *block)
+{
+	struct dispatch_block_layout_s *dbl = block;
+	_dispatch_block_invoke(&dbl->dbl_dbpd);
+}
+
+const dispatch_function_t _dispatch_block_special_invoke =
+		_dispatch_block_create_invoke;
+
+static void
+_dispatch_block_create_copy(void *dst, void *src)
+{
+	dispatch_block_private_data_t d =
+			&((struct dispatch_block_layout_s *)dst)->dbl_dbpd;
+	dispatch_block_private_data_t s =
+			&((struct dispatch_block_layout_s *)src)->dbl_dbpd;
+	dispatch_retain(d->dbpd_group);
+	_Block_object_assign(&d->dbpd_block, s->dbpd_block, BLOCK_FIELD_IS_BLOCK);
+}
+
+static void
+_dispatch_block_create_dispose(void *block)
+{
+	dispatch_block_private_data_t dbpd =
+			&((struct dispatch_block_layout_s *)block)->dbl_dbpd;
+	if (dbpd->dbpd_magic != DISPATCH_BLOCK_PRIVATE_DATA_MAGIC) return;
+	// A block that never ran still releases its waiters and notify blocks.
+	if (!dbpd->dbpd_performed) dispatch_group_leave(dbpd->dbpd_group);
+	dispatch_release(dbpd->dbpd_group);
+	// A queue recorded by an async or sync submission that neither the
+	// invocation nor dispatch_block_wait cleared.
+	if (dbpd->dbpd_queue) _dispatch_release(dbpd->dbpd_queue);
+	_Block_object_dispose(dbpd->dbpd_block, BLOCK_FIELD_IS_BLOCK);
+}
+
+static struct Block_descriptor _dispatch_block_create_descriptor = {
+	.reserved = 0,
+	.size = sizeof(struct dispatch_block_layout_s),
+	.copy = _dispatch_block_create_copy,
+	.dispose = _dispatch_block_create_dispose,
+};
 
 dispatch_block_t
 _dispatch_block_create(dispatch_block_flags_t flags, voucher_t voucher,
 		pthread_priority_t pri, dispatch_block_t block)
 {
-	dispatch_block_t copy_block = _dispatch_Block_copy(block); // 17094902
 	(void)voucher; // No voucher capture! (requires ObjC runtime)
-	struct dispatch_block_private_data_s dbpds =
-			DISPATCH_BLOCK_PRIVATE_DATA_INITIALIZER(flags, NULL, pri, copy_block);
-	dispatch_block_t new_block = _dispatch_Block_copy(^{
-		// Capture object references, which retains copy_block.
-		// All retained objects must be captured by the *block*. We
-		// cannot borrow any references, because the block might be
-		// called zero or several times, so Block_release() is the
-		// only place that can release retained objects.
-		(void)copy_block;
-		_dispatch_block_invoke(&dbpds);
-	});
-	Block_release(copy_block);
-	return new_block;
-}
-
-void
-_dispatch_block_special_invoke_init(void)
-{
-	dispatch_block_t db = _dispatch_block_create(0, NULL, 0, ^{});
-	_dispatch_block_special_invoke = _dispatch_Block_invoke(db);
-	Block_release(db);
+	struct dispatch_block_layout_s dbl = {
+		.dbl_layout = {
+			.isa = _NSConcreteStackBlock,
+			.flags = BLOCK_HAS_COPY_DISPOSE,
+			.invoke = (void (*)(void *, ...))(void *)
+					_dispatch_block_create_invoke,
+			.descriptor = &_dispatch_block_create_descriptor,
+		},
+		.dbl_dbpd = DISPATCH_BLOCK_PRIVATE_DATA_INITIALIZER(flags, NULL, pri,
+				_dispatch_Block_copy(block)), // 17094902
+	};
+	dbl.dbl_dbpd.dbpd_group = dispatch_group_create();
+	dispatch_group_enter(dbl.dbl_dbpd.dbpd_group);
+	dispatch_block_t db = _dispatch_Block_copy((dispatch_block_t)(void *)&dbl);
+	// The copy retained the group and the block; drop the stack's references.
+	dispatch_release(dbl.dbl_dbpd.dbpd_group);
+	Block_release(dbl.dbl_dbpd.dbpd_block);
+	return db;
 }
 
 #endif // !USE_OBJC

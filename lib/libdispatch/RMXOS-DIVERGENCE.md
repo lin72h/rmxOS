@@ -197,6 +197,9 @@ Parity work left:
 
 ## D-7 Dispatch blocks recognized by their invoke function, read at init (op-268)
 
+Superseded by D-8 (op-277): the run-time read below was replaced by a named
+invoke function in an explicit block descriptor.
+
 Files: `src/init.c`, `src/inline_internal.h`, `src/queue.c`, `src/queue_internal.h`.
 
 What changed:
@@ -239,3 +242,54 @@ Parity work left:
 - QoS adoption and the wait boost call rmxOS libthr entry points that return 0 without
   acting: `_pthread_set_properties_self` and `_pthread_override_qos_class_start_direct`
   (`lib/libthr/thread/thr_workq.c:1415`, `:1461`).
+
+## D-8 Dispatch blocks own a real group, built from their own descriptor (op-277)
+
+Files: `src/init.c`, `src/inline_internal.h`, `src/queue.c`, `src/queue_internal.h`.
+This entry replaces D-7's mechanism: there is no run-time read and no
+`_dispatch_block_special_invoke_init` any more.
+
+What changed:
+- **The group:** `dbpd_group` is a `dispatch_group_t` from `dispatch_group_create()`,
+  entered once in `_dispatch_block_create`.
+  - The old private data embedded `DISPATCH_GROUP_INITIALIZER(1)`. With `USE_POSIX_SEM`
+    that group's `sem_t` was never `sem_init`ed, so `dispatch_block_wait` stopped with
+    "POSIX semaphore API failure" (op-268).
+  - `dispatch_block_perform`'s private data, on the stack, has no group and keeps
+    `DBF_PERFORM`.
+- **The block:** `_dispatch_block_create` builds it from a static `Block_descriptor`
+  (`struct dispatch_block_layout_s`: block header, then private data) with
+  `BLOCK_HAS_COPY_DISPOSE`.
+  - The copy helper retains the group and the inner block.
+  - The dispose helper leaves the group if the block never ran, then releases the
+    group, any `dbpd_queue` still set, and the inner block.
+- **Recognition:** the invoke function is `_dispatch_block_create_invoke`, and
+  `_dispatch_block_special_invoke` is a `const` pointer to it.
+- **`_dispatch_block_get_data`** finds the private data by `offsetof` (32 bytes) and
+  keeps the magic check.
+
+Why not a block literal: a C block literal has no hook that runs when the block is
+freed, and the group has to be released then. Apple 1542 and corelibs use a C++ block
+literal (`src/block.cpp`) whose captured `dispatch_block_private_data_s` has a copy
+constructor and a destructor. The explicit descriptor is the C equivalent; it also
+names the invoke function, so no compiler-generated symbol is involved.
+
+Compared with Apple 1542's destructor (`block.cpp`):
+- **Same:** leave the group if never performed; release the group, the queue and the
+  block.
+- **Differs:** Apple releases the queue with `_os_object_release_internal_n(…, 2)`;
+  here `dispatch_async` takes one internal reference, so one `_dispatch_release`.
+- **Not here:** no voucher, so there is nothing to release for one (`USE_OBJC` 0).
+
+Ownership:
+- The private data lives inside the heap block. It is kept alive by every holder of
+  the block: the creator, a `dispatch_async` copy (released after the body runs and
+  the group is left), and a waiter's own reference.
+- A pending `dispatch_block_notify` retains the group, not the block
+  (`dispatch_group_notify_f` takes `_dispatch_retain(dg)` until `_dispatch_group_wake`).
+  So the notify outlives the block.
+- `dispatch_block_wait` waits on the group without retaining it, so its caller must
+  hold a reference to the block, as on Apple.
+
+Parity work left: the `USE_OBJC` layout (voucher captured before the private data) is
+not built on rmxOS.

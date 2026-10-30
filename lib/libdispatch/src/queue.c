@@ -991,9 +991,6 @@ libdispatch_init(void)
 	_os_object_init();
 	_voucher_init();
 	_dispatch_introspection_init();
-#if __BLOCKS__ && !USE_OBJC
-	_dispatch_block_special_invoke_init();
-#endif
 }
 
 #if HAVE_MACH
@@ -2080,7 +2077,7 @@ dispatch_block_perform(dispatch_block_flags_t flags, dispatch_block_t block)
 	return _dispatch_block_invoke(&dbpds);
 }
 
-#define _dbpd_group(dbpd) ((dispatch_group_t)&(dbpd)->dbpd_group)
+#define _dbpd_group(dbpd) ((dbpd)->dbpd_group)
 
 void
 _dispatch_block_invoke(const struct dispatch_block_private_data_s *dbcpd)
