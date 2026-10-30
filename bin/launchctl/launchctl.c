@@ -656,11 +656,27 @@ setctty(const char *name, int flags)
 	}
 }
 
-/* FreeBSD rc owns filesystem checks, the root remount and base services. */
+static bool
+bootstrap_root_ready(void)
+{
+	struct statfs root, data;
+
+	if (statfs("/", &root) == -1)
+		return (false);
+	if ((root.f_flags & MNT_RDONLY) == 0)
+		return (true);
+	return (strcmp(root.f_fstypename, "zfs") == 0 &&
+	    statfs("/private", &data) == 0 &&
+	    strcmp(data.f_mntonname, "/private") == 0 &&
+	    (data.f_flags & MNT_RDONLY) == 0 &&
+	    (strcmp(data.f_fstypename, "zfs") == 0 ||
+	    strcmp(data.f_fstypename, "tmpfs") == 0));
+}
+
+/* FreeBSD rc owns filesystem checks and base services. */
 static int
 runcom(void)
 {
-	struct statfs root;
 	pid_t child, waited;
 	int status;
 
@@ -682,8 +698,9 @@ runcom(void)
 		warnx("/etc/rc did not complete successfully");
 		return (-1);
 	}
-	if (statfs("/", &root) == -1 || (root.f_flags & MNT_RDONLY) != 0) {
-		warnx("root remains read-only after /etc/rc");
+	/* A sealed ZFS root stays read-only; its private Data must be writable. */
+	if (!bootstrap_root_ready()) {
+		warnx("read-only root has no writable private Data mount");
 		return (-1);
 	}
 	return (0);
@@ -810,8 +827,20 @@ load_path(const char *directory)
 	char *path;
 	int n, j, failed = 0;
 
-	if (stat(directory, &st) != 0)
+	if (stat(directory, &st) != 0) {
+		/* Retained rc clients still name individual jobs at the old path. */
+		if (errno == ENOENT &&
+		    strncmp(directory, "/etc/launchd.d/", 15) == 0 &&
+		    directory[15] != '\0' && strchr(directory + 15, '/') == NULL) {
+			if (asprintf(&path, "/System/Library/LaunchDaemons/%s",
+			    directory + 15) < 0)
+				return (-1);
+			n = load_job(path);
+			free(path);
+			return (n);
+		}
 		return (-1);
+	}
 	if (!S_ISDIR(st.st_mode))
 		return (load_job(directory));
 	n = scandir(directory, &files, NULL, alphasort);
@@ -828,7 +857,7 @@ load_path(const char *directory)
 			continue;
 		}
 		printf("Loading job: %s: ", files[j]->d_name);
-		if (load_job(path) != 0) {
+		if (load_job(path) != 0 && errno != EEXIST) {
 			printf("failed: %s\n", strerror(errno));
 			failed = -1;
 		} else {
