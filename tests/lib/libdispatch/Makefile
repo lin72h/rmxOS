@@ -56,4 +56,12 @@ dispatch_block_test: ${.CURDIR}/dispatch_block.zig
 dispatch_block_child: ${.CURDIR}/dispatch_block_child.zig
 	${ZIG} build-exe ${.CURDIR}/dispatch_block_child.zig ${DISPATCH_SO} ${SYSROOT}/usr/lib/libBlocksRuntime.so.0 -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -femit-bin=${.TARGET}
 
+SCRIPTS+= io_pipe_close_test
+SCRIPTS+= io_pipe_close_child
+io_pipe_close_test: ${.CURDIR}/io_pipe_close.zig
+	${ZIG} build-exe ${.CURDIR}/io_pipe_close.zig ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}
+
+io_pipe_close_child: ${.CURDIR}/io_pipe_close_child.zig
+	${ZIG} build-exe ${.CURDIR}/io_pipe_close_child.zig ${DISPATCH_SO} ${SYSROOT}/usr/lib/libBlocksRuntime.so.0 -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -femit-bin=${.TARGET}
+
 .include <bsd.test.mk>
