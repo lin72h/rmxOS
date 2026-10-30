@@ -10,13 +10,13 @@ fn call(n: usize, a: usize, b: usize, d: usize, e: usize) isize {
           [b] "{rsi}" (b),
           [d] "{rdx}" (d),
           [e] "{r10}" (e),
-        : .{ .rcx = true, .r11 = true, .memory = true });
+        : .{ .rdx = true, .r8 = true, .r9 = true, .r10 = true, .rcx = true, .r11 = true, .memory = true });
 }
 pub fn fork() isize {
     return asm volatile ("syscall\n\tjc 2f\n\ttestq %%rdx, %%rdx\n\tje 1f\n\txorq %%rax, %%rax\n\tjmp 1f\n2:\n\tnegq %%rax\n1:"
         : [ret] "={rax}" (-> isize),
         : [n] "{rax}" (@as(usize, 2)),
-        : .{ .rdx = true, .rcx = true, .r11 = true, .memory = true });
+        : .{ .rdx = true, .r8 = true, .r9 = true, .r10 = true, .rcx = true, .r11 = true, .memory = true });
 }
 fn ptr(p: anytype) usize {
     return @intFromPtr(p);
