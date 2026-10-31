@@ -583,6 +583,7 @@ ipc_port_set_seqno(
 			goto no_port_set;
 		} else {
 			port->ip_seqno = seqno;
+			ips_unlock(pset);
 		}
 	} else {
 	    no_port_set:
