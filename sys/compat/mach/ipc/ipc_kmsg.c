@@ -2282,6 +2282,23 @@ ipc_kmsg_copyout_header(
 						== MACH_PORT_TYPE_NONE);
 			assert(entry->ie_object == IO_NULL);
 			ip_lock(reply);
+			if (!ip_active(reply)) {
+				/*
+				 *	The reply port died while both locks
+				 *	were dropped for ipc_entry_get.  As in
+				 *	XNU, copy out a dead name instead.
+				 */
+				ip_unlock(reply);
+				/* drops the space lock */
+				ipc_entry_dealloc(space, reply_name, entry);
+				ip_release(reply);
+
+				ip_lock(dest);
+
+				reply = IP_DEAD;
+				reply_name = MACH_PORT_NAME_DEAD;
+				goto copyout_dest;
+			}
 			if (notify_port == IP_NULL) {
 				/* not making dead name request */
 				entry->ie_object = (ipc_object_t) reply;
