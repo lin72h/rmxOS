@@ -460,12 +460,11 @@ ipc_object_copyin(
 	    ipc_entry_file_to_port(space, name, objectp) == KERN_SUCCESS)
 		return (KERN_SUCCESS);
 	/*
-	 *	Could first try a read lock when doing
-	 *	MACH_MSG_TYPE_COPY_SEND, MACH_MSG_TYPE_MAKE_SEND,
-	 *	and MACH_MSG_TYPE_MAKE_SEND_ONCE.
+	 *	MAKE_SEND and MAKE_SEND_ONCE leave the entry unchanged, so a
+	 *	read lock suffices.  COPY_SEND may convert a dead send right
+	 *	to a dead name in ipc_right_check, which needs the write lock.
 	 */
 	if (msgt_name == MACH_MSG_TYPE_MAKE_SEND ||
-		msgt_name == MACH_MSG_TYPE_COPY_SEND ||
 		msgt_name == MACH_MSG_TYPE_MAKE_SEND_ONCE)
 		xlock = 0;
 	else
