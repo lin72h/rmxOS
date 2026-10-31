@@ -1020,26 +1020,40 @@ ipc_right_delta(
 			assert(ipc_entry_refs(entry) > 0);
 			assert(port->ip_srights > 0);
 
-			/*
-			 *	The remaining send right turns into a
-			 *	dead name.  Notice we don't decrement
-			 *	ip_srights, generate a no-senders notif,
-			 *	or use ipc_right_dncancel, because the
-			 *	port is destroyed "first".
-			 */
+			if (port->ip_pdrequest != IP_NULL) {
+				/*
+				 *	A port-destroyed request moves the
+				 *	receive right to the backup port
+				 *	instead of destroying the port.  As in
+				 *	XNU, keep the remaining send right and
+				 *	enter it in the reverse hash.
+				 */
+				entry->ie_bits = bits & ~MACH_PORT_TYPE_RECEIVE;
+				ipc_hash_insert(space, (ipc_object_t) port,
+						name, entry);
+				ip_reference(port);
+			} else {
+				/*
+				 *	The remaining send right turns into a
+				 *	dead name.  Notice we don't decrement
+				 *	ip_srights, generate a no-senders notif,
+				 *	or use ipc_right_dncancel, because the
+				 *	port is destroyed "first".
+				 */
 
-			bits &= ~IE_BITS_TYPE_MASK;
-			bits |= MACH_PORT_TYPE_DEAD_NAME;
+				bits &= ~IE_BITS_TYPE_MASK;
+				bits |= MACH_PORT_TYPE_DEAD_NAME;
 
-			if (entry->ie_request != 0) {
-				if (ipc_port_request_pending(port, entry->ie_request) &&
-				    IE_BITS_UREFS(bits) < MACH_PORT_UREFS_MAX)
-					bits++; /* only an unconsumed notification adds a reference */
-				entry->ie_request = 0;
-			}
+				if (entry->ie_request != 0) {
+					if (ipc_port_request_pending(port, entry->ie_request) &&
+					    IE_BITS_UREFS(bits) < MACH_PORT_UREFS_MAX)
+						bits++; /* only an unconsumed notification adds a reference */
+					entry->ie_request = 0;
+				}
 
 				entry->ie_bits = bits;
 				OBJECT_CLEAR(entry, name);
+			}
 				is_write_unlock(space);
 			} else {
 				assert(IE_BITS_TYPE(bits) == MACH_PORT_TYPE_RECEIVE);
