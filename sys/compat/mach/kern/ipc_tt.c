@@ -491,18 +491,17 @@ retrieve_task_self_fast(
 	itk_lock(task);
 	assert(task->itk_self != IP_NULL);
 
+	/* Take the right before task_set_special_port can release it. */
 	if ((port = task->itk_sself) == task->itk_self) {
 		/* no interposing */
-		itk_unlock(task);
 		ip_lock(port);
 		assert(ip_active(port));
 		ip_reference(port);
 		port->ip_srights++;
 		ip_unlock(port);
-	} else {
-		itk_unlock(task);
+	} else
 		port = ipc_port_copy_send(port);
-	}
+	itk_unlock(task);
 
 	return (port);
 }
