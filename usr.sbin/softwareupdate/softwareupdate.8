@@ -1,368 +1,149 @@
-.Dd October 28, 2026
+.Dd November 1, 2026
 .Dt SOFTWAREUPDATE 8
 .Os
 .Sh NAME
 .Nm softwareupdate
-.Nd inspect and stage rmxOS boot-environment updates
+.Nd install rmxOS updates onto the sealed base
 .Sh SYNOPSIS
 .Nm
-.Fl -help
+.Fl l | -list
+.Op Fl -no-scan
+.Op Fl -product-types Ar types
 .Nm
-.Fl -list Op Fl -catalog Ar directory-or-URL
+.Fl d | -download
+.Op Ar label ...
+.Nm
+.Fl i | -install
+.Ar label ... | Fl a | -all | Fl r | -recommended | Fl -os-only
+.Op Fl R | -restart
+.Op Fl -no-auto-confirm
 .Nm
 .Fl -history
+.Op Fl -verbose
 .Nm
-.Cm status
+.Fl -background
 .Nm
-.Fl -download Op Ar NAME Ns | Ns Cm all
+.Fl -help
+.Pp
+Other tools:
 .Nm
-.Fl -install Op Fl -restart Op Fl -no-auto-confirm
-.Op Ar NAME Ns | Ns Pa /path/to/update.tar
+.Cm status | Fl -dump-state
+.Nm
+.Cm rollback
+.Op Fl -restart
 .Nm
 .Cm confirm | cancel
-.Nm
-.Cm rollback Op Fl -restart
-.Nm
-.Cm verify Op Fl -quiet
 .Sh DESCRIPTION
-.Nm
-provides update discovery, build inspection, and local archive installation
-into a new boot environment.
-Updates may be downloaded from a published catalog, then installed by name
-from the verified incoming cache or from an absolute archive path.
-The accepted filters
-.Fl -recommended , -all , -os-only
-select OS updates; every update is an OS update.
+The sealed base is the ZFS dataset
+.Ar pool Ns /base/main .
+Each boot environment
+.Ar pool Ns /ROOT/ Ns Ar snapshot
+is a read-only clone of one of its snapshots.
+An update is a
+.Ql zfs send -i
+stream from the base's newest snapshot, received into
+.Ar pool Ns /base/main
+as it is; no dataset is ever promoted.
 .Pp
-.Fl -catalog
-selects a local published directory, file:// URL, or http(s):// URL.
-A URL may name the publication directory or its catalog.json.
-Without that option, catalog_url is read from
-.Pa /etc/defaults/softwareupdate.conf
-and then overridden by
-.Pa /etc/softwareupdate.conf .
-The setting is a single catalog_url=value assignment, optionally double-quoted;
-blank lines and full-line comments beginning with # are accepted.
-No shell expansion is performed.
-The shipped default is empty: no default publication host exists yet.
-List and download then name catalog_url and exit nonzero until configured.
-The directory contains
-.Pa catalog.json
-and one
-.Pa rmxos-<commit12>/update.tar
-with a
-.Pa update.tar.sha256
-sidecar per entry.
-The sidecar is a lowercase 64-digit SHA256, optionally followed by whitespace.
-Catalog reads use fetch(1). Local listing additionally checks regular archive
-files, declared byte sizes and sidecar agreement; remote listing reads catalog
-metadata only. Neither provides authentication of the publisher.
-Signing is deferred.
-.Sh DOWNLOAD AND NAMED INSTALL
-.Fl -download
-requires root. NAME downloads one catalog entry; all, or no operand, downloads
-every entry. Each archive and sidecar is fetched with fetch(1) into a private
-temporary directory under /var/db/softwareupdate/incoming.
-The archive size and SHA256 must match the catalog, and its sidecar must name
-the same SHA256. Only then is the directory renamed to its final update name.
-A failed or cut transfer removes the temporary files and never gives a partial
-file an installable name. A repeated verified download preserves existing files.
-.Pp
-.Fl -install Ar NAME
-uses /var/db/softwareupdate/incoming/NAME/update.tar and its sidecar through the
-same verification and clone-only engine as local archive installation.
-It does not download implicitly. The install boot-environment preconditions
-below still apply.
-.Sh PUBLISHING
-The build-host Mix project provides one compiled publisher command:
-.Bd -literal -offset indent
-mix softwareupdate.publish OVERLAY PREVIOUS FROM_COMMIT COMMIT TREE
-.Ed
-OVERLAY and PREVIOUS are composed overlay directories with their manifests;
-OVERLAY must also contain directories.tsv and its tree/files payloads.
-The publisher verifies payload identities, packs update.tar with the existing
-manifests, METALOG, commit, removals, report, directories.tsv and payload members,
-and writes TREE/rmxos-COMMIT12/update.tar plus update.tar.sha256.
-It appends a catalog entry whose from identity is FROM_COMMIT and the SHA256
-of PREVIOUS/manifest.tsv. Existing update names refuse; other entries and their
-archives are preserved. Catalog replacement is atomic and serialized by a
-publication lock. The new entry becomes visible only after both archive files
-are in place. This command does not sign updates or impose a downgrade floor.
-.Sh CATALOG FORMAT
-The top-level JSON object has exactly these fields:
-.Bl -tag -width restart_required
-.It format
-The string
-.Dq rmxos-catalog-v1 .
-.It updates
-An array of update objects.
-Each has these required fields:
-.Bl -tag -width manifest_sha256
-.It name
-.Dq rmxos-
-followed by the first 12 lowercase hexadecimal digits of commit.
-Names must be unique and cannot contain paths.
-.It commit
-The produced build's full 40-digit lowercase hexadecimal source commit.
-.It sha256
-The archive's 64-digit lowercase hexadecimal SHA256.
-.It from
-An object containing
-.Cm commit
-(the required installed build's 40-digit commit) and
-.Cm manifest_sha256
-(the SHA256 of its complete installed manifest bytes).
-.It date
-Publication date, a nonempty string, conventionally UTC ISO 8601.
-.It size
-The archive's byte length as an unsigned integer.
-.It restart_required
-A JSON boolean indicating whether the update needs a restart.
-.El
-.El
-.Pp
-An entry has
-.Dq applies=yes
-only if both
-.Cm from.commit
-and
-.Cm from.manifest_sha256
-match
-.Pa /var/db/rmxos/commit
-and the hash of
-.Pa /var/db/rmxos/manifest.tsv .
-Missing installed identity is reported as not applicable.
-Unknown fields, duplicate names, invalid hashes and incomplete objects
-are refused.
-.Sh STATUS AND HISTORY
-.Cm status
-reports the mounted root dataset and BE name, actual SHA256 hashes of
-.Pa /boot/RMXOS-RELEASE/kernel ,
-.Pa /boot/RMXOS-RELEASE/mach.ko
-and
-.Pa /sbin/launchd ,
-the recorded commit, staged target and confirmed BE, owner
-.Pa /etc/*.rmxos-new
-sidecars recursively, the
-.Xr bectl 8
-list, and the last ten history lines.
-It does not use
-.Xr uname 1
-as build identity.
-Missing image-install identity or state is printed as
-.Dq none ;
-unavailable files or BE information are explicitly marked unavailable.
-Directory symlinks are not traversed.
-Unreadable sidecar directories are named
-as
-.Dq sidecars_unreadable
-and are not included in the sidecar count.
-.Pp
-State is read from
-.Pa /var/db/rmxos/pending-target
-and
-.Pa /var/db/rmxos/confirmed-target .
-.Fl -history
-streams the complete
-.Pa /var/db/softwareupdate/history.tsv
-without changing it.
-Status shows its last ten lines.
-Each history line is tab-separated: UTC time, action, from-commit, to-commit,
-previous BE, target BE, conflict count.
-Missing history prints
-.Dq history=none .
-.Sh PRECONDITIONS
-Download requires effective UID zero. Install and lifecycle commands additionally
-require a running ZFS root
-at exactly
-.Pa <pool>/ROOT/<name> ,
-a matching running entry in
-.Cm bectl list -H ,
-and no entry marked for a temporary boot, except cancellation of that selection.
-Named install or download targets must differ from the running BE and
-must not already exist.
-For a local archive install, the target name is derived from the validated
-.Pa ./commit
-member.
-An unspecified or
-.Cm all
-selection does not resolve a target in this version and stops before any
-update engine runs.
-All refusals start with
-.Dq softwareupdate:
-on standard error and exit nonzero.
-.Sh LOCAL INSTALLATION
 .Fl -install
-with an absolute local archive path checks its SHA256 sidecar, the archive
-member set, manifests, METALOG, payload hashes, modes and removal paths before
-creating a boot environment.
-Archives use the rmx-devup pack format: manifest.tsv, previous.tsv, METALOG,
-commit, removals.json, report.json, optional baseline.tsv and directories.tsv,
-and files/ payloads.
-Only regular files and declared one-level internal hard links are supported.
-Symlinks, traversal, duplicate members and extra payloads are refused.
-Signatures are not implemented.
-.Pp
-The running manifest must equal previous.tsv or manifest.tsv.
-A first update without installed manifest state requires baseline.tsv;
-its /etc inventory is used only for configuration comparisons, never deletions.
-Every destination is checked before cloning; the clone is checked again.
-Symlink parents, nonregular destinations and crossings into other datasets
-are refused.
-.Pp
-The command clones the running BE with
-.Cm bectl create -e ,
-mounts it, and writes only inside that clone.
-Candidate files use a same-directory temporary file and rename, declared modes
-and root/wheel ownership.
-Unchanged previous-only files are removed; locally changed ones are kept.
-Explicit obsolete files are removed even if edited.
-Owner-modified /etc files stay and receive candidate .rmxos-new sidecars;
-a differing existing sidecar refuses the update before cloning.
-Files under /etc/mtree/ and /etc/defaults/ are system files and are always
-replaced from the build, without producing sidecars.
-Hard-link declarations are installed canonical-first and verified by inode
-and exact link count.
-.Pp
-The optional directories.tsv starts with rmx-directories-v1 and contains
-tab-separated octal mode, numeric UID, numeric GID and absolute directory path,
-with a final newline. Modes have a leading zero and three or four octal digits;
-UID and GID are unsigned decimal and must not be 4294967295.
-Directory paths cannot contain empty, dot or dot-dot components.
-The root path is permitted; other components use letters, digits, underscore,
-dot, plus, at-sign and hyphen.
-The directory manifest is covered by the archive checksum.
-Missing directories are created in parent-first order in the clone with the
-declared ownership and mode. Existing directories are never changed or removed.
-Symlink and non-directory destinations and crossings into other datasets refuse
-the update. Directory declarations cannot collide with file or removal paths.
-The table is saved as /var/db/rmxos/directories.tsv in the clone.
-Archives without it declare no new directories.
-.Pp
-The clone's RELEASE module hints are refreshed with
-.Xr kldxref 8 .
-Failure prevents activation and retains the clone for inspection.
-Build state is written under /var/db/rmxos, and the owner's loader.conf.local
-lines are preserved before appending the clone's root dataset selection.
-Candidate bytes, modes, ownership and removals are verified.
-The derived linker.hints and appended loader.conf.local are checked in their
-generated form, rather than against their pre-generation archive hashes.
-.Pp
-The clone is unmounted, snapshotted as its root dataset's
-.Cm @sealed-GUID ,
-and held with the ZFS tag
-.Cm softwareupdate .
-Failure to snapshot or hold prevents activation.
-The snapshot GUID is recorded as the environment's local ZFS user property
-.Cm org.rmxos:seal-guid .
-The GUID determines both its final name and its identity after promotion.
-The sealed clone is selected for one boot with
-.Cm bectl activate -t .
-The command prints staged= and a reboot command.
+reads the catalog, refuses with one line and receives nothing when the base
+has changed since its newest snapshot
+.Pq Ql written No not 0 ,
+when the update starts from another GUID than that snapshot's, or when the
+stream is truncated, does not match the catalog's sha256, or its own origin
+GUID does not match.
+It then receives the stream, clones the new snapshot
+.Pq Cm mountpoint Ns =/ , Cm canmount Ns = Ns Cm noauto , Cm readonly Ns = Ns Cm on ,
+activates the clone for one boot
+.Pq Ql bectl activate -t ,
+and records the running environment, the time and the label in
+.Pa /private/var/db/rmxos/fallback .
+With
 .Fl -restart
-runs shutdown only after successful staging.
-The persistent running BE remains the fallback; this command never confirms.
+the system restarts.
+.Pp
+The boot check
+.Pq Ql --boot-check , No run by Ar org.rmxos.softwareupdate.boot-check
+confirms the new environment on its first boot: it sets the pool's
+.Cm bootfs
+to it, clears the one-boot setting, writes the history row, and applies
+retention.
+A boot that does not reach the check boots the previous environment next.
+With
 .Fl -no-auto-confirm
-is recorded in /var/db/softwareupdate/no-auto-confirm in the clone and disables
-automatic confirmation; manual confirmation remains available.
-History is appended on the running BE under /var/db/softwareupdate/history.tsv
-and copied into the clone, with logger records tagged softwareupdate.
-The running payload and its installed manifest are not modified.
-Failures retain created clones, attempt to unmount them, and do not activate
-them unless the failure happens after the activation command succeeded.
-.Sh CONFIRMATION AND RECOVERY
-Status reports the next boot environment selected with the T flag, together
-with the staged commit recorded at installation, even before rebooting.
-On the staged boot it reports the remaining confirmation window and whether
-automatic confirmation is enabled.
-.Pp
-The launchd job org.rmxos.softwareupdate.boot-check runs once at boot.
-When the running environment equals pending-target and automatic confirmation
-is enabled, it waits until 600 seconds of monotonic uptime.
-The three identity files must match their manifest hashes, modes and owners;
-PID 1 must be launchd, mach.ko must be loaded, logd must be running, and a
-unique logger record must be readable through log.
-Failure leaves the update pending, records the reason in history and the log,
-and makes status advise rollback.
-For disposable testing only, a root-owned file not writable by group or other,
-/var/db/softwareupdate/confirm-delay, may reduce the delay to 0 through 600
-seconds. No such override is installed by default.
-.Pp
-.Cm confirm
-requires the running environment to match pending-target and the previous
-environment to exist. It makes the running environment persistent and clears
-pending-target. When installation changed /boot/loader.efi, its manifest
-identity is checked and the loader on the unique EFI system partition is
-replaced atomically, at efi/freebsd/loader.efi or EFI/BOOT/BOOTX64.EFI.
-Failure to locate or update the loader prevents confirmation.
-Before activation, legacy snapshots named
-.Cm @sealed
-and held with the softwareupdate tag are bound to their owning environments
-by GUID and renamed. This includes a pending environment staged by an older
-installer. The predecessor's identity remains on its dataset when promotion
-moves its snapshot, so rollback and verification can still locate that seal.
-If activation fails after changing the pool's bootfs, confirmation restores
-and checks the saved previous boot default without attempting another promote.
-The update remains pending.
-Manual and automatic confirmation failures record the error and command stderr
-in history, the softwareupdate log and boot-check-failed, and print the reason.
-Failure history rows append a reason field to the usual seven fields.
-.Pp
+the check waits for
+.Cm confirm ;
+before the restart,
 .Cm cancel
-before reboot clears the one-time selection and destroys the verified owned
-clone, releasing its softwareupdate hold first.
-On an unconfirmed staged boot it selects the previous environment.
+removes the staged environment and the received snapshot.
+The boot check also asserts the ownership list
+.Pa /System/Library/LaunchDaemons/org.rmxos.softwareupdate.ownership :
+no service is both an enabled rc service and a loaded launchd job, and every
+listed job is loaded.
+.Pp
 .Cm rollback
-selects previous-be persistently; with --restart it reboots after selection.
-These commands never destroy the running environment.
+sets
+.Cm bootfs
+back to the fallback environment.
+.Cm status
+shows the installed label, the base snapshot and its GUID,
+.Ql written
+on the base (a nonzero value is reported as a sealed-base change), the boot
+environment, the fallback, the Data datasets and the last history rows.
 .Pp
-After confirmation the current environment and three other managed
-environments are kept, always including the previous environment.
-Older environments are removed only if an installation registry token and
-the clone's creation marker agree. Foreign environments and environments
-selected for a boot are never removed.
-Lifecycle operations take an exclusive operation lock.
+Retention keeps the newest
+.Cm retain
+environments and the snapshots they use, never the running, fallback or
+.Cm bootfs
+one.
+.Nm
+never writes
+.Pa /boot/loader.conf
+or the ESP's
+.Pa loader.env .
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl -catalog Ar DIR | URL
+Developer option: read
+.Pa catalog.json
+and its streams from a directory or URL.
+.It Fl -no-scan
+Use the last fetched catalog.
+.It Fl -verbose , Fl -force , Fl -agree-to-license
+Accepted;
+.Fl -verbose
+adds rmxOS's columns to
+.Fl -history .
+.El
 .Pp
-Retention releases the softwareupdate hold immediately before destroying an
-owned environment, locating and removing its seal by GUID even when promotion
-has moved the snapshot to another dataset. Other ZFS holds still prevent
-destruction. Rollback is
-non-destructive and keeps its seal. Confirmation preserves the current and
-previous environments' seals.
-.Sh SEAL VERIFICATION
-.Cm verify Op Fl -quiet
-requires root and compares the running boot environment with its
-.Cm @sealed-GUID
-snapshot. Snapshot lookup uses the recorded GUID across the ROOT lineage,
-including snapshots moved into another environment by promotion.
-Legacy held snapshots named @sealed are bound before the next confirmation.
-Status names the seal and reports its creation time as UTC Unix
-seconds in seal_taken_unix.
-An environment installed before sealing was introduced has no seal.
+.Fl -fetch-full-installer ,
+.Fl -list-full-installers ,
+.Fl -install-rosetta ,
+.Fl -stdinpass ,
+.Fl -user
+and
+.Fl -safari-only
+are refused with one line.
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /etc/defaults/softwareupdate.conf , Pa /etc/softwareupdate.conf
+.Cm catalog_url ,
+.Cm retain
+(default 3).
+.It Pa /private/var/db/rmxos/fallback , Pa /private/var/db/rmxos/history
+The fallback record and the history.
+.It Pa /private/var/db/rmxos/softwareupdate/
+The last fetched catalog and downloaded streams.
+.El
+.Sh CATALOG
+.Pa catalog.json
+is
+.Bd -literal -offset indent
+{"format": "rmxos-catalog-v2", "updates": [{"label": "...", "build": "...",
+ "snapshot": "...", "origin_guid": "...", "target_guid": "...",
+ "stream": "....zfs", "sha256": "...", "size": N}]}
+.Ed
 .Pp
-The snapshot's installed manifest defines the base files; its directories.tsv
-defines the base directories. Regular files are exhaustively compared by
-SHA-256, type, mode and ownership with their sealed versions. The sealed
-version is authoritative for generated files and existing directories that
-were preserved at installation. ZFS diff supplies underlying-dataset directory
-candidates, so devfs or tmpfs mounts do not appear as base modifications;
-directory type, mode and ownership are then checked against the snapshot.
-Runtime file additions outside the declared base are not reported.
-.Pp
-Changed paths are listed as modified, missing or type-changed. Ordinary owner
-configuration files recorded with .rmxos-new sidecars at sealing are listed
-separately as expected-owner-change, and do not count as drift when edited.
-Missing files or changed types still count as drift. System configuration
-under /etc/defaults and /etc/mtree is never exempted.
-.Fl -quiet
-prints only the numeric drift count when a seal is present.
-.Pp
-This seal is held, but the running filesystem is not read-only. It reports
-drift; it does not prevent writes or authenticate the published update.
+with GUIDs as decimal strings.
 .Sh EXIT STATUS
-.Ex -std
-For verify, 0 means the base matches, 1 means base drift, 2 means an operational
-error or root refusal, and 3 means this boot environment has no seal.
-.Sh SEE ALSO
-.Xr sha256 1 ,
-.Xr bectl 8
+0 on success, 1 when an operation is refused or fails, 2 for invalid arguments.

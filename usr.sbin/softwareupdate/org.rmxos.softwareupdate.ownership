@@ -1,0 +1,24 @@
+# One owner per service: li-915 § Ownership (staged for op-316 item 8,
+# /Users/me/wip-mach/stage/op316-input/li-915-ownership.md, sha256 c58aa32f...).
+# The boot check asserts it: no service both in `service -e` and in
+# `launchctl list`, and every launchd job below loaded.
+#
+# The loader (/boot/loader.conf, sealed base) owns the kernel, modules, root
+# selection and console; an owner's kernel settings live on the ESP's
+# loader.env, written by the installer. softwareupdate never writes either.
+#
+# launchd <label> [<rc service the job replaces> ...]
+launchd	org.rmxos.logd	syslogd asld
+launchd	org.rmxos.logd-retention.once
+launchd	com.apple.notifyd
+launchd	com.rmxos.console-getty
+launchd	org.rmxos.softwareupdate.boot-check
+#
+# rc <service>: the machine (rc.conf on Data, vendor.conf in the base).
+rc	netif
+rc	routing
+rc	sshd
+rc	zfs
+rc	dumpon
+rc	powerd
+rc	random
