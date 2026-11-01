@@ -850,12 +850,15 @@ static int
 bootstrap_logd(void)
 {
 	size_t i;
+	int ret;
 
 	for (i = 0; i < N(logd_jobs); i++) {
 		if (access(logd_jobs[i], F_OK) != 0)
 			continue;
-		early_job = logd_jobs[i];
-		return (load_job(logd_jobs[i]));
+		ret = load_job(logd_jobs[i]);
+		if (ret == 0)
+			early_job = logd_jobs[i];
+		return (ret);
 	}
 	return (0);
 }

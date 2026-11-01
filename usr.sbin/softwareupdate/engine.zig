@@ -134,18 +134,80 @@ pub fn install(ctx: Ctx, env: Env, u: catalog.Update, source: []const u8, manual
         return ctx.refuse("{s}: stream origin GUID {s} (target {s}) does not match base GUID {s}; nothing received", .{ u.label, origin, target, h.guid });
 
     const snapshot = try ctx.fmt("{s}@{s}", .{ env.base, u.snapshot });
+    const at = std.mem.lastIndexOfScalar(u8, hd.name, '@') orelse return error.NotAStream;
+    const received = try ctx.fmt("{s}{s}", .{ env.base, hd.name[at..] });
+    const clone = try ctx.fmt("{s}/{s}", .{ env.root, u.snapshot });
+    const record_path = try ctx.path(fallback_path);
+    const old_record = if (sys.exists(record_path)) try sys.read(ctx.a, record_path) else null;
+    const hist_path = try ctx.path(history_path);
+    const hist_size = sys.size(hist_path);
     const r = try sys.run(ctx.a, &.{ "/sbin/zfs", "receive", "-u", env.base }, path);
     if (r.status != 0) return ctx.refuse("{s}: zfs receive failed: {s}", .{ u.label, sys.firstLine(r.stderr) });
-    const guid = try get(ctx, "guid", snapshot);
-    if (!std.mem.eql(u8, guid, u.target_guid)) return ctx.refuse("{s}: received {s} has GUID {s}, catalog {s}", .{ u.label, snapshot, guid, u.target_guid });
-
-    const clone = try ctx.fmt("{s}/{s}", .{ env.root, u.snapshot });
-    _ = try zfs(ctx, &.{ "clone", "-o", "mountpoint=/", "-o", "canmount=noauto", "-o", "readonly=on", snapshot, clone });
-    _ = try sys.capture(ctx, &.{ "/sbin/bectl", "-r", env.root, "activate", "-t", u.snapshot });
-    try writeRecord(ctx, .{ .environment = env.running, .time = try sys.now(ctx.a), .label = u.label, .staged = clone, .confirm = if (manual) "manual" else "auto", .state = "staged" });
-    try history(ctx, "staged", u.label, clone);
+    var made_clone = false;
+    var activated = false;
+    var wrote_record = false;
+    stage(ctx, env, u, snapshot, clone, manual, &made_clone, &activated, &wrote_record) catch |err| {
+        const cause = sys.failure;
+        undoInstall(ctx, env, received, clone, h.name, made_clone, activated, wrote_record, old_record, hist_size) catch |cleanup_err|
+            return ctx.refuse("{s}: {s} {s}; recovery incomplete: {s}", .{ u.label, @errorName(err), cause, @errorName(cleanup_err) });
+        return ctx.refuse("{s}: {s} {s}; install undone", .{ u.label, @errorName(err), cause });
+    };
     ctx.out("Installed {s} into {s}; it boots once on the next restart.\n", .{ u.label, clone });
     return 0;
+}
+
+fn stage(ctx: Ctx, env: Env, u: catalog.Update, snapshot: []const u8, clone: []const u8, manual: bool, made_clone: *bool, activated: *bool, wrote_record: *bool) !void {
+    const guid = try get(ctx, "guid", snapshot);
+    if (!std.mem.eql(u8, guid, u.target_guid)) return error.ReceivedGuidMismatch;
+    _ = try zfs(ctx, &.{ "clone", "-o", "mountpoint=/", "-o", "canmount=noauto", "-o", "readonly=on", snapshot, clone });
+    made_clone.* = true;
+    activated.* = true;
+    _ = try sys.capture(ctx, &.{ "/sbin/bectl", "-r", env.root, "activate", "-t", u.snapshot });
+    try writeRecord(ctx, .{ .environment = env.running, .time = try sys.now(ctx.a), .label = u.label, .staged = clone, .confirm = if (manual) "manual" else "auto", .state = "staged" });
+    wrote_record.* = true;
+    try history(ctx, "staged", u.label, clone);
+}
+
+fn undoInstall(ctx: Ctx, env: Env, received: []const u8, clone: []const u8, previous: []const u8, made_clone: bool, activated: bool, wrote_record: bool, old_record: ?[]const u8, hist_size: ?u64) !void {
+    // Attempt every step even if another cleanup step fails.
+    var failed = false;
+    if (activated) _ = sys.capture(ctx, &.{ "/sbin/bectl", "-r", env.root, "activate", "-T" }) catch {
+        failed = true;
+    };
+    if (made_clone) _ = zfs(ctx, &.{ "destroy", clone }) catch {
+        failed = true;
+    };
+    _ = zfs(ctx, &.{ "destroy", received }) catch {
+        failed = true;
+    };
+    _ = zfs(ctx, &.{ "rollback", previous }) catch {
+        failed = true;
+    };
+    if (wrote_record) {
+        const p = try ctx.path(fallback_path);
+        if (old_record) |bytes| {
+            sys.replace(ctx.a, p, bytes) catch {
+                failed = true;
+            };
+        } else if (sys.c.unlink(p) != 0) {
+            failed = true;
+        }
+    }
+    const hp = try ctx.path(history_path);
+    if (sys.size(hp) != hist_size) {
+        if (hist_size) |size| {
+            const fd = sys.c.open(hp, sys.c.O_WRONLY | sys.c.O_NOFOLLOW);
+            if (fd < 0) {
+                failed = true;
+            } else {
+                defer _ = sys.c.close(fd);
+                if (sys.c.ftruncate(fd, @intCast(size)) != 0 or sys.c.fsync(fd) != 0) failed = true;
+            }
+        } else if (sys.c.unlink(hp) != 0) {
+            failed = true;
+        }
+    }
+    if (failed) return error.InstallCleanup;
 }
 
 fn confirmRunning(ctx: Ctx, env: Env, r: Record) !u8 {
@@ -199,10 +261,13 @@ pub fn cancel(ctx: Ctx, env: Env) !u8 {
     if (!std.mem.eql(u8, r.confirm, "manual")) return ctx.refuse("cancel is only for an install made with --no-auto-confirm", .{});
     if (std.mem.eql(u8, r.staged, env.running)) return ctx.refuse("{s} is running; use rollback", .{r.label});
     if (!std.mem.eql(u8, r.state, "staged")) return ctx.refuse("no install is waiting for confirmation", .{});
+    const written = try get(ctx, "written", env.base);
+    if (!std.mem.eql(u8, written, "0"))
+        return ctx.refuse("{s}: sealed base {s} changed (written={s}); nothing canceled", .{ r.label, env.base, written });
     _ = try sys.capture(ctx, &.{ "/sbin/bectl", "-r", env.root, "activate", "-T" });
     // Undo the receive too, so the same update installs again from this base.
-    _ = try zfs(ctx, &.{ "destroy", r.staged });
-    _ = try zfs(ctx, &.{ "destroy", try ctx.fmt("{s}@{s}", .{ env.base, env.name(r.staged) }) });
+    try destroyIfPresent(ctx, env, r.staged);
+    try destroyIfPresent(ctx, env, try ctx.fmt("{s}@{s}", .{ env.base, env.name(r.staged) }));
     // The received data stays in the base's head until it is rolled back.
     _ = try zfs(ctx, &.{ "rollback", (try head(ctx, env)).name });
     var n = r;
@@ -211,6 +276,17 @@ pub fn cancel(ctx: Ctx, env: Env) !u8 {
     try history(ctx, "canceled", r.label, r.staged);
     ctx.out("Canceled {s}; {s} stays the boot environment.\n", .{ r.label, env.running });
     return 0;
+}
+
+fn destroyIfPresent(ctx: Ctx, env: Env, name: []const u8) !void {
+    // Enumerate the pool successfully before deciding an object is absent;
+    // permission and pool errors must not masquerade as a missing clone.
+    const all = try zfs(ctx, &.{ "list", "-H", "-t", "all", "-o", "name", "-r", env.pool });
+    var lines = std.mem.splitScalar(u8, sys.trim(all), '\n');
+    while (lines.next()) |line| if (std.mem.eql(u8, line, name)) {
+        _ = try zfs(ctx, &.{ "destroy", name });
+        return;
+    };
 }
 
 pub fn rollback(ctx: Ctx, env: Env) !u8 {
@@ -233,7 +309,8 @@ pub fn rollback(ctx: Ctx, env: Env) !u8 {
 pub fn retain(ctx: Ctx, env: Env) !u8 {
     const n = std.fmt.parseInt(usize, catalog.setting(ctx, "retain") orelse "3", 10) catch 3;
     const text = try zfs(ctx, &.{ "list", "-H", "-p", "-o", "name,origin", "-S", "creation", "-d", "1", env.root });
-    const keep_also = [_][]const u8{ env.running, if (readRecord(ctx)) |r| r.environment else "", bootfs(ctx, env) catch "" };
+    const boot = bootfs(ctx, env) catch return ctx.refuse("bootfs lookup failed; retention removed nothing", .{});
+    const keep_also = [_][]const u8{ env.running, if (readRecord(ctx)) |r| r.environment else "", boot };
     var lines = std.mem.splitScalar(u8, sys.trim(text), '\n');
     var count: usize = 0;
     while (lines.next()) |line| {

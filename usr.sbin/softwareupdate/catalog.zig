@@ -98,13 +98,29 @@ pub fn load(ctx: Ctx, explicit: ?[]const u8, no_scan: bool) !struct { catalog: C
 pub fn stream(ctx: Ctx, source: []const u8, u: Update) ![:0]const u8 {
     if (!isUrl(source)) return ctx.z(try ctx.fmt("{s}/{s}", .{ source, u.stream }));
     const dest = try ctx.path(try ctx.fmt(state ++ "/downloads/{s}", .{u.stream}));
-    if (!sys.exists(dest)) try obtain(ctx, source, u.stream, dest);
-    return dest;
+    return cachedStream(ctx, source, u, dest);
 }
 
 // Download into Data (--download, --background), whatever the source.
 pub fn download(ctx: Ctx, source: []const u8, u: Update) ![:0]const u8 {
     const dest = try ctx.path(try ctx.fmt(state ++ "/downloads/{s}", .{u.stream}));
-    if (!sys.exists(dest)) try obtain(ctx, source, u.stream, dest);
+    return cachedStream(ctx, source, u, dest);
+}
+
+fn matches(p: [:0]const u8, u: Update) bool {
+    if ((sys.size(p) orelse return false) != u.size) return false;
+    const digest = sys.sha256File(p) catch return false;
+    return std.mem.eql(u8, &digest, u.sha256);
+}
+
+fn cachedStream(ctx: Ctx, source: []const u8, u: Update, dest: [:0]const u8) ![:0]const u8 {
+    const part = try ctx.z(try ctx.fmt("{s}.part", .{dest}));
+    if (sys.exists(part) and sys.c.unlink(part) != 0) return error.DownloadCleanup;
+    if (matches(dest, u)) return dest;
+    if (sys.exists(dest) and sys.c.unlink(dest) != 0) return error.DownloadCleanup;
+    errdefer _ = sys.c.unlink(part);
+    try obtain(ctx, source, u.stream, part);
+    if (!matches(part, u)) return error.DownloadMismatch;
+    if (sys.c.rename(part, dest) != 0) return error.DownloadCache;
     return dest;
 }
