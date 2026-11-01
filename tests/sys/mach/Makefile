@@ -35,7 +35,7 @@ ZIG?= zig
 ZIG_SYSROOT?= ${SYSROOT}
 ATF_C_ARCHIVE?= ${SYSROOT}/usr/lib/libprivateatf-c.a
 
-.for _test in fileops swtch short_kevent dead_name named_pset translate file_lifetime passable proc_info filecaps timeout clock timebase entry entry_lock entry_knote entry_dup lifetime readiness
+.for _test in fileops short_kevent dead_name named_pset translate file_lifetime passable proc_info filecaps timeout clock timebase entry entry_lock entry_knote entry_dup lifetime readiness
 mach_${_test}_test: ${.CURDIR}/mach_${_test}.zig ${.CURDIR}/file_message.zig
 	${ZIG} build-exe ${.CURDIR}/mach_${_test}.zig -target x86_64-freebsd -lc -lpthread \
 	    --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf \
@@ -123,3 +123,9 @@ mig_notifications_test: ${.CURDIR}/mig_notifications.zig ${.CURDIR}/file_message
 	    --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys \
 	    -I. -cflags -D__MigTypeCheck=1 -- op631_dispatchServer.c op631_notifyServer.c -femit-bin=${.TARGET}
 CLEANFILES+= op631_dispatchServer.c op631_dispatchServer.h op631_notifyServer.c op631_notifyServer.h
+
+# Native layout constants only; all thread_switch assertions are in Zig.
+mach_swtch_test: ${.CURDIR}/mach_swtch.zig ${.CURDIR}/mach_switch_abi.c
+	${ZIG} build-exe ${.CURDIR}/mach_swtch.zig ${.CURDIR}/mach_switch_abi.c -target x86_64-freebsd -lc -lpthread \
+	    --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys \
+	    ${ATF_C_ARCHIVE} -femit-bin=${.TARGET}

@@ -45,6 +45,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mount.h>
 #include <sys/resource.h>
 #include <sys/resourcevar.h>
+#include <sys/sched.h>
 #include <sys/socket.h>
 #include <sys/vnode.h>
 #include <sys/uio.h>
@@ -188,10 +189,7 @@ sys_thread_switch(struct thread *td __unused, struct thread_switch_args *uap)
 static int
 _swtch_pri(struct thread *td)
 {
-	thread_lock(td);
-	if (td->td_state == TDS_RUNNING)
-		td->td_proc->p_stats->p_cru.ru_nivcsw++;        /* XXXSMP */
-	mi_switch(SW_VOL | SWT_RELINQUISH);
+	sched_relinquish(td);
 	return (0);
 }
 

@@ -31,6 +31,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/callout.h>
 #include <sys/eventhandler.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
@@ -86,49 +87,84 @@ _intr_tdsigwakeup(struct thread *td, int intrval)
 #endif
 
 
-int
-mach_thread_switch(mach_port_name_t thread_name, int option, mach_msg_timeout_t option_time)
+/* The thread lock protects active and all priority changes. */
+struct mach_depression {
+	struct callout timer;
+	struct thread *td;
+	u_char saved_pri;
+	bool active;
+};
+
+static void
+mach_depress_restore(struct mach_depression *depress)
 {
-	   struct thread *td = curthread;
-#ifdef notyet
-       int timeout;
-       struct mach_emuldata *med;
+	struct thread *td;
 
-       med = (struct mach_emuldata *)td->td_proc->p_emuldata;
-       timeout = option_time * hz / 1000;
-#endif
+	td = depress->td;
+	THREAD_LOCK_ASSERT(td, MA_OWNED);
+	if (depress->active) {
+		depress->active = false;
+		/* Timeshare priority may have been recomputed while we yielded. */
+		sched_prio(td, PRI_BASE(td->td_pri_class) == PRI_TIMESHARE ?
+		    td->td_user_pri : depress->saved_pri);
+	}
+}
 
-       /*
-        * The day we will be able to find out the struct proc from
-        * the port number, try to use preempt() to call the right thread.
-        * [- but preempt() is for _involuntary_ context switches.]
-        */
-       switch(option) {
-       case SWITCH_OPTION_NONE:
-               sched_relinquish(curthread);
-               break;
+static void
+mach_depress_expire(void *arg)
+{
+	struct mach_depression *depress;
 
-       case SWITCH_OPTION_WAIT:
-#ifdef notyet		   
-               med->med_thpri = 1;
-               while (med->med_thpri != 0) {
-                       rw_wlock(&med->med_rightlock);
-                       (void)msleep(&med->med_thpri, &med->med_rightlock, PZERO|PCATCH,
-                                                "thread_switch", timeout);
-                       rw_wunlock(&med->med_rightlock);
-              }
-               break;
-#endif
-       case SWITCH_OPTION_DEPRESS:
-               /* Use a callout to restore the priority after depression? */
-               td->td_priority = PRI_MAX_TIMESHARE;
-               break;
+	depress = arg;
+	thread_lock(depress->td);
+	mach_depress_restore(depress);
+	thread_unlock(depress->td);
+}
 
-       default:
-              uprintf("sys_mach_syscall_thread_switch(): unknown option %d\n", option);
-               break;
-       }
-       return (0);
+int
+mach_thread_switch(mach_port_name_t thread_name __unused, int option,
+    mach_msg_timeout_t option_time)
+{
+	struct mach_depression depress;
+	struct thread *td;
+
+	td = curthread;
+	/* Thread hints are advisory; no directed handoff is implemented. */
+	switch (option) {
+	case SWITCH_OPTION_NONE:
+		sched_relinquish(td);
+		break;
+	case SWITCH_OPTION_WAIT:
+		/* XNU waits abort-safely, without changing the caller priority. */
+		if (option_time != 0)
+			(void)pause_sbt("machwait", SBT_1MS * option_time, 0,
+			    C_CATCH);
+		else
+			sched_relinquish(td);
+		break;
+	case SWITCH_OPTION_DEPRESS:
+		depress.td = td;
+		depress.active = true;
+		callout_init(&depress.timer, 1);
+		thread_lock(td);
+		depress.saved_pri = td->td_base_pri;
+		sched_prio(td, PRI_MAX_TIMESHARE);
+		/* Zero means no timer, not an infinite wait after resumption. */
+		if (option_time != 0)
+			callout_reset_sbt(&depress.timer, SBT_1MS * option_time,
+			    0, mach_depress_expire, &depress, 0);
+		mi_switch(SW_VOL | SWT_RELINQUISH);
+		/* Like XNU's continuation, abort depression when we resume. */
+		thread_lock(td);
+		mach_depress_restore(&depress);
+		thread_unlock(td);
+		/* Neither the stack context nor the thread may outlive a callback. */
+		callout_drain(&depress.timer);
+		break;
+	default:
+		return (KERN_INVALID_ARGUMENT);
+	}
+	return (KERN_SUCCESS);
 }
 
 void
