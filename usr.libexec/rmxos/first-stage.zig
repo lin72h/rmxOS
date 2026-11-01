@@ -35,10 +35,13 @@ fn console(message: []const u8) void {
         _ = call(6, @intCast(fd), 0, 0, 0);
     }
 }
+// One console line naming the dataset that did not mount and its error.
+pub fn line(buf: []u8, dataset: []const u8, result: isize, is_volatile: bool) ?[]const u8 {
+    return std.fmt.bufPrint(buf, "rmxos: {s}: errno={d}{s}\n", .{ dataset, -result, if (is_volatile) "; using volatile Data (tmpfs)" else "" }) catch null;
+}
 fn diagnostic(dataset: []const u8, result: isize, is_volatile: bool) void {
     var buf: [512]u8 = undefined;
-    const message = std.fmt.bufPrint(&buf, "rmxos: {s}: errno={d}{s}\n", .{ dataset, -result, if (is_volatile) "; using volatile Data (tmpfs)" else "" }) catch return;
-    console(message);
+    console(line(&buf, dataset, result, is_volatile) orelse return);
 }
 fn stop(message: []const u8) noreturn {
     console(message);
@@ -49,7 +52,9 @@ fn mkdir(path: [:0]const u8, mode: usize) void {
     const rc = call(136, ptr(path.ptr), mode, 0, 0);
     if (rc != 0 and rc != -17) stop("rmxos: cannot create volatile Data directories\n");
 }
-fn run(path: [:0]const u8) bool {
+// Fork, exec path with no arguments or environment, and wait: true only for
+// exit status 0 (the first stage stops on anything else).
+pub fn run(path: [:0]const u8) bool {
     const child = fork();
     if (child < 0) return false;
     if (child == 0) {

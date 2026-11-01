@@ -22,6 +22,7 @@ resolvconf.conf
 localtime
 ssh/
 ssl/certs/
+ssl/openssl.cnf
 ssl/cert.pem
 ssl/untrusted/
 zfs/
