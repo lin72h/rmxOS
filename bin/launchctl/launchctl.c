@@ -819,6 +819,31 @@ unload_job(const char *filename)
  * If it's not the System session, then we don't do a bunch
  * of stuff.  Not sure what we do want to do.
  */
+/*
+ * org.rmxos.logd is launchd's job alone (li-915 § Ownership): the bootstrap
+ * loads it before /etc/rc, so rc has a logger; logd waits for rc's
+ * filesystem readiness marker itself.  No rc script loads launchd jobs.
+ */
+static const char *logd_jobs[] = {
+	"/System/Library/LaunchDaemons/org.rmxos.logd.plist",
+	"/etc/launchd.d/org.rmxos.logd.plist",
+};
+static const char *early_job;
+
+static int
+bootstrap_logd(void)
+{
+	size_t i;
+
+	for (i = 0; i < N(logd_jobs); i++) {
+		if (access(logd_jobs[i], F_OK) != 0)
+			continue;
+		early_job = logd_jobs[i];
+		return (load_job(logd_jobs[i]));
+	}
+	return (0);
+}
+
 static int
 load_path(const char *directory)
 {
@@ -827,20 +852,8 @@ load_path(const char *directory)
 	char *path;
 	int n, j, failed = 0;
 
-	if (stat(directory, &st) != 0) {
-		/* Retained rc clients still name individual jobs at the old path. */
-		if (errno == ENOENT &&
-		    strncmp(directory, "/etc/launchd.d/", 15) == 0 &&
-		    directory[15] != '\0' && strchr(directory + 15, '/') == NULL) {
-			if (asprintf(&path, "/System/Library/LaunchDaemons/%s",
-			    directory + 15) < 0)
-				return (-1);
-			n = load_job(path);
-			free(path);
-			return (n);
-		}
+	if (stat(directory, &st) != 0)
 		return (-1);
-	}
 	if (!S_ISDIR(st.st_mode))
 		return (load_job(directory));
 	n = scandir(directory, &files, NULL, alphasort);
@@ -857,7 +870,9 @@ load_path(const char *directory)
 			continue;
 		}
 		printf("Loading job: %s: ", files[j]->d_name);
-		if (load_job(path) != 0 && errno != EEXIST) {
+		if (early_job != NULL && strcmp(path, early_job) == 0) {
+			printf("loaded before /etc/rc\n");
+		} else if (load_job(path) != 0) {
 			printf("failed: %s\n", strerror(errno));
 			failed = -1;
 		} else {
@@ -955,6 +970,8 @@ cmd_bootstrap(int argc, char * const argv[])
 
 	if (strcasecmp(session, "System") == 0) {
 		do_single_user_mode(sflag);
+		if (bootstrap_logd() != 0)
+			warnx("cannot load org.rmxos.logd before /etc/rc");
 		if (runcom() != 0)
 			return (1);
 		return (bootstrap_config() == 0 ? 0 : 1);

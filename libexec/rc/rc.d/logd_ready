@@ -6,7 +6,7 @@
 
 . /etc/rc.subr
 name="logd_ready"
-desc="Start the launchd logger after filesystem setup"
+desc="Publish filesystem readiness to the launchd logger"
 start_cmd="logd_ready_start"
 stop_cmd=":"
 
@@ -18,17 +18,9 @@ logd_ready_start()
 	mv -f /var/run/logd.filesystems-ready.tmp /var/run/logd.filesystems-ready || return 1
 	(umask 077; : > /var/run/logd.boot-service.log) || return 1
 
-	# Some retained bootstrappers load jobs only after rc returns.  Publish
-	# filesystem readiness, then load this one job if it is not loaded yet.
-	# Current bootstrappers have already loaded it: leave that job alone.
-	local jobs attempt owner
-	jobs=$(/bin/timeout -k 1 10 /bin/launchctl list) || {
-		warn "logd job list unavailable during filesystem readiness"
-		return 1
-	}
-	if ! printf '%s\n' "$jobs" | /usr/bin/grep -qx org.rmxos.logd; then
-		/bin/timeout -k 1 10 /bin/launchctl load /etc/launchd.d/org.rmxos.logd.plist || return 1
-	fi
+	# launchd loads org.rmxos.logd before /etc/rc (li-915 § Ownership); this
+	# script only publishes readiness and never loads a launchd job.
+	local attempt owner
 
 	# Complete the startup handshake here, before syslogd's compatibility
 	# dependency runs.  Do not leave dependent services to race daemon init.
