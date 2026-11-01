@@ -343,7 +343,10 @@ pub fn ownership(ctx: Ctx) !u8 {
             };
         } else if (std.mem.eql(u8, owner, "rc")) {
             var words = std.mem.tokenizeAny(u8, jobs, " \t\r\n");
-            while (words.next()) |w| if (std.mem.endsWith(u8, w, name) and w.len > name.len and w[w.len - name.len - 1] == '.') {
+            // "<address>.anonymous.<program>" is launchd's record of a process
+            // that touched the bootstrap port (rc's own sshd, devd, sh), not a
+            // job: a launchd job counts only by its own label.
+            while (words.next()) |w| if (!anonymous(w) and std.mem.endsWith(u8, w, name) and w.len > name.len and w[w.len - name.len - 1] == '.') {
                 ctx.out("ownership: rc service {s} is also the launchd job {s}\n", .{ name, w });
                 bad = 1;
             };
@@ -351,6 +354,9 @@ pub fn ownership(ctx: Ctx) !u8 {
     }
     if (bad == 0) ctx.out("ownership: one owner per service\n", .{});
     return bad;
+}
+fn anonymous(label: []const u8) bool {
+    return std.mem.indexOf(u8, label, ".anonymous.") != null;
 }
 fn hasWord(text: []const u8, word: []const u8) bool {
     var words = std.mem.tokenizeAny(u8, text, " \t\r\n");
