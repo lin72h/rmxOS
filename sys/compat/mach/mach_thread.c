@@ -91,7 +91,6 @@ _intr_tdsigwakeup(struct thread *td, int intrval)
 struct mach_depression {
 	struct callout timer;
 	struct thread *td;
-	u_char saved_pri;
 	bool active;
 };
 
@@ -104,9 +103,8 @@ mach_depress_restore(struct mach_depression *depress)
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
 	if (depress->active) {
 		depress->active = false;
-		/* Timeshare priority may have been recomputed while we yielded. */
-		sched_prio(td, PRI_BASE(td->td_pri_class) == PRI_TIMESHARE ?
-		    td->td_user_pri : depress->saved_pri);
+		/* Restore the current policy, including changes during the yield. */
+		sched_prio(td, td->td_user_pri);
 	}
 }
 
@@ -147,7 +145,6 @@ mach_thread_switch(mach_port_name_t thread_name __unused, int option,
 		depress.active = true;
 		callout_init(&depress.timer, 1);
 		thread_lock(td);
-		depress.saved_pri = td->td_base_pri;
 		sched_prio(td, PRI_MAX_TIMESHARE);
 		/* Zero means no timer, not an infinite wait after resumption. */
 		if (option_time != 0)
