@@ -686,7 +686,8 @@ main(int argc, const char *argv[])
 
 	for (i = 1; i < argc; i++)
 		if (!strcmp(argv[i], "-wait-for-filesystems")) wait_filesystems = 1;
-	if (wait_filesystems && asl_wait_for_filesystems() != 0) {
+	/* On the sealed layout /private/var is mounted before rc; do not wait. */
+	if (wait_filesystems && !asl_sealed_layout() && asl_wait_for_filesystems() != 0) {
 		asl_startup_report("logd", "filesystem setup not ready", errno);
 		exit(1);
 	}

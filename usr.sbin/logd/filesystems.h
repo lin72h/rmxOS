@@ -2,6 +2,8 @@
 #ifndef ASL_FILESYSTEMS_H
 #define ASL_FILESYSTEMS_H
 #include <sys/types.h>
+#include <sys/param.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <sys/time.h>
@@ -18,6 +20,23 @@ asl_filesystems_token(int fd, void *bytes, size_t size)
  return fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_uid == 0 &&
   !(st.st_mode & 022) && st.st_size == (off_t)size &&
   read(fd, bytes, size) == (ssize_t)size;
+}
+
+/*
+ * The sealed layout: / is read-only ZFS and PID 1's first stage has already
+ * mounted /private (ZFS, or tmpfs for volatile Data) writable, so /var exists
+ * before rc and launchd starts logd before /etc/rc.  Its Mach service is
+ * registered at that load, so logd must receive at once, not wait for rc.
+ */
+static __inline int
+asl_sealed_layout(void)
+{
+ struct statfs root, data;
+ if (statfs("/", &root) != 0 || !(root.f_flags & MNT_RDONLY) ||
+     strcmp(root.f_fstypename, "zfs") != 0) return 0;
+ return statfs("/private", &data) == 0 &&
+  strcmp(data.f_mntonname, "/private") == 0 && !(data.f_flags & MNT_RDONLY) &&
+  (strcmp(data.f_fstypename, "zfs") == 0 || strcmp(data.f_fstypename, "tmpfs") == 0);
 }
 
 static int

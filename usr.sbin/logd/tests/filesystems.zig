@@ -13,9 +13,12 @@ const c = @cImport({
     @cDefine("__BSD_VISIBLE", "1");
     @cInclude("sys/stat.h");
     @cInclude("sys/time.h");
+    @cInclude("sys/param.h");
+    @cInclude("sys/mount.h");
     @cInclude("unistd.h");
 });
 extern fn rmx_fs_wait() c_int;
+extern fn rmx_fs_sealed() c_int;
 var boot = c.struct_timeval{ .tv_sec = 100, .tv_usec = 0 };
 var boot_id: [16]u8 = @splat(1);
 var sleeps: usize = 0;
@@ -35,6 +38,44 @@ pub export fn rmx_fs_sysctl(name: [*:0]const u8, out: [*]u8, size: *usize, _: ?*
     @memcpy(out[0..data.len], data);
     size.* = data.len;
     return 0;
+}
+// Mount table seen by logd's layout decision (default: a legacy rw root).
+const Mount = struct { kind: []const u8, point: []const u8, ro: bool, present: bool = true };
+var root_mount = Mount{ .kind = "ufs", .point = "/", .ro = false };
+var private_mount = Mount{ .kind = "ufs", .point = "/", .ro = false };
+pub export fn rmx_fs_statfs(path: [*:0]const u8, out: *c.struct_statfs) c_int {
+    const m = if (std.mem.eql(u8, std.mem.span(path), "/")) root_mount else private_mount;
+    if (!m.present) return -1;
+    out.* = std.mem.zeroes(c.struct_statfs);
+    out.f_flags = if (m.ro) c.MNT_RDONLY else 0;
+    @memcpy(out.f_fstypename[0..m.kind.len], m.kind);
+    @memcpy(out.f_mntonname[0..m.point.len], m.point);
+    return 0;
+}
+test "logd waits for rc's marker except on the sealed layout" {
+    defer {
+        root_mount = .{ .kind = "ufs", .point = "/", .ro = false };
+        private_mount = .{ .kind = "ufs", .point = "/", .ro = false };
+    }
+    // Sealed: read-only ZFS root, /private its own writable ZFS or tmpfs mount.
+    root_mount = .{ .kind = "zfs", .point = "/", .ro = true };
+    for ([_][]const u8{ "zfs", "tmpfs" }) |kind| {
+        private_mount = .{ .kind = kind, .point = "/private", .ro = false };
+        try std.testing.expectEqual(@as(c_int, 1), rmx_fs_sealed());
+    }
+    // Not sealed: /private not mounted, read-only, or absent.
+    private_mount = .{ .kind = "zfs", .point = "/", .ro = true };
+    try std.testing.expectEqual(@as(c_int, 0), rmx_fs_sealed());
+    private_mount = .{ .kind = "zfs", .point = "/private", .ro = true };
+    try std.testing.expectEqual(@as(c_int, 0), rmx_fs_sealed());
+    private_mount.present = false;
+    try std.testing.expectEqual(@as(c_int, 0), rmx_fs_sealed());
+    // Legacy roots: read-write (ZFS or UFS), or UFS still read-only before rc.
+    private_mount = .{ .kind = "zfs", .point = "/private", .ro = false };
+    root_mount = .{ .kind = "zfs", .point = "/", .ro = false };
+    try std.testing.expectEqual(@as(c_int, 0), rmx_fs_sealed());
+    root_mount = .{ .kind = "ufs", .point = "/", .ro = true };
+    try std.testing.expectEqual(@as(c_int, 0), rmx_fs_sealed());
 }
 pub export fn rmx_fs_sleep(_: ?*const anyopaque, _: ?*anyopaque) c_int {
     sleeps += 1;
