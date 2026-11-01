@@ -656,21 +656,34 @@ setctty(const char *name, int flags)
 	}
 }
 
+/*
+ * The sealed layout: a read-only ZFS root with PID 1's writable private Data
+ * (ZFS, or tmpfs for volatile Data) mounted on /private.
+ */
 static bool
-bootstrap_root_ready(void)
+bootstrap_sealed(void)
 {
 	struct statfs root, data;
 
-	if (statfs("/", &root) == -1)
-		return (false);
-	if ((root.f_flags & MNT_RDONLY) == 0)
-		return (true);
-	return (strcmp(root.f_fstypename, "zfs") == 0 &&
+	return (statfs("/", &root) == 0 && (root.f_flags & MNT_RDONLY) != 0 &&
+	    strcmp(root.f_fstypename, "zfs") == 0 &&
 	    statfs("/private", &data) == 0 &&
 	    strcmp(data.f_mntonname, "/private") == 0 &&
 	    (data.f_flags & MNT_RDONLY) == 0 &&
 	    (strcmp(data.f_fstypename, "zfs") == 0 ||
 	    strcmp(data.f_fstypename, "tmpfs") == 0));
+}
+
+static bool
+bootstrap_root_ready(void)
+{
+	struct statfs root;
+
+	if (statfs("/", &root) == -1)
+		return (false);
+	if ((root.f_flags & MNT_RDONLY) == 0)
+		return (true);
+	return (bootstrap_sealed());
 }
 
 /* FreeBSD rc owns filesystem checks and base services. */
@@ -820,10 +833,13 @@ unload_job(const char *filename)
  * of stuff.  Not sure what we do want to do.
  */
 /*
- * org.rmxos.logd is launchd's job alone (li-915 § Ownership): the bootstrap
- * loads it before /etc/rc, so rc has a logger; logd waits for rc's
- * filesystem readiness marker itself.  No rc script loads launchd jobs.
+ * org.rmxos.logd's Mach service exists only while logd can receive: syslog(3)
+ * senders wait on its queue.  On the sealed layout /private/var is mounted
+ * before rc, so the bootstrap loads logd before /etc/rc and logd starts
+ * without rc's readiness marker.  On a legacy read-write root logd_ready loads
+ * it after the marker (transitional; it retires with the legacy layout).
  */
+#define LOGD_JOB "org.rmxos.logd.plist"
 static const char *logd_jobs[] = {
 	"/System/Library/LaunchDaemons/org.rmxos.logd.plist",
 	"/etc/launchd.d/org.rmxos.logd.plist",
@@ -842,6 +858,13 @@ bootstrap_logd(void)
 		return (load_job(logd_jobs[i]));
 	}
 	return (0);
+}
+
+/* Before /etc/rc: logd on the sealed layout only. */
+static int
+bootstrap_early(void)
+{
+	return (bootstrap_sealed() ? bootstrap_logd() : 0);
 }
 
 static int
@@ -873,6 +896,12 @@ load_path(const char *directory)
 		if (early_job != NULL && strcmp(path, early_job) == 0) {
 			printf("loaded before /etc/rc\n");
 		} else if (load_job(path) != 0) {
+			/* Legacy root: rc's logd_ready loaded this one job. */
+			if (errno == EEXIST && strcmp(files[j]->d_name, LOGD_JOB) == 0) {
+				printf("loaded by logd_ready\n");
+				free(path);
+				continue;
+			}
 			printf("failed: %s\n", strerror(errno));
 			failed = -1;
 		} else {
@@ -970,7 +999,7 @@ cmd_bootstrap(int argc, char * const argv[])
 
 	if (strcasecmp(session, "System") == 0) {
 		do_single_user_mode(sflag);
-		if (bootstrap_logd() != 0)
+		if (bootstrap_early() != 0)
 			warnx("cannot load org.rmxos.logd before /etc/rc");
 		if (runcom() != 0)
 			return (1);
