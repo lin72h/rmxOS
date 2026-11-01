@@ -29,9 +29,19 @@ cleanvar_prestart()
 
 cleanvar_start()
 {
+	local logd_pidfile
+
 	if [ -d /var/run -a ! -f /var/run/clean_var ]; then
+		# On a sealed root launchd starts logd before rc.  Its pidfile
+		# carries the daemon's lifetime lock and the readiness handshake;
+		# unlinking it leaves a live socket with no discoverable owner.
+		# Keep only a live logd's file, so stale pidfiles are still purged.
+		logd_pidfile=
+		if [ -n "$(check_pidfile /var/run/syslog.pid /usr/sbin/logd)" ]; then
+			logd_pidfile=/var/run/syslog.pid
+		fi
 		# Skip over logging sockets
-		find -x /var/run \( -type f -or -type s ! -name log -and ! -name logpriv \) -delete
+		find -x /var/run \( -type f ! -path "$logd_pidfile" -or -type s ! -name log -and ! -name logpriv \) -delete
 		>/var/run/clean_var
 	fi
 	if [ -d /var/spool/lock -a ! -f /var/spool/lock/clean_var ]; then
