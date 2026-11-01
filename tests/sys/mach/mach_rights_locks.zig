@@ -61,21 +61,31 @@ var relock_dead: u32 = 0;
 var relock_live: u32 = 0;
 var relock_bad: u32 = 0;
 var relock_total: u32 = 0;
+// Silent on a passing round; one line per mismatch.
+fn relockMismatch(round: u32, what: [*:0]const u8, expected: u32, seen: u32) void {
+    _ = c.printf("rights_locks reply_relock mismatch round=%u check=%s expected=%#x seen=%#x\n", round, what, expected, seen);
+    _ = @atomicRmw(u32, &relock_bad, .Add, 1, .acq_rel);
+}
 fn relockReceiver(_: ?*anyopaque) callconv(.c) ?*anyopaque {
     var i: u32 = 0;
     while (i < @atomicLoad(u32, &relock_total, .acquire)) : (i += 1) {
         var out: [256]u8 align(8) = @splat(0);
         const kr = c.mach_msg(@ptrCast(&out), c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, out.len, relock_dest, 5000, 0);
         const h: *fm.Header = @ptrCast(&out);
-        if (kr != 0 or h.local != relock_dest or h.id != 30901) {
-            _ = @atomicRmw(u32, &relock_bad, .Add, 1, .acq_rel);
+        if (kr != 0) {
+            relockMismatch(i, "receive", 0, @bitCast(kr));
+        } else if (h.local != relock_dest or h.id != 30901) {
+            relockMismatch(i, "header", relock_dest, h.local);
         } else if (h.remote == dead) {
             _ = @atomicRmw(u32, &relock_dead, .Add, 1, .acq_rel);
-        } else if (h.remote != 0) {
+        } else if (h.remote == 0) {
+            relockMismatch(i, "reply_name", dead, h.remote);
+        } else {
             // A send-once right (or the dead name it became); give it back.
-            if (c.mach_port_deallocate(task(), h.remote) != 0) _ = @atomicRmw(u32, &relock_bad, .Add, 1, .acq_rel);
+            const dk = c.mach_port_deallocate(task(), h.remote);
+            if (dk != 0) relockMismatch(i, "reply_deallocate", 0, @bitCast(dk));
             _ = @atomicRmw(u32, &relock_live, .Add, 1, .acq_rel);
-        } else _ = @atomicRmw(u32, &relock_bad, .Add, 1, .acq_rel);
+        }
         @atomicStore(u32, &relock_done, i + 1, .release);
     }
     return null;
@@ -84,7 +94,9 @@ fn replyRelock() void {
     relock_dest = receiveRight();
     sendRight(relock_dest);
     const before = stats();
-    const rounds: u32 = 20000;
+    // op-309's guest ran 15,582..17,640 rounds in 35 s while printing three
+    // lines per round; 5,000 quiet rounds stay well under op583_batch's 35 s.
+    const rounds: u32 = 5000;
     relock_done = 0;
     relock_dead = 0;
     relock_live = 0;
@@ -94,17 +106,29 @@ fn replyRelock() void {
     if (c.pthread_create(&t, null, &relockReceiver, null) != 0) c.atf_tc_fail("receiver setup failed");
     var i: u32 = 0;
     while (i < rounds) : (i += 1) {
-        const reply = receiveRight();
+        var reply: u32 = 0;
+        const ak = c.mach_port_allocate(task(), c.MACH_PORT_RIGHT_RECEIVE, &reply);
+        if (ak != 0) {
+            relockMismatch(i, "allocate", 0, @bitCast(ak));
+            @atomicStore(u32, &relock_total, i, .release);
+            break;
+        }
         var msg = fm.Header{ .bits = c.MACH_MSG_TYPE_COPY_SEND | (c.MACH_MSG_TYPE_MAKE_SEND_ONCE << 8), .size = 24, .remote = relock_dest, .local = reply, .voucher = 0, .id = 30901 };
-        fact("relock_send", 0, c.mach_msg(@ptrCast(&msg), c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, 24, 0, 0, 5000, 0));
+        const sk = c.mach_msg(@ptrCast(&msg), c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, 24, 0, 0, 5000, 0);
+        if (sk != 0) relockMismatch(i, "send", 0, @bitCast(sk));
         // Vary the gap so destruction lands before, inside and after copyout.
         var spin: u32 = i % 64;
         while (spin > 0) : (spin -= 1) std.atomic.spinLoopHint();
-        release(reply);
+        const rk = c.mach_port_mod_refs(task(), reply, c.MACH_PORT_RIGHT_RECEIVE, -1);
+        if (rk != 0) relockMismatch(i, "reply_destroy", 0, @bitCast(rk));
+        if (sk != 0) {
+            @atomicStore(u32, &relock_total, i, .release);
+            break;
+        }
         while (@atomicLoad(u32, &relock_done, .acquire) <= i) std.atomic.spinLoopHint();
     }
     if (c.pthread_join(t, null) != 0) c.atf_tc_fail("receiver join failed");
-    _ = c.printf("rights_locks reply_relock rounds=%u dead=%u live=%u\n", rounds, relock_dead, relock_live);
+    _ = c.printf("rights_locks reply_relock rounds=%u dead=%u live=%u mismatches=%u\n", rounds, relock_dead, relock_live, relock_bad);
     fact("relock_bad", 0, relock_bad);
     fact("relock_all_received", rounds, relock_dead + relock_live);
     if (relock_dead == 0) c.atf_tc_fail("receiver never saw a dead reply name");
