@@ -595,15 +595,26 @@ extern bool _dispatch_safe_fork, _dispatch_child_of_unsafe_fork;
 #define DISPATCH_USE_VM_PRESSURE_SOURCE 1
 #endif
 
-#if !defined(NOTE_LEEWAY) || (TARGET_IPHONE_SIMULATOR && \
+#if defined(NOTE_LEEWAY) && !(TARGET_IPHONE_SIMULATOR && \
 		IPHONE_SIMULATOR_HOST_MIN_VERSION_REQUIRED < 1090)
+#define DISPATCH_HAVE_TIMER_COALESCING 1
+#else
 #undef NOTE_LEEWAY
 #define NOTE_LEEWAY 0
+#define DISPATCH_HAVE_TIMER_COALESCING 0
+#endif
+
+#if defined(NOTE_CRITICAL) && defined(NOTE_BACKGROUND) && \
+		!(TARGET_IPHONE_SIMULATOR && \
+		IPHONE_SIMULATOR_HOST_MIN_VERSION_REQUIRED < 1090)
+#define DISPATCH_HAVE_TIMER_QOS 1
+#else
 #undef NOTE_CRITICAL
 #define NOTE_CRITICAL 0
 #undef NOTE_BACKGROUND
 #define NOTE_BACKGROUND 0
-#endif // NOTE_LEEWAY
+#define DISPATCH_HAVE_TIMER_QOS 0
+#endif
 
 #if HAVE_DECL_NOTE_REAP
 #if defined(NOTE_REAP) && defined(__APPLE__)

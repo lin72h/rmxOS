@@ -1388,37 +1388,6 @@ _pthread_qos_class_encode_workqueue(int queue_priority, unsigned long flags)
 	return (twq_priority_from_legacy(queue_priority, (int)flags, &error));
 }
 
-qos_class_t
-qos_class_self(void)
-{
-
-	return (QOS_CLASS_DEFAULT);
-}
-
-qos_class_t
-qos_class_main(void)
-{
-
-	return (QOS_CLASS_DEFAULT);
-}
-
-int
-pthread_set_qos_class_self_np(qos_class_t qos_class, int relative_priority)
-{
-
-	if (!twq_qos_class_valid(qos_class, relative_priority))
-		return (EINVAL);
-	return (0);
-}
-
-int
-_pthread_set_properties_self(_pthread_set_flags_t flags __unused,
-    pthread_priority_t priority __unused, uint32_t voucher __unused)
-{
-
-	return (0);
-}
-
 int
 pthread_qos_max_parallelism(qos_class_t qos __unused, unsigned long flags)
 {
@@ -1439,58 +1408,4 @@ pthread_time_constraint_max_parallelism(unsigned long flags)
 {
 
 	return (pthread_qos_max_parallelism(QOS_CLASS_UNSPECIFIED, flags));
-}
-
-int
-_pthread_qos_override_start_direct(uint32_t thread __unused,
-    pthread_priority_t priority __unused, void *resource __unused)
-{
-
-	return (0);
-}
-
-int
-_pthread_qos_override_end_direct(uint32_t thread __unused,
-    void *resource __unused)
-{
-
-	return (0);
-}
-
-int
-_pthread_override_qos_class_start_direct(uint32_t thread,
-    pthread_priority_t priority)
-{
-
-	return (_pthread_qos_override_start_direct(thread, priority, NULL));
-}
-
-int
-_pthread_override_qos_class_end_direct(uint32_t thread)
-{
-
-	return (_pthread_qos_override_end_direct(thread, NULL));
-}
-
-int
-_pthread_workqueue_override_start_direct(uint32_t thread __unused,
-    pthread_priority_t priority __unused)
-{
-
-	return (0);
-}
-
-int
-_pthread_workqueue_override_start_direct_check_owner(uint32_t thread,
-    pthread_priority_t priority, uint32_t *ulock_addr __unused)
-{
-
-	return (_pthread_workqueue_override_start_direct(thread, priority));
-}
-
-int
-_pthread_workqueue_override_reset(void)
-{
-
-	return (0);
 }

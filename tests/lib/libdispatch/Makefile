@@ -84,4 +84,10 @@ SCRIPTS+= twq_capture
 twq_capture: ${.CURDIR}/twq_capture.zig
 	${ZIG} build-exe ${.CURDIR}/twq_capture.zig -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -femit-bin=${.TARGET}
 
+
+SCRIPTS+= timer_contract_test
+timer_contract_test: ${.CURDIR}/timer_contract.zig
+	${ZIG} build-exe ${.CURDIR}/timer_contract.zig ${DISPATCH_SO} ${THR_SO} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc \
+	    --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}
+
 .include <bsd.test.mk>

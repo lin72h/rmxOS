@@ -84,17 +84,6 @@ int	_pthread_workqueue_addthreads(int numthreads,
 bool	_pthread_workqueue_should_narrow(pthread_priority_t priority);
 int	_pthread_workqueue_set_event_manager_priority(
 	    pthread_priority_t priority);
-int	_pthread_qos_override_start_direct(uint32_t thread,
-	    pthread_priority_t priority, void *resource);
-int	_pthread_qos_override_end_direct(uint32_t thread, void *resource);
-int	_pthread_override_qos_class_start_direct(uint32_t thread,
-	    pthread_priority_t priority);
-int	_pthread_override_qos_class_end_direct(uint32_t thread);
-int	_pthread_workqueue_override_start_direct(uint32_t thread,
-	    pthread_priority_t priority);
-int	_pthread_workqueue_override_start_direct_check_owner(uint32_t thread,
-	    pthread_priority_t priority, uint32_t *ulock_addr);
-int	_pthread_workqueue_override_reset(void);
 
 __END_DECLS
 

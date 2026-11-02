@@ -1226,8 +1226,8 @@ const struct dispatch_source_type_s _dispatch_source_type_vfs = {
 			,
 };
 
-const struct dispatch_source_type_s _dispatch_source_type_sock = {
 #ifdef EVFILT_SOCK
+const struct dispatch_source_type_s _dispatch_source_type_sock = {
 	.ke = {
 		.filter = EVFILT_SOCK,
 		.flags = EV_CLEAR,
@@ -1242,8 +1242,8 @@ const struct dispatch_source_type_s _dispatch_source_type_sock = {
 		| NOTE_CONNECTED | NOTE_DISCONNECTED | NOTE_CONNINFO_UPDATED
 #endif
 		,
-#endif // EVFILT_SOCK
 };
+#endif // EVFILT_SOCK
 
 const struct dispatch_source_type_s _dispatch_source_type_data_add = {
 	.ke = {

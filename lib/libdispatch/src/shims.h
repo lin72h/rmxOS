@@ -118,7 +118,8 @@ inline size_t strlcpy(char *dst, const char *src, size_t size) {
 }
 #endif // TARGET_OS_WIN32
 
-#if PTHREAD_WORKQUEUE_SPI_VERSION < 20140716
+#if PTHREAD_WORKQUEUE_SPI_VERSION < 20140716 || \
+        defined(NXPLATFORM_DISPATCH_TWQ_WORKQUEUE)
 static inline int
 _pthread_workqueue_override_start_direct(mach_port_t thread,
 		pthread_priority_t priority)
@@ -128,9 +129,10 @@ _pthread_workqueue_override_start_direct(mach_port_t thread,
 }
 #endif // PTHREAD_WORKQUEUE_SPI_VERSION < 20140716
 
-#if PTHREAD_WORKQUEUE_SPI_VERSION < 20140707
+#if PTHREAD_WORKQUEUE_SPI_VERSION < 20140707 || \
+        defined(NXPLATFORM_DISPATCH_TWQ_WORKQUEUE)
 static inline int
-_pthread_override_qos_class_start_direct(pthread_t thread,
+_pthread_override_qos_class_start_direct(mach_port_t thread,
 		pthread_priority_t priority)
 {
 	(void)thread; (void)priority;
@@ -144,6 +146,29 @@ _pthread_override_qos_class_end_direct(mach_port_t thread)
 	return 0;
 }
 #endif // PTHREAD_WORKQUEUE_SPI_VERSION < 20140707
+
+#if defined(NXPLATFORM_DISPATCH_TWQ_WORKQUEUE)
+/* No kernel QoS/voucher machinery: preserve these internal fallback paths. */
+static inline qos_class_t
+qos_class_main(void)
+{
+	return QOS_CLASS_DEFAULT;
+}
+
+static inline int
+_pthread_set_properties_self(_pthread_set_flags_t flags,
+		pthread_priority_t priority, mach_voucher_t voucher)
+{
+	(void)flags; (void)priority; (void)voucher;
+	return 0;
+}
+
+static inline int
+_pthread_workqueue_override_reset(void)
+{
+	return 0;
+}
+#endif
 
 #if !HAVE_NORETURN_BUILTIN_TRAP
 /*

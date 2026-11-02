@@ -27,7 +27,6 @@ var peak: A(u32) = .init(0);
 var gates: [1024]A(bool) = @splat(.init(false));
 var tids: [1024]A(c_long) = @splat(.init(0));
 var priorities: [1024]u64 = @splat(0);
-var qos: [1024]c_uint = @splat(0);
 var policies: [1024]c_int = @splat(0);
 var narrow: [1024]bool = @splat(false);
 fn now() u64 {
@@ -59,7 +58,6 @@ fn callback(p: u64) callconv(.c) void {
     var tid: c_long = 0;
     _ = c.thr_self(&tid);
     priorities[i] = p;
-    qos[i] = c.qos_class_self();
     var param: c.struct_sched_param = undefined;
     if (c.pthread_getschedparam(c.pthread_self(), &policies[i], &param) != 0) c._exit(91);
     narrow[i] = c._pthread_workqueue_should_narrow(p);
@@ -159,9 +157,9 @@ fn workerPriority(_: [*c]const c.atf_tc_t) callconv(.c) void {
     var rel: c_int = 99;
     var flags: c_ulong = 0;
     const decoded = c._pthread_qos_class_decode(priorities[0], &rel, &flags);
-    _ = c.printf("worker requested=0x%lx callback=0x%lx qos_self=%u decoded=%u relative=%d scheduler_policy=%d\n", p, priorities[0], qos[0], decoded, rel, policies[0]);
+    _ = c.printf("worker requested=0x%lx callback=0x%lx decoded=%u relative=%d scheduler_policy=%d\n", p, priorities[0], decoded, rel, policies[0]);
     drain(1);
-    if (decoded != c.QOS_CLASS_DEFAULT or qos[0] != c.QOS_CLASS_DEFAULT or rel != 0) c.atf_tc_fail("default worker priority/QoS");
+    if (decoded != c.QOS_CLASS_DEFAULT or rel != 0 or policies[0] != c.SCHED_OTHER) c.atf_tc_fail("default worker priority/QoS");
 }
 fn narrowing(_: [*c]const c.atf_tc_t) callconv(.c) void {
     begin();
@@ -188,15 +186,13 @@ fn requestedQos(_: [*c]const c.atf_tc_t) callconv(.c) void {
         if (tids[i].load(.seq_cst) == 0) c.atf_tc_fail("QoS callback timeout");
         var rel: c_int = 99;
         const decoded = c._pthread_qos_class_decode(priorities[i], &rel, null);
-        _ = c.printf("qos requested=%u relative_requested=-15 callback_qos=%u callback_relative=%d qos_self=%u scheduler_policy=%d\n", q, decoded, rel, qos[i], policies[i]);
-        if (decoded != q or rel != 0 or qos[i] != q) mismatches += 1;
+        _ = c.printf("lane requested=%u relative_requested=-15 callback_class=%u callback_relative=%d scheduler_policy=%d\n", q, decoded, rel, policies[i]);
+        if (decoded != q or rel != -15 or policies[i] != c.SCHED_OTHER) mismatches += 1;
         gates[i].store(true, .seq_cst);
         if (!await(&finished, @intCast(i + 1))) c.atf_tc_fail("QoS drain");
     }
     drain(classes.len);
-    // Existing difference, outside op-177's idle-only product authority.
-    c.atf_tc_expect_fail("rmxOS preserves requested relative priority and qos_class_self is a default-only stub; op-175 P:2506-2531,2590-2606");
-    if (mismatches != 0) c.atf_tc_fail("Apple callback QoS/relative contract mismatches=%u", mismatches);
+    if (mismatches != 0) c.atf_tc_fail("lane callback class/relative contract mismatches=%u", mismatches);
 }
 fn codecs(_: [*c]const c.atf_tc_t) callconv(.c) void {
     begin();
@@ -207,35 +203,42 @@ fn codecs(_: [*c]const c.atf_tc_t) callconv(.c) void {
             const p = c._pthread_qos_class_encode(q, rel, 0);
             var decoded_rel: c_int = 99;
             const decoded = c._pthread_qos_class_decode(p, &decoded_rel, null);
-            const low: u8 = @truncate(@as(u32, @bitCast(rel - 1)));
+            const low: u8 = @truncate(@as(u32, @bitCast(rel)));
             _ = c.printf("codec qos=%u rel=%d encoded=0x%lx expected_low=%u observed_low=%u\n", q, rel, p, @as(c_uint, low), @as(c_uint, @intCast(p & 255)));
             if (decoded != q or decoded_rel != rel or p & 255 != low) mismatches += 1;
         }
     }
     snapshot("after");
-    c.atf_tc_expect_fail("rmxOS encodes relpri, Apple encodes relpri-1; op-175 R:152-180,226-236");
-    if (mismatches != 0) c.atf_tc_fail("Apple priority codec mismatches=%u", mismatches);
+    if (mismatches != 0) c.atf_tc_fail("lane priority codec mismatches=%u", mismatches);
 }
 fn symbols(_: [*c]const c.atf_tc_t) callconv(.c) void {
     begin();
-    const names = [_][*:0]const u8{
-        "pthread_workqueue_setup",                       "_pthread_workqueue_init",                             "_pthread_workqueue_init_with_kevent",                     "_pthread_workqueue_init_with_workloop",
-        "__pthread_workqueue_setkill",                   "pthread_workqueue_setdispatch_np",                    "pthread_workqueue_setdispatchoffset_np",                  "pthread_workqueue_addthreads_np",
-        "_pthread_workqueue_supported",                  "_pthread_workqueue_addthreads",                       "_pthread_workqueue_add_cooperativethreads",               "_pthread_workqueue_should_narrow",
-        "_pthread_workqueue_set_event_manager_priority", "_pthread_qos_override_start_direct",                  "_pthread_qos_override_end_direct",                        "_pthread_override_qos_class_start_direct",
-        "_pthread_override_qos_class_end_direct",        "_pthread_workqueue_override_start_direct",            "_pthread_workqueue_override_start_direct_check_owner",    "_pthread_workqueue_override_reset",
-        "_pthread_workqueue_asynchronous_override_add",  "_pthread_workqueue_asynchronous_override_reset_self", "_pthread_workqueue_asynchronous_override_reset_all_self", "_pthread_workqueue_allow_send_signals",
-        "_pthread_workloop_create",                      "_pthread_workloop_destroy",
+    const handle = c.dlopen("libthr.so.3", c.RTLD_NOW) orelse c.atf_tc_fail("libthr handle");
+    defer _ = c.dlclose(handle);
+    const present = [_][*:0]const u8{
+        "pthread_workqueue_setup",       "_pthread_workqueue_init",          "_pthread_workqueue_init_with_kevent",    "_pthread_workqueue_init_with_workloop",
+        "__pthread_workqueue_setkill",   "pthread_workqueue_setdispatch_np", "pthread_workqueue_setdispatchoffset_np", "pthread_workqueue_addthreads_np",
+        "_pthread_workqueue_supported",  "_pthread_workqueue_addthreads",    "_pthread_workqueue_should_narrow",       "_pthread_workqueue_set_event_manager_priority",
+        "pthread_attr_set_qos_class_np", "pthread_attr_get_qos_class_np",    "_pthread_qos_class_encode",              "_pthread_qos_class_decode",
+        "pthread_qos_max_parallelism",
     };
-    var missing: u32 = 0;
-    for (names) |name| {
-        const present = c.dlsym(c.RTLD_DEFAULT, name) != null;
-        _ = c.printf("contract_symbol name=%s expected=present observed=%s\n", name, @as([*:0]const u8, if (present) "present" else "absent"));
-        if (!present) missing += 1;
+    const absent = [_][*:0]const u8{
+        "qos_class_self",                               "qos_class_main",                                       "pthread_set_qos_class_self_np",                           "_pthread_set_properties_self",
+        "_pthread_qos_override_start_direct",           "_pthread_qos_override_end_direct",                     "_pthread_override_qos_class_start_direct",                "_pthread_override_qos_class_end_direct",
+        "_pthread_workqueue_override_start_direct",     "_pthread_workqueue_override_start_direct_check_owner", "_pthread_workqueue_override_reset",                       "_pthread_workqueue_add_cooperativethreads",
+        "_pthread_workqueue_asynchronous_override_add", "_pthread_workqueue_asynchronous_override_reset_self",  "_pthread_workqueue_asynchronous_override_reset_all_self", "_pthread_workqueue_allow_send_signals",
+        "_pthread_workloop_create",                     "_pthread_workloop_destroy",
+    };
+    var mismatches: u32 = 0;
+    inline for (.{ present, absent }, .{ true, false }) |names, expected| {
+        for (names) |name| {
+            const observed = c.dlsym(handle, name) != null;
+            _ = c.printf("contract_symbol name=%s expected=%s observed=%s\n", name, @as([*:0]const u8, if (expected) "present" else "absent"), @as([*:0]const u8, if (observed) "present" else "absent"));
+            if (observed != expected) mismatches += 1;
+        }
     }
     snapshot("after");
-    c.atf_tc_expect_fail("rmxOS lacks cooperative, workloop, async override and signal-preservation SPI; all 26 op-175 H declarations inventoried");
-    if (missing != 0) c.atf_tc_fail("Apple contract symbols missing=%u", missing);
+    if (mismatches != 0) c.atf_tc_fail("libthr symbol inventory mismatches=%u", mismatches);
 }
 fn threadCount() u32 {
     var mib = [_]c_int{ c.CTL_KERN, c.KERN_PROC, c.KERN_PROC_PID | c.KERN_PROC_INC_THREAD, c.getpid() };
@@ -302,7 +305,7 @@ const cases = [_]Case{
     .{ .name = "contract_symbols", .body = &symbols },
 };
 fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
-    _ = c.atf_tc_set_md_var(tc, "descr", "Direct workqueue engine; op-175 source contract; no libdispatch");
+    _ = c.atf_tc_set_md_var(tc, "descr", "Direct workqueue lanes and absent scheduler QoS SPI; no libdispatch");
     _ = c.atf_tc_set_md_var(tc, "timeout", "25");
 }
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {

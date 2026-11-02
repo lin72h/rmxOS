@@ -48,8 +48,6 @@ qos_class_t		_pthread_qos_class_decode(pthread_priority_t priority,
 			    int *relative_priority, unsigned long *flags);
 pthread_priority_t	_pthread_qos_class_encode_workqueue(int queue_priority,
 			    unsigned long flags);
-int			_pthread_set_properties_self(_pthread_set_flags_t flags,
-			    pthread_priority_t priority, uint32_t voucher);
 int			pthread_qos_max_parallelism(qos_class_t qos,
 			    unsigned long flags);
 int			pthread_time_constraint_max_parallelism(

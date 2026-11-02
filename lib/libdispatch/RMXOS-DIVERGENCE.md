@@ -361,3 +361,50 @@ Sysctl names rmxOS (rx) now has that FreeBSD (fx) does not. Each has macOS's nam
   12 CPUs.
 - Parity work left: a single process-wide constrained pool, if Darwin code is found to
   depend on 64.
+
+## D-11 Missing scheduler/event features stay private or absent (op-383)
+
+Reference: swift-corelibs-libdispatch `2078b9d`, `src/shims.h`,
+`src/event/event_config.h`, `event_internal.h`, `event.c`, `event_kevent.c`.
+
+The kernel has no QoS override machinery. Eleven success-only libthr QoS
+functions are removed from its headers, implementations and exports:
+`qos_class_self`, `qos_class_main`, `pthread_set_qos_class_self_np`,
+`_pthread_set_properties_self`, `_pthread_qos_override_start_direct`,
+`_pthread_qos_override_end_direct`, `_pthread_override_qos_class_start_direct`,
+`_pthread_override_qos_class_end_direct`,
+`_pthread_workqueue_override_start_direct`,
+`_pthread_workqueue_override_start_direct_check_owner`,
+`_pthread_workqueue_override_reset`.
+
+The six still used internally by dispatch have private static-inline fallback
+shims in `src/shims.h`, preserving their previous return values (default class
+or zero). This follows corelibs' private fallback approach; it exposes no
+new scheduler feature. Honest ENOTSUP/KERN_NOT_SUPPORTED paths, the disabled
+voucher implementation and MEMORYPRESSURE declaration remain unchanged.
+`HAVE_PTHREAD_WORKQUEUE_QOS` remains 1: these workqueue lanes really exist,
+unlike priority overrides. Attribute class storage, priority-token codecs,
+parallelism queries, narrowing and Swift's queue/block QoS APIs remain intact.
+Their class tokens are lane labels, not a claimed scheduler QoS policy.
+
+`_dispatch_source_type_sock` is now defined only with `EVFILT_SOCK`, as in
+corelibs. The private declaration remains; FreeBSD no longer exports a source
+with an empty filter.
+
+Timer switches follow corelibs' kernel capability checks independently:
+`DISPATCH_HAVE_TIMER_COALESCING` requires NOTE_LEEWAY;
+`DISPATCH_HAVE_TIMER_QOS` requires NOTE_CRITICAL and NOTE_BACKGROUND. All three
+notes are absent here. Timer indexing now uses class-count multiplication and
+clock/class division/modulo, with one class per clock. Strict/background flags
+remain accepted but select the same class. The pre-coalescing window array
+and target-moving walk compile out; target/deadline/leeway computation stays.
+There is no artificial 2/150/200 ms batching window on this kernel.
+
+Regression: `timer_contract_test` uses three same-class timers with two-second
+leeway and targets 80 ms apart, with a 50 ms lateness tolerance (five 10 ms
+kernel ticks, smaller than the base's 160 ms target displacement). Strict,
+background and combined flags are accepted and fire. A host case calls the
+extracted production delay-selection function: base selects 260 ms for a
+100 ms first target; fixed selects 100 ms. `workqueue_engine_test` now checks
+the actual unchanged lane-token codec and callback behavior without expected
+failures or `qos_class_self`, and records both present and absent symbols.

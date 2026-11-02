@@ -1444,14 +1444,20 @@ typedef struct dispatch_timer_s {
 
 static struct dispatch_timer_s _dispatch_timer[] =  {
 	DISPATCH_TIMER_INIT(WALL, NORMAL),
+#if DISPATCH_HAVE_TIMER_QOS
 	DISPATCH_TIMER_INIT(WALL, CRITICAL),
 	DISPATCH_TIMER_INIT(WALL, BACKGROUND),
+#endif
 	DISPATCH_TIMER_INIT(MACH, NORMAL),
+#if DISPATCH_HAVE_TIMER_QOS
 	DISPATCH_TIMER_INIT(MACH, CRITICAL),
 	DISPATCH_TIMER_INIT(MACH, BACKGROUND),
+#endif
 	DISPATCH_TIMER_INIT(MONOTONIC, NORMAL),
+#if DISPATCH_HAVE_TIMER_QOS
 	DISPATCH_TIMER_INIT(MONOTONIC, CRITICAL),
 	DISPATCH_TIMER_INIT(MONOTONIC, BACKGROUND),
+#endif
 };
 #define DISPATCH_TIMER_COUNT \
 		((sizeof(_dispatch_timer) / sizeof(_dispatch_timer[0])))
@@ -1482,14 +1488,20 @@ static struct dispatch_timer_s _dispatch_timer[] =  {
 
 static struct dispatch_kevent_s _dispatch_kevent_timer[] = {
 	DISPATCH_KEVENT_TIMER_INIT(WALL, NORMAL),
+#if DISPATCH_HAVE_TIMER_QOS
 	DISPATCH_KEVENT_TIMER_INIT(WALL, CRITICAL),
 	DISPATCH_KEVENT_TIMER_INIT(WALL, BACKGROUND),
+#endif
 	DISPATCH_KEVENT_TIMER_INIT(MACH, NORMAL),
+#if DISPATCH_HAVE_TIMER_QOS
 	DISPATCH_KEVENT_TIMER_INIT(MACH, CRITICAL),
 	DISPATCH_KEVENT_TIMER_INIT(MACH, BACKGROUND),
+#endif
 	DISPATCH_KEVENT_TIMER_INIT(MONOTONIC, NORMAL),
+#if DISPATCH_HAVE_TIMER_QOS
 	DISPATCH_KEVENT_TIMER_INIT(MONOTONIC, CRITICAL),
 	DISPATCH_KEVENT_TIMER_INIT(MONOTONIC, BACKGROUND),
+#endif
 	DISPATCH_KEVENT_TIMER_INITIALIZER(DISPATCH_TIMER_INDEX_DISARM),
 };
 #define DISPATCH_KEVENT_TIMER_COUNT \
@@ -1508,18 +1520,24 @@ static struct dispatch_kevent_s _dispatch_kevent_timer[] = {
 
 static struct kevent64_s _dispatch_kevent_timeout[] = {
 	DISPATCH_KEVENT_TIMEOUT_INIT(NORMAL, 0),
+#if DISPATCH_HAVE_TIMER_QOS
 	DISPATCH_KEVENT_TIMEOUT_INIT(CRITICAL, NOTE_CRITICAL),
 	DISPATCH_KEVENT_TIMEOUT_INIT(BACKGROUND, NOTE_BACKGROUND),
+#endif
 };
 
+#if DISPATCH_HAVE_TIMER_COALESCING
 #define DISPATCH_KEVENT_COALESCING_WINDOW_INIT(qos, ms) \
 		[DISPATCH_TIMER_QOS_##qos] = 2ull * (ms) * NSEC_PER_MSEC
 
 static const uint64_t _dispatch_kevent_coalescing_window[] = {
 	DISPATCH_KEVENT_COALESCING_WINDOW_INIT(NORMAL, 75),
+#if DISPATCH_HAVE_TIMER_QOS
 	DISPATCH_KEVENT_COALESCING_WINDOW_INIT(CRITICAL, 1),
 	DISPATCH_KEVENT_COALESCING_WINDOW_INIT(BACKGROUND, 100),
+#endif
 };
+#endif // DISPATCH_HAVE_TIMER_COALESCING
 
 #define _dispatch_timers_insert(tidx, dra, dr, dr_list, dta, dt, dt_list) ({ \
 	typeof(dr) dri = NULL; typeof(dt) dti; \
@@ -1749,6 +1767,7 @@ _dispatch_timers_get_delay(uint64_t nows[], struct dispatch_timer_s timer[],
 			continue;
 		}
 		uint64_t deadline = timer[tidx].deadline;
+#if DISPATCH_HAVE_TIMER_COALESCING
 		if (qos >= 0) {
 			// Timer pre-coalescing <rdar://problem/13222034>
 			uint64_t window = _dispatch_kevent_coalescing_window[qos];
@@ -1761,6 +1780,7 @@ _dispatch_timers_get_delay(uint64_t nows[], struct dispatch_timer_s timer[],
 				target = tmp;
 			}
 		}
+#endif // DISPATCH_HAVE_TIMER_COALESCING
 		uint64_t now = _dispatch_source_timer_now(nows, tidx);
 		if (target <= now) {
 			delta = 0;
