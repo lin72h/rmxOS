@@ -333,9 +333,14 @@ fn body(t: [*c]const c.atf_tc_t) callconv(.c) void {
         fact("ordinary_dead_cleanup", 0, c.close(@intCast(ordinary)));
     } else if (std.mem.eql(u8, name, "file_insert")) fileInsert() else if (std.mem.eql(u8, name, "file_insert_zero")) fileInsertZero() else if (std.mem.eql(u8, name, "file_receive")) fileReceive() else replySend();
 }
+fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
+    const name = std.mem.span(c.atf_tc_get_ident(t));
+    if (std.mem.eql(u8, name, "mig_id") or std.mem.eql(u8, name, "insert_failure") or std.mem.eql(u8, name, "file_receive"))
+        _ = c.atf_tc_set_md_var(t, "require.user", "%s", "root");
+}
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     for (names, 0..) |name, i| {
-        var e = c.atf_tc_init(&cases[i], name, null, &body, null, c.atf_tp_get_config(tp));
+        var e = c.atf_tc_init(&cases[i], name, &head, &body, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(e)) return e;
         e = c.atf_tp_add_tc(tp, &cases[i]);
         if (c.atf_is_error(e)) return e;
