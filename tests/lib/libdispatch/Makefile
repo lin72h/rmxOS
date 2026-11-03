@@ -90,4 +90,8 @@ timer_contract_test: ${.CURDIR}/timer_contract.zig
 	${ZIG} build-exe ${.CURDIR}/timer_contract.zig ${DISPATCH_SO} ${THR_SO} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc \
 	    --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}
 
+SCRIPTS+= upstream_test
+upstream_test: ${.CURDIR}/upstream.zig ${.CURDIR}/upstream_cases.zig
+	${ZIG} build-exe ${.CURDIR}/upstream.zig ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}
+
 .include <bsd.test.mk>
