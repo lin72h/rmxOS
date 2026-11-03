@@ -34,8 +34,17 @@ fn facts(raw: []const u8) Facts {
     }
     return f;
 }
+fn complete(f: Facts, status: c_int, truncated: bool) bool {
+    return !truncated and c.WIFEXITED(status) and c.WEXITSTATUS(status) == 0 and f.terminal == 1 and f.failures == 0;
+}
 fn success(f: Facts, status: c_int, truncated: bool) bool {
-    return !truncated and c.WIFEXITED(status) and c.WEXITSTATUS(status) == 0 and f.pid == 1 and f.terminal == 1 and f.failures == 0;
+    return complete(f, status, truncated) and f.pid == 1;
+}
+fn successFor(name: []const u8, f: Facts, status: c_int, truncated: bool) bool {
+    // This pinned test calls dispatch_test_start(NULL), intentionally omitting
+    // the TEST/PID banner. Preserve its upstream exit/terminal contract.
+    const headerless = std.mem.eql(u8, name, "dispatch_io_pipe_close") and f.pid == 0;
+    return complete(f, status, truncated) and (f.pid == 1 or headerless);
 }
 fn command(argv: []const ?[*:0]const u8) c_int {
     const pid = c.fork();
@@ -129,7 +138,7 @@ fn body(tc: [*c]const c.atf_tc_t) callconv(.c) void {
         const observed = facts(storage[0..length]);
         _ = c.printf("UPSTREAM_ATTEMPT name=%s attempt=%zu wait_status=%d pid_count=%zu terminal_count=%zu fail_count=%zu bytes=%zu truncated=%d observed_vm_skip=%d\n", name, attempt + 1, status, observed.pid, observed.terminal, observed.failures, length, @as(c_int, @intFromBool(truncated)), @as(c_int, @intFromBool(observed.vm_skip)));
         _ = c.fflush(null);
-        if (success(observed, status, truncated)) {
+        if (successFor(label, observed, status, truncated)) {
             accepted = true;
             skipped = std.mem.eql(u8, label, "dispatch_vm") and observed.vm_skip;
             break;
@@ -176,4 +185,12 @@ test "terminal and status, full capture, unique child and no failed assertion re
     try std.testing.expect(!success(facts("[PID] 7\n[FAIL] assertion\n[PASS] Process exited\n"), 0, false));
     try std.testing.expect(!success(facts("[PID] 7\n"), 0, false));
     try std.testing.expect(!success(good, 11, false));
+}
+test "named headerless upstream pipe-close still requires a successful complete terminal" {
+    const headerless = facts("readFD=23, writeFD=24\ncleanup, err=0\nall done\n[PASS] Process exited\n");
+    try std.testing.expect(successFor("dispatch_io_pipe_close", headerless, 0, false));
+    try std.testing.expect(!successFor("dispatch_api", headerless, 0, false));
+    try std.testing.expect(!successFor("dispatch_io_pipe_close", headerless, 256, false));
+    try std.testing.expect(!successFor("dispatch_io_pipe_close", headerless, 0, true));
+    try std.testing.expect(!successFor("dispatch_io_pipe_close", facts("all done\n"), 0, false));
 }
