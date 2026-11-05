@@ -16,6 +16,7 @@ const c = @cImport({
     @cInclude("link.h");
     @cInclude("dlfcn.h");
     @cInclude("sched.h");
+    @cInclude("sys/wait.h");
     @cInclude("thr_workq_idle.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
@@ -291,8 +292,90 @@ fn idle(_: [*c]const c.atf_tc_t) callconv(.c) void {
     if (!await(&entered, 10)) c.atf_tc_fail("reaper restart lost work");
     drain(10);
 }
+// Fork before setting up a pool: every trial must have no idle registration
+// that could satisfy the extra request without first refusing it.
+var refused_cpus: u32 = 0;
+var refused_timer = false;
+var refused_entered: A(u32) = .init(0);
+var refused_phase: A(u32) = .init(0);
+var refused_origin: A(u64) = .init(0);
+var refused_started: A(u64) = .init(0);
+fn nanoNow() u64 {
+    var ts: c.struct_timespec = undefined;
+    if (c.clock_gettime(c.CLOCK_MONOTONIC, &ts) != 0) c._exit(92);
+    return @as(u64, @intCast(ts.tv_sec)) * 1_000_000_000 + @as(u64, @intCast(ts.tv_nsec));
+}
+fn refusedCallback(_: u64) callconv(.c) void {
+    const index = refused_entered.fetchAdd(1, .seq_cst);
+    if (index >= refused_cpus) {
+        if (index != refused_cpus) c._exit(93);
+        refused_started.store(nanoNow(), .seq_cst);
+        return;
+    }
+    while (refused_phase.load(.seq_cst) == 0) std.atomic.spinLoopHint();
+    if (refused_timer) {
+        // The last busy worker to sleep makes capacity available. Its stamp
+        // precedes the blocking call; it is not an exact switch timestamp.
+        _ = refused_origin.fetchMax(nanoNow(), .seq_cst);
+        _ = c.usleep(50_000);
+    } else if (index == 0) {
+        refused_origin.store(nanoNow(), .seq_cst);
+        return;
+    }
+    while (refused_phase.load(.seq_cst) != 2) {
+        if (refused_timer) _ = c.usleep(50_000) else std.atomic.spinLoopHint();
+    }
+}
+fn refusedTrial(timer: bool, trial: u32) u8 {
+    refused_cpus = read(u32, "hw.ncpu");
+    refused_timer = timer;
+    if (refused_cpus == 0 or refused_cpus > 64) return 94;
+    var cfg = config();
+    cfg.workq_cb = &refusedCallback;
+    if (c.pthread_workqueue_setup(&cfg, @sizeOf(@TypeOf(cfg))) != 0) return 95;
+    request(refused_cpus, priority(false));
+    const deadline = nanoNow() + 2_000_000_000;
+    while (refused_entered.load(.seq_cst) != refused_cpus and nanoNow() < deadline) _ = c.usleep(100);
+    if (refused_entered.load(.seq_cst) != refused_cpus) return 96;
+    request(1, priority(false));
+    // An already-started callback would not exercise a refused request.
+    if (refused_entered.load(.seq_cst) != refused_cpus) return 97;
+    refused_phase.store(1, .seq_cst);
+    while (refused_started.load(.seq_cst) == 0 and nanoNow() < deadline) _ = c.usleep(100);
+    const start = refused_started.load(.seq_cst);
+    const origin = refused_origin.load(.seq_cst);
+    refused_phase.store(2, .seq_cst);
+    const limit: u64 = if (timer) 5_000_000 else 2_000_000;
+    const delta = if (origin != 0 and start >= origin) start - origin else std.math.maxInt(u64);
+    _ = c.printf("refused_trial timer=%u trial=%u cpus=%u expected_callbacks=%u observed_callbacks=%u limit_ns=%lu elapsed_ns=%lu\n", @as(u32, @intFromBool(timer)), trial, refused_cpus, refused_cpus + 1, refused_entered.load(.seq_cst), limit, delta);
+    _ = c.fflush(null);
+    return if (delta <= limit and refused_entered.load(.seq_cst) == refused_cpus + 1) 0 else 1;
+}
+fn refusedCase(timer: bool) void {
+    begin();
+    var passed: u32 = 0;
+    for (1..101) |trial| {
+        _ = c.fflush(null);
+        const child = c.fork();
+        if (child < 0) c.atf_tc_fail("refused trial fork");
+        if (child == 0) c._exit(refusedTrial(timer, @intCast(trial)));
+        var status: c_int = 0;
+        if (c.waitpid(child, &status, 0) != child) c.atf_tc_fail("refused trial wait");
+        if (status == 0) passed += 1 else if (status != 256) c.atf_tc_fail("refused fixture trial=%zu wait_status=%d", trial, status);
+    }
+    _ = c.printf("refused_summary timer=%u expected=100 observed=%u\n", @as(u32, @intFromBool(timer)), passed);
+    if (passed != 100) c.atf_tc_fail("refused requests expected=100 observed=%u", passed);
+}
+fn refusedReturn(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    refusedCase(false);
+}
+fn refusedTimer(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    refusedCase(true);
+}
 const Case = struct { name: [*:0]const u8, body: *const fn ([*c]const c.atf_tc_t) callconv(.c) void };
 const cases = [_]Case{
+    .{ .name = "refused_served_on_return", .body = &refusedReturn },
+    .{ .name = "refused_served_by_timer", .body = &refusedTimer },
     .{ .name = "registration_once", .body = &registration },
     .{ .name = "features", .body = &features },
     .{ .name = "blocked_constrained", .body = &constrained },
