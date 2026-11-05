@@ -21,6 +21,22 @@ const c = @cImport({
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 const A = std.atomic.Value;
+extern fn __sys_thr_new([*c]c.struct_thr_param, c_int) c_int;
+var fail_thr_new: A(bool) = .init(false);
+var thr_new_refusals: A(u32) = .init(0);
+var thr_new_entries: A(u32) = .init(0);
+fn testThrNew(param: [*c]c.struct_thr_param, size: c_int) callconv(.c) c_int {
+    _ = thr_new_entries.fetchAdd(1, .seq_cst);
+    if (fail_thr_new.load(.seq_cst)) {
+        _ = thr_new_refusals.fetchAdd(1, .seq_cst);
+        c.__error().* = c.EAGAIN;
+        return -1;
+    }
+    return __sys_thr_new(param, size);
+}
+comptime {
+    @export(&testThrNew, .{ .name = "thr_new" });
+}
 var entered: A(u32) = .init(0);
 var finished: A(u32) = .init(0);
 var running: A(u32) = .init(0);
@@ -296,6 +312,7 @@ fn idle(_: [*c]const c.atf_tc_t) callconv(.c) void {
 // that could satisfy the extra request without first refusing it.
 var refused_cpus: u32 = 0;
 var refused_timer = false;
+var refused_failed_start = false;
 var refused_entered: A(u32) = .init(0);
 var refused_phase: A(u32) = .init(0);
 var refused_origin: A(u64) = .init(0);
@@ -317,13 +334,13 @@ fn refusedCallback(_: u64) callconv(.c) void {
         // The last busy worker to sleep makes capacity available. Its stamp
         // precedes the blocking call; it is not an exact switch timestamp.
         _ = refused_origin.fetchMax(nanoNow(), .seq_cst);
-        _ = c.usleep(50_000);
+        _ = c.usleep(if (refused_failed_start) 500_000 else 50_000);
     } else if (index == 0) {
         refused_origin.store(nanoNow(), .seq_cst);
         return;
     }
     while (refused_phase.load(.seq_cst) != 2) {
-        if (refused_timer) _ = c.usleep(50_000) else std.atomic.spinLoopHint();
+        if (refused_timer) _ = c.usleep(if (refused_failed_start) 500_000 else 50_000) else std.atomic.spinLoopHint();
     }
 }
 fn refusedTrial(timer: bool, trial: u32) u8 {
@@ -372,8 +389,62 @@ fn refusedReturn(_: [*c]const c.atf_tc_t) callconv(.c) void {
 fn refusedTimer(_: [*c]const c.atf_tc_t) callconv(.c) void {
     refusedCase(true);
 }
+fn startControl(_: ?*anyopaque) callconv(.c) ?*anyopaque {
+    return null;
+}
+fn failedStartTrial(trial: u32) u8 {
+    refused_cpus = read(u32, "hw.ncpu");
+    refused_timer = true;
+    refused_failed_start = true;
+    if (refused_cpus == 0 or refused_cpus > 64) return 94;
+    var cfg = config();
+    cfg.workq_cb = &refusedCallback;
+    if (c.pthread_workqueue_setup(&cfg, @sizeOf(@TypeOf(cfg))) != 0) return 95;
+    request(refused_cpus, priority(false));
+    const setup_end = nanoNow() + 2_000_000_000;
+    while (refused_entered.load(.seq_cst) != refused_cpus and nanoNow() < setup_end) _ = c.usleep(100);
+    if (refused_entered.load(.seq_cst) != refused_cpus) return 96;
+    // The timer must be created while stack mappings are still permitted.
+    request(1, priority(false));
+    if (refused_entered.load(.seq_cst) != refused_cpus) return 97;
+    thr_new_refusals.store(0, .seq_cst);
+    fail_thr_new.store(true, .seq_cst);
+    refused_phase.store(1, .seq_cst);
+    _ = c.usleep(20_000);
+    const premature = refused_started.load(.seq_cst);
+    const restored = nanoNow();
+    fail_thr_new.store(false, .seq_cst);
+    const refusals = thr_new_refusals.load(.seq_cst);
+    if (refusals == 0) return 98;
+    // At most the 50 ms backoff plus 10 ms dispatch allowance. Existing
+    // workers remain in their initial 500 ms sleep throughout this check.
+    const bound: u64 = 60_000_000;
+    while (refused_started.load(.seq_cst) == 0 and nanoNow() - restored < bound) _ = c.usleep(100);
+    const started = refused_started.load(.seq_cst);
+    const elapsed = if (started >= restored and started != 0) started - restored else std.math.maxInt(u64);
+    const observed = refused_entered.load(.seq_cst);
+    _ = c.printf("failed_start_trial trial=%u cpus=%u refusals=%u hold_us=20000 limit_ns=%lu elapsed_ns=%lu premature_ns=%lu expected_callbacks=%u observed_callbacks=%u\n", trial, refused_cpus, refusals, bound, elapsed, premature, refused_cpus + 1, observed);
+    _ = c.fflush(null);
+    return if (premature == 0 and elapsed <= bound and observed == refused_cpus + 1) 0 else 1;
+}
+fn failedStart(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    begin();
+    var passed: u32 = 0;
+    for (1..101) |trial| {
+        _ = c.fflush(null);
+        const child = c.fork();
+        if (child < 0) c.atf_tc_fail("failed-start fork");
+        if (child == 0) c._exit(failedStartTrial(@intCast(trial)));
+        var status: c_int = 0;
+        if (c.waitpid(child, &status, 0) != child) c.atf_tc_fail("failed-start wait");
+        if (status == 0) passed += 1 else if (status != 256) c.atf_tc_fail("failed-start fixture trial=%zu wait_status=%d", trial, status);
+    }
+    _ = c.printf("failed_start_summary expected=100 observed=%u\n", passed);
+    if (passed != 100) c.atf_tc_fail("failed-start expected=100 observed=%u", passed);
+}
 const Case = struct { name: [*:0]const u8, body: *const fn ([*c]const c.atf_tc_t) callconv(.c) void };
 const cases = [_]Case{
+    .{ .name = "refused_served_after_failed_start", .body = &failedStart },
     .{ .name = "refused_served_on_return", .body = &refusedReturn },
     .{ .name = "refused_served_by_timer", .body = &refusedTimer },
     .{ .name = "registration_once", .body = &registration },
@@ -415,4 +486,30 @@ test "XNU delay below threshold and linearly above, including saturated decay" {
     try std.testing.expectEqual(@as(u64, 78), c.twq_idle_delay_msec(100, 2));
     try std.testing.expectEqual(@as(u64, 5000), c.twq_idle_delay_msec(6, 16));
     try std.testing.expectEqual(@as(u64, 4937), c.twq_idle_delay_msec(7, 16));
+}
+
+test "failed-start thr_new override rejects creation and forwards after clearing" {
+    const child = c.fork();
+    try std.testing.expect(child >= 0);
+    if (child == 0) {
+        var thread: c.pthread_t = undefined;
+        thr_new_entries.store(0, .seq_cst);
+        thr_new_refusals.store(0, .seq_cst);
+        fail_thr_new.store(true, .seq_cst);
+        const denied = c.pthread_create(&thread, null, &startControl, null);
+        const refused = thr_new_refusals.load(.seq_cst);
+        fail_thr_new.store(false, .seq_cst);
+        if (denied != c.EAGAIN or refused != 1) c._exit(102);
+        const before = nanoNow();
+        const allowed = c.pthread_create(&thread, null, &startControl, null);
+        const elapsed = nanoNow() - before;
+        if (allowed != 0 or c.pthread_join(thread, null) != 0) c._exit(103);
+        const calls = thr_new_entries.load(.seq_cst);
+        _ = c.printf("failed_start_override denied_rc=%d refusals=%u restored_rc=%d entries=%u creation_ns=%lu\n", denied, refused, allowed, calls, elapsed);
+        _ = c.fflush(null);
+        c._exit(if (calls == 2) 0 else 104);
+    }
+    var status: c_int = 0;
+    try std.testing.expectEqual(child, c.waitpid(child, &status, 0));
+    try std.testing.expectEqual(@as(c_int, 0), status);
 }

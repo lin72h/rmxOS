@@ -94,7 +94,7 @@ static int twq_kernel_sync_request(uint16_t desired,
     pthread_priority_t priority);
 static int twq_kernel_thread_transfer(uint16_t from_desired,
     pthread_priority_t from_priority, pthread_priority_t to_priority);
-static int twq_spawn_workers(struct twq_runtime *rt, uint16_t count);
+static int twq_spawn_ready(struct twq_runtime *rt, int lane, uint16_t count);
 static int twq_start_reaper(struct twq_runtime *rt);
 static void twq_start_redrive_locked(struct twq_runtime *rt);
 static int twq_sys_kernreturn(int op, void *arg2, int arg3, int arg4);
@@ -590,6 +590,7 @@ twq_redrive(struct twq_runtime *rt, int returned_lane, bool returning)
 		    "timer-redrive-begin", lane, priority, desired, 0, 0, 0);
 		error = twq_kernel_sync_request(desired, priority);
 		if (error < 0) {
+			twq_start_redrive_locked(rt);
 			THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
 			continue;
 		}
@@ -607,7 +608,7 @@ twq_redrive(struct twq_runtime *rt, int returned_lane, bool returning)
 		if (wake_needed != 0)
 			_thr_umtx_wake(&rt->tr_wait_seq, INT_MAX, 0);
 		if (spawn_needed != 0)
-			(void)twq_spawn_workers(rt, spawn_needed);
+			(void)twq_spawn_ready(rt, lane, spawn_needed);
 	}
 }
 
@@ -630,6 +631,10 @@ twq_redrive_main(void *arg)
 			THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
 			return (NULL);
 		}
+		/* An uncovered request must never turn a reset interval into a
+		 * zero-timeout retry loop, even after a failed kernel request. */
+		if (rt->tr_redrive_usecs == 0)
+			rt->tr_redrive_usecs = TWQ_REDRIVE_FIRST_USECS;
 		usecs = rt->tr_redrive_usecs;
 		seq = rt->tr_redrive_seq;
 		THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
@@ -796,7 +801,7 @@ twq_reaper_main(void *arg)
 		if (wake_needed != 0)
 			_thr_umtx_wake(&rt->tr_wait_seq, INT_MAX, 0);
 		if (spawn_needed != 0)
-			(void)twq_spawn_workers(rt, spawn_needed);
+			(void)twq_spawn_ready(rt, redrive_lane, spawn_needed);
 	}
 }
 
@@ -1174,7 +1179,7 @@ out:
 }
 
 static int
-twq_spawn_workers(struct twq_runtime *rt, uint16_t count)
+twq_spawn_workers(struct twq_runtime *rt, uint16_t count, uint16_t *started)
 {
 	struct pthread_attr attr;
 	pthread_attr_t attrp;
@@ -1188,6 +1193,7 @@ twq_spawn_workers(struct twq_runtime *rt, uint16_t count)
 	attr.flags |= PTHREAD_CREATE_DETACHED;
 	attrp = &attr;
 	curthread = _get_curthread();
+	*started = 0;
 
 	for (i = 0; i < count; i++) {
 		worker = calloc(1, sizeof(*worker));
@@ -1199,6 +1205,7 @@ twq_spawn_workers(struct twq_runtime *rt, uint16_t count)
 			free(worker);
 			return (error);
 		}
+		*started = i + 1;
 		THR_UMUTEX_LOCK(curthread, &rt->tr_lock);
 		rt->tr_live_workers++;
 		twq_trace_event_locked(rt, "spawned", -1, 0, i + 1,
@@ -1206,6 +1213,33 @@ twq_spawn_workers(struct twq_runtime *rt, uint16_t count)
 		THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
 	}
 	return (0);
+}
+
+static int
+twq_spawn_ready(struct twq_runtime *rt, int lane, uint16_t count)
+{
+	struct pthread *curthread;
+	struct twq_lane_runtime *bucket;
+	uint16_t started, unstarted;
+	int error;
+
+	error = twq_spawn_workers(rt, count, &started);
+	if (error == 0)
+		return (0);
+	curthread = _get_curthread();
+	THR_UMUTEX_LOCK(curthread, &rt->tr_lock);
+	bucket = &rt->tr_bucket[lane];
+	unstarted = count - started;
+	/* Ready units are interchangeable: another worker may have already
+	 * claimed some of these units while creation ran without tr_lock. */
+	bucket->tbr_ready -= MIN(bucket->tbr_ready, unstarted);
+	bucket->tbr_local_ready = MIN(bucket->tbr_local_ready,
+	    bucket->tbr_ready);
+	twq_trace_event_locked(rt, "spawn-giveback", lane,
+	    bucket->tbr_priority, count, started, 0, unstarted);
+	twq_start_redrive_locked(rt);
+	THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
+	return (error);
 }
 
 static int
@@ -1291,6 +1325,7 @@ twq_addthreads_common(uint32_t numthreads, pthread_priority_t priority)
 	    numthreads, 0, 0, 0);
 	error = twq_kernel_sync_request(desired, priority);
 	if (error < 0) {
+		twq_start_redrive_locked(rt);
 		THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
 		return (-error);
 	}
@@ -1311,17 +1346,9 @@ twq_addthreads_common(uint32_t numthreads, pthread_priority_t priority)
 		_thr_umtx_wake(&rt->tr_wait_seq, INT_MAX, 0);
 
 	if (spawn_needed != 0) {
-		error = twq_spawn_workers(rt, spawn_needed);
-		if (error != 0) {
-			THR_UMUTEX_LOCK(curthread, &rt->tr_lock);
-			if (rt->tr_bucket[lane].tbr_ready >= spawn_needed)
-				rt->tr_bucket[lane].tbr_ready -= spawn_needed;
-			else
-				rt->tr_bucket[lane].tbr_ready = 0;
-			twq_start_redrive_locked(rt);
-			THR_UMUTEX_UNLOCK(curthread, &rt->tr_lock);
+		error = twq_spawn_ready(rt, lane, spawn_needed);
+		if (error != 0)
 			return (error);
-		}
 	}
 	return (0);
 }
