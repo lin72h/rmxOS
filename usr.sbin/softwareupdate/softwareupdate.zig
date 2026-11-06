@@ -130,6 +130,32 @@ fn applicable(env_head: engine.Snapshot, updates: []catalog.Update) ?catalog.Upd
     return null;
 }
 
+const Choice = struct { update: catalog.Update, full: bool = false, retry: bool = false };
+
+fn choose(ctx: Ctx, env: engine.Env, c: catalog.Catalog, label: ?[]const u8) !?Choice {
+    const h = try engine.head(ctx, env);
+    const same = eq(env.lineage, c.lineage);
+    if (same) {
+        for (c.updates) |u| {
+            if (label) |l| if (!eq(l, u.label)) continue;
+            if (eq(u.origin_guid, h.guid)) return .{ .update = u };
+            if ((label != null or eq(u.target_guid, h.guid)) and try engine.retryAvailable(ctx, env, u))
+                return .{ .update = u, .retry = true };
+        }
+    }
+    if (c.full) |f| {
+        if (label == null or eq(label.?, f.label)) {
+            const u = f.update();
+            if (!same or !eq(try engine.runningGuid(ctx, env), u.target_guid))
+                return .{ .update = u, .full = true, .retry = try engine.retryAvailable(ctx, env, u) };
+        }
+    }
+    if (label) |l| if (same) {
+        if (find(c.updates, l)) |u| return .{ .update = u };
+    };
+    return null;
+}
+
 fn run(ctx: Ctx, o: Options) !u8 {
     switch (o.action) {
         .none, .help => {
@@ -139,6 +165,11 @@ fn run(ctx: Ctx, o: Options) !u8 {
         .history => return engine.printHistory(ctx),
         else => {},
     }
+    const lock = switch (o.action) {
+        .install, .confirm, .cancel, .rollback, .download, .background, .boot_check, .list => (try sys.operationLock(ctx)) orelse return 1,
+        else => null,
+    };
+    defer if (lock) |held| held.release();
     const env = try engine.discover(ctx);
     switch (o.action) {
         .status, .dump_state => return engine.status(ctx, env),
@@ -159,8 +190,7 @@ fn run(ctx: Ctx, o: Options) !u8 {
         error.MalformedCatalog => return ctx.refuse("catalog.json is not a {s} catalog", .{catalog.format}),
         else => return err,
     };
-    const h = try engine.head(ctx, env);
-    const next = applicable(h, loaded.catalog.updates);
+    const next = try choose(ctx, env, loaded.catalog, null);
     switch (o.action) {
         .list => {
             ctx.out("Software Update Tool\n\n", .{});
@@ -170,16 +200,23 @@ fn run(ctx: Ctx, o: Options) !u8 {
                 return 0;
             };
             ctx.out("Software Update found the following new or updated software:\n", .{});
-            var cur: ?catalog.Update = u;
-            while (cur) |x| {
-                ctx.out("* Label: {s}\n\tTitle: rmxOS {s}, Version: {s}, Size: {d}K, Recommended: YES, Action: restart,\n", .{ x.label, x.build, x.build, (x.size + 1023) / 1024 });
-                cur = applicable(.{ .name = x.snapshot, .guid = x.target_guid }, loaded.catalog.updates);
+            var cur: ?catalog.Update = u.update;
+            var count: usize = 0;
+            while (cur) |x| : (count += 1) {
+                if (count > loaded.catalog.updates.len) return error.MalformedCatalog;
+                ctx.out("* Label: {s}{s}\n\tTitle: rmxOS {s}, Version: {s}, Size: {d}K, Recommended: YES, Action: restart,\n", .{ x.label, if (u.retry and count == 0) " (not confirmed)" else "", x.build, x.build, x.size / 1024 + @intFromBool(x.size % 1024 != 0) });
+                cur = if (u.full) null else applicable(.{ .name = x.snapshot, .guid = x.target_guid }, loaded.catalog.updates);
             }
             return 0;
         },
         .download, .background => {
-            var cur = next;
-            while (cur) |x| : (cur = applicable(.{ .name = x.snapshot, .guid = x.target_guid }, loaded.catalog.updates)) {
+            var cur: ?catalog.Update = if (next) |n| n.update else null;
+            var count: usize = 0;
+            while (cur) |x| : ({
+                count += 1;
+                cur = if (next.?.full) null else applicable(.{ .name = x.snapshot, .guid = x.target_guid }, loaded.catalog.updates);
+            }) {
+                if (count > loaded.catalog.updates.len) return error.MalformedCatalog;
                 if (o.labels.items.len > 0 and !contains(o.labels.items, x.label)) continue;
                 const p = try catalog.download(ctx, loaded.source, x);
                 const d = try sys.sha256File(p);
@@ -190,15 +227,14 @@ fn run(ctx: Ctx, o: Options) !u8 {
         },
         .install => {
             // Named labels in order, or (-a, -r, --os-only) the chain to its newest.
-            var chain: std.ArrayList(catalog.Update) = .empty;
+            var chain: std.ArrayList(Choice) = .empty;
             if (o.labels.items.len > 0) {
                 for (o.labels.items) |l| {
-                    const u = find(loaded.catalog.updates, l) orelse return ctx.refuse("{s}: no such update in the catalog", .{l});
+                    const u = (try choose(ctx, env, loaded.catalog, l)) orelse return ctx.refuse("{s}: no such update in the catalog", .{l});
                     try chain.append(ctx.a, u);
                 }
             } else {
-                var cur = next;
-                while (cur) |x| : (cur = applicable(.{ .name = x.snapshot, .guid = x.target_guid }, loaded.catalog.updates)) try chain.append(ctx.a, x);
+                if (next) |x| try chain.append(ctx.a, x);
                 if (chain.items.len == 0) {
                     ctx.out("No updates are available.\n", .{});
                     return 0;
@@ -208,7 +244,7 @@ fn run(ctx: Ctx, o: Options) !u8 {
                 chain.items.len = 1;
             }
             for (chain.items) |u| {
-                const rc = try engine.install(ctx, env, u, loaded.source, o.no_auto_confirm);
+                const rc = try engine.installChoice(ctx, env, u.update, loaded.source, o.no_auto_confirm, u.full, loaded.catalog.lineage);
                 if (rc != 0) return rc;
             }
             if (o.restart) {

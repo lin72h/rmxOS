@@ -55,3 +55,22 @@ test "macOS surface: short forms, labels, refusals" {
     try t.expectError(error.Usage, su.parse(a, &.{ "status", "--no-auto-confirm" }));
     try t.expectError(error.Usage, su.parse(a, &.{ "-l", "-d" }));
 }
+
+test "lineage defaults and full stream catalog" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try t.expectEqualStrings("main", (try catalog.parse(a, good)).lineage);
+    const full = "{\"format\":\"rmxos-catalog-v2\",\"lineage\":\"preview\",\"updates\":[],\"full\":{\"label\":\"C\",\"build\":\"C\",\"snapshot\":\"rmxos-cccccccccccc\",\"target_guid\":\"18446744073709551615\",\"stream\":\"c.zfs\",\"sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"size\":10}}";
+    const v = try catalog.parse(a, full);
+    try t.expectEqualStrings("preview", v.lineage);
+    try t.expectEqualStrings("0", v.full.?.update().origin_guid);
+    for ([_][]const u8{ "../preview", "", "a/b", "a@b" }) |lineage| {
+        const bad = try std.mem.replaceOwned(u8, a, full, "preview", lineage);
+        try t.expectError(error.MalformedCatalog, catalog.parse(a, bad));
+    }
+    const bad_stream = try std.mem.replaceOwned(u8, a, full, "c.zfs", "../c.zfs");
+    try t.expectError(error.MalformedCatalog, catalog.parse(a, bad_stream));
+    const bad_guid = try std.mem.replaceOwned(u8, a, full, "18446744073709551615", "18446744073709551616");
+    try t.expectError(error.MalformedCatalog, catalog.parse(a, bad_guid));
+}

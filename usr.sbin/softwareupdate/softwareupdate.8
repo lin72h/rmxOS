@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 6, 2026
 .Dt SOFTWAREUPDATE 8
 .Os
 .Sh NAME
@@ -35,15 +35,25 @@ Other tools:
 .Cm confirm | cancel
 .Sh DESCRIPTION
 The sealed base is the ZFS dataset
-.Ar pool Ns /base/main .
+.Ar pool Ns /base/ Ns Ar lineage
+(default
+.Cm main ) .
+The running environment's origin identifies its current chain.
 Each boot environment
 .Ar pool Ns /ROOT/ Ns Ar snapshot
 is a read-only clone of one of its snapshots.
 An update is a
 .Ql zfs send -i
 stream from the base's newest snapshot, received into
-.Ar pool Ns /base/main
+.Ar pool Ns /base/ Ns Ar lineage
 as it is; no dataset is ever promoted.
+When no incremental starts at the chain head, the catalog's
+.Cm full
+stream is received into a new chain, preserving the running and fallback
+environments and their origin snapshots.
+An existing lineage gets a generation below
+.Ar pool Ns /base/ Ns Ar lineage Ns / Ns Ar snapshot ;
+a new lineage uses its canonical dataset directly.
 .Pp
 .Fl -install
 reads the catalog, refuses with one line and receives nothing when the base
@@ -54,10 +64,11 @@ stream is truncated, does not match the catalog's sha256, or its own origin
 GUID does not match.
 It then receives the stream, clones the new snapshot
 .Pq Cm mountpoint Ns =/ , Cm canmount Ns = Ns Cm noauto , Cm readonly Ns = Ns Cm on ,
-activates the clone for one boot
-.Pq Ql bectl activate -t ,
-and records the running environment, the time and the label in
+records the running environment, received snapshot, time and label durably in
 .Pa /private/var/db/rmxos/fallback .
+Only then does it activate the clone for one boot
+.Pq Ql bectl activate -t .
+A staging failure undoes the record and label as well as the receive.
 With
 .Fl -restart
 the system restarts.
@@ -69,6 +80,13 @@ confirms the new environment on its first boot: it sets the pool's
 to it, clears the one-boot setting, writes the history row, and applies
 retention.
 A boot that does not reach the check boots the previous environment next.
+The update is listed again as not confirmed.
+Installing its label or using
+.Fl a
+stages the existing clone again if its origin GUID matches and its
+.Cm written
+is zero; otherwise the failed receive is undone and the stream is installed
+again, without removing protected environments or snapshots.
 With
 .Fl -no-auto-confirm
 the check waits for
@@ -101,6 +119,15 @@ never writes
 .Pa /boot/loader.conf
 or the ESP's
 .Pa loader.env .
+.Pp
+Install, confirm, cancel, rollback, downloads, background scans, catalog lists,
+and the boot check hold a nonblocking
+.Xr flock 2
+on
+.Pa /private/var/db/rmxos/softwareupdate.lock .
+A concurrent caller exits 1 with one line naming the holder's PID.
+The lock file remains; process exit releases the lock, including after a kill.
+Status and history remain available while an operation runs.
 .Sh OPTIONS
 .Bl -tag -width Ds
 .It Fl -catalog Ar DIR | URL
@@ -134,6 +161,8 @@ are refused with one line.
 The fallback record and the history.
 .It Pa /private/var/db/rmxos/softwareupdate/
 The last fetched catalog and downloaded streams.
+.It Pa /private/var/db/rmxos/softwareupdate.lock
+Operation lock and holder PID; file presence alone does not hold the lock.
 .El
 .Sh CATALOG
 .Pa catalog.json
@@ -145,5 +174,15 @@ is
 .Ed
 .Pp
 with GUIDs as decimal strings.
+Optional
+.Cm lineage
+defaults to
+.Cm main .
+Optional
+.Cm full
+has the same fields as an update except for
+.Cm origin_guid ;
+its stream must have a zero origin GUID.
+Unknown catalog fields are ignored.
 .Sh EXIT STATUS
 0 on success, 1 when an operation is refused or fails, 2 for invalid arguments.

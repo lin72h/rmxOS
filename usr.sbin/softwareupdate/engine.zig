@@ -16,6 +16,7 @@ pub const Env = struct {
     pool: []const u8,
     root: []const u8,
     base: []const u8,
+    lineage: []const u8,
     running: []const u8,
     fn name(_: Env, dataset: []const u8) []const u8 {
         return dataset[(std.mem.lastIndexOfScalar(u8, dataset, '/') orelse return dataset) + 1 ..];
@@ -29,8 +30,15 @@ pub fn discover(ctx: Ctx) !Env {
     // A host fixture never acts on the host's own pool.
     if (ctx.fixture and !std.mem.startsWith(u8, pool, "rmxsu")) return error.FixturePool;
     const root = try ctx.fmt("{s}/ROOT", .{pool});
-    if (!std.mem.startsWith(u8, running, root) or running.len <= root.len + 1) return error.NotSealedRoot;
-    return .{ .pool = pool, .root = root, .base = try ctx.fmt("{s}/base/main", .{pool}), .running = running };
+    if (!std.mem.startsWith(u8, running, try ctx.fmt("{s}/", .{root}))) return error.NotSealedRoot;
+    const origin = try get(ctx, "origin", running);
+    const at = std.mem.lastIndexOfScalar(u8, origin, '@') orelse return error.NotSealedRoot;
+    const prefix = try ctx.fmt("{s}/base/", .{pool});
+    if (!std.mem.startsWith(u8, origin[0..at], prefix)) return error.NotSealedRoot;
+    const suffix = origin[prefix.len..at];
+    const lineage = suffix[0 .. std.mem.indexOfScalar(u8, suffix, '/') orelse suffix.len];
+    if (lineage.len == 0) return error.NotSealedRoot;
+    return .{ .pool = pool, .root = root, .base = origin[0..at], .lineage = lineage, .running = running };
 }
 
 fn zfs(ctx: Ctx, args: []const []const u8) ![]const u8 {
@@ -83,6 +91,7 @@ pub const Record = struct {
     time: []const u8 = "",
     label: []const u8 = "",
     staged: []const u8 = "",
+    snapshot: []const u8 = "",
     confirm: []const u8 = "auto",
     state: []const u8 = "",
 };
@@ -94,7 +103,7 @@ pub fn readRecord(ctx: Ctx) ?Record {
         const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
         const k = line[0..eq];
         const v = line[eq + 1 ..];
-        inline for (.{ "environment", "time", "label", "staged", "confirm", "state" }) |f| {
+        inline for (.{ "environment", "time", "label", "staged", "snapshot", "confirm", "state" }) |f| {
             if (std.mem.eql(u8, k, f)) @field(r, f) = v;
         }
     }
@@ -102,8 +111,8 @@ pub fn readRecord(ctx: Ctx) ?Record {
 }
 fn writeRecord(ctx: Ctx, r: Record) !void {
     try sys.replace(ctx.a, try ctx.path(fallback_path), try ctx.fmt(
-        "environment={s}\ntime={s}\nlabel={s}\nstaged={s}\nconfirm={s}\nstate={s}\n",
-        .{ r.environment, r.time, r.label, r.staged, r.confirm, r.state },
+        "environment={s}\ntime={s}\nlabel={s}\nstaged={s}\nsnapshot={s}\nconfirm={s}\nstate={s}\n",
+        .{ r.environment, r.time, r.label, r.staged, r.snapshot, r.confirm, r.state },
     ));
 }
 fn history(ctx: Ctx, action: []const u8, label: []const u8, environment: []const u8) !void {
@@ -112,14 +121,20 @@ fn history(ctx: Ctx, action: []const u8, label: []const u8, environment: []const
 
 // Refusals before anything is received, one line each.
 pub fn install(ctx: Ctx, env: Env, u: catalog.Update, source: []const u8, manual: bool) !u8 {
+    return installChoice(ctx, env, u, source, manual, false, env.lineage);
+}
+
+pub fn installChoice(ctx: Ctx, running_env: Env, u: catalog.Update, source: []const u8, manual: bool, full: bool, lineage: []const u8) !u8 {
+    var env = running_env;
+    if (readRecord(ctx)) |r| if (std.mem.eql(u8, r.state, "staged"))
+        return ctx.refuse("{s}: {s} is already staged for the next boot; nothing received", .{ u.label, r.label });
     const written = try get(ctx, "written", env.base);
     if (!std.mem.eql(u8, written, "0"))
         return ctx.refuse("{s}: sealed base {s} changed (written={s}); nothing received", .{ u.label, env.base, written });
-    const h = try head(ctx, env);
+    if (try retryExisting(ctx, env, u, manual, lineage)) |rc| return rc;
+    const h: Snapshot = if (full) .{ .name = "", .guid = "0" } else try head(ctx, env);
     if (!std.mem.eql(u8, h.guid, u.origin_guid))
         return ctx.refuse("{s}: update starts from GUID {s}, installed base {s} is GUID {s}; nothing received", .{ u.label, u.origin_guid, h.name, h.guid });
-    if (readRecord(ctx)) |r| if (std.mem.eql(u8, r.state, "staged"))
-        return ctx.refuse("{s}: {s} is already staged for the next boot; nothing received", .{ u.label, r.label });
     const path = catalog.stream(ctx, source, u) catch return ctx.refuse("{s}: stream {s} unavailable; nothing received", .{ u.label, u.stream });
     const got = sys.size(path) orelse 0;
     if (got != u.size)
@@ -133,20 +148,29 @@ pub fn install(ctx: Ctx, env: Env, u: catalog.Update, source: []const u8, manual
     if (!std.mem.eql(u8, origin, h.guid) or !std.mem.eql(u8, target, u.target_guid))
         return ctx.refuse("{s}: stream origin GUID {s} (target {s}) does not match base GUID {s}; nothing received", .{ u.label, origin, target, h.guid });
 
-    const snapshot = try ctx.fmt("{s}@{s}", .{ env.base, u.snapshot });
     const at = std.mem.lastIndexOfScalar(u8, hd.name, '@') orelse return error.NotAStream;
+    if (!std.mem.eql(u8, hd.name[at + 1 ..], u.snapshot)) return ctx.refuse("{s}: stream snapshot does not match the catalog; nothing received", .{u.label});
+    if (full) {
+        const canonical = try ctx.fmt("{s}/base/{s}", .{ env.pool, lineage });
+        const all = try zfs(ctx, &.{ "list", "-H", "-o", "name", "-r", env.pool });
+        const present = hasWord(all, canonical);
+        env.base = if (present) try ctx.fmt("{s}/{s}", .{ canonical, u.snapshot }) else canonical;
+        if (hasWord(all, env.base)) return ctx.refuse("{s}: full-stream destination {s} already exists; nothing received", .{ u.label, env.base });
+    }
+    const snapshot = try ctx.fmt("{s}@{s}", .{ env.base, u.snapshot });
     const received = try ctx.fmt("{s}{s}", .{ env.base, hd.name[at..] });
     const clone = try ctx.fmt("{s}/{s}", .{ env.root, u.snapshot });
     const record_path = try ctx.path(fallback_path);
     const old_record = if (sys.exists(record_path)) try sys.read(ctx.a, record_path) else null;
     const hist_path = try ctx.path(history_path);
     const hist_size = sys.size(hist_path);
-    const r = try sys.run(ctx.a, &.{ "/sbin/zfs", "receive", "-u", env.base }, path);
+    const args: []const []const u8 = if (full) &.{ "/sbin/zfs", "receive", "-u", "-o", "mountpoint=none", "-o", "canmount=off", "-o", "readonly=on", env.base } else &.{ "/sbin/zfs", "receive", "-u", env.base };
+    const r = try sys.run(ctx.a, args, path);
     if (r.status != 0) return ctx.refuse("{s}: zfs receive failed: {s}", .{ u.label, sys.firstLine(r.stderr) });
     var made_clone = false;
     var activated = false;
     var wrote_record = false;
-    stage(ctx, env, u, snapshot, clone, manual, &made_clone, &activated, &wrote_record) catch |err| {
+    stage(ctx, env, u, snapshot, clone, manual, true, &made_clone, &activated, &wrote_record) catch |err| {
         const cause = sys.failure;
         undoInstall(ctx, env, received, clone, h.name, made_clone, activated, wrote_record, old_record, hist_size) catch |cleanup_err|
             return ctx.refuse("{s}: {s} {s}; recovery incomplete: {s}", .{ u.label, @errorName(err), cause, @errorName(cleanup_err) });
@@ -156,16 +180,88 @@ pub fn install(ctx: Ctx, env: Env, u: catalog.Update, source: []const u8, manual
     return 0;
 }
 
-fn stage(ctx: Ctx, env: Env, u: catalog.Update, snapshot: []const u8, clone: []const u8, manual: bool, made_clone: *bool, activated: *bool, wrote_record: *bool) !void {
+pub fn runningGuid(ctx: Ctx, env: Env) ![]const u8 {
+    return get(ctx, "guid", try get(ctx, "origin", env.running));
+}
+
+pub fn retryAvailable(ctx: Ctx, env: Env, u: catalog.Update) !bool {
+    const clone = try ctx.fmt("{s}/{s}", .{ env.root, u.snapshot });
+    if (std.mem.eql(u8, clone, env.running)) return false;
+    if (readRecord(ctx)) |r| if (std.mem.eql(u8, r.state, "staged")) return false;
+    const all = try zfs(ctx, &.{ "list", "-H", "-o", "name", "-r", env.root });
+    return hasWord(all, clone);
+}
+
+fn inLineage(ctx: Ctx, env: Env, snapshot: []const u8, lineage: []const u8) !bool {
+    const prefix = try ctx.fmt("{s}/base/{s}", .{ env.pool, lineage });
+    return std.mem.startsWith(u8, snapshot, prefix) and snapshot.len > prefix.len and
+        (snapshot[prefix.len] == '/' or snapshot[prefix.len] == '@');
+}
+
+fn retryExisting(ctx: Ctx, env: Env, u: catalog.Update, manual: bool, lineage: []const u8) !?u8 {
+    const clone = try ctx.fmt("{s}/{s}", .{ env.root, u.snapshot });
+    const all = try zfs(ctx, &.{ "list", "-H", "-o", "name", "-r", env.root });
+    if (!hasWord(all, clone)) return null;
+    const fallback = if (readRecord(ctx)) |r| r.environment else "";
+    if (std.mem.eql(u8, clone, env.running) or std.mem.eql(u8, clone, fallback) or std.mem.eql(u8, clone, try bootfs(ctx, env)))
+        return ctx.refuse("{s}: environment is running or protected; nothing changed", .{u.label});
+    const origin = try get(ctx, "origin", clone);
+    if (try inLineage(ctx, env, origin, lineage)) {
+        const guid = try get(ctx, "guid", origin);
+        if (std.mem.eql(u8, guid, u.target_guid) and std.mem.eql(u8, try get(ctx, "written", clone), "0")) {
+            const rp = try ctx.path(fallback_path);
+            const old = if (sys.exists(rp)) try sys.read(ctx.a, rp) else null;
+            const hist_size = sys.size(try ctx.path(history_path));
+            var made = false;
+            var activated = false;
+            var recorded = false;
+            stage(ctx, env, u, origin, clone, manual, false, &made, &activated, &recorded) catch |err| {
+                const cause = sys.failure;
+                undoInstall(ctx, env, "", clone, "", false, activated, recorded, old, hist_size) catch |cleanup_err|
+                    return ctx.refuse("{s}: {s} {s}; recovery incomplete: {s}", .{ u.label, @errorName(err), cause, @errorName(cleanup_err) });
+                return ctx.refuse("{s}: {s} {s}; retry undone", .{ u.label, @errorName(err), cause });
+            };
+            ctx.out("Restaged {s} into {s}; it boots once on the next restart.\n", .{ u.label, clone });
+            return 0;
+        }
+    }
+    // A failed candidate's clone may have been changed. Remove only that
+    // candidate and its receive, never a running/fallback origin or -r/-R.
+    const snapshots = try zfs(ctx, &.{ "list", "-H", "-t", "snapshot", "-o", "name", "-r", try ctx.fmt("{s}/base", .{env.pool}) });
+    const running_origin = try get(ctx, "origin", env.running);
+    const fallback_origin = if (fallback.len > 0) try get(ctx, "origin", fallback) else "";
+    var received: ?[]const u8 = null;
+    var lines = std.mem.splitScalar(u8, sys.trim(snapshots), '\n');
+    while (lines.next()) |snap| {
+        if (!std.mem.endsWith(u8, snap, try ctx.fmt("@{s}", .{u.snapshot})) or !try inLineage(ctx, env, snap, lineage)) continue;
+        if (std.mem.eql(u8, snap, running_origin) or std.mem.eql(u8, snap, fallback_origin))
+            return ctx.refuse("{s}: received snapshot is protected; nothing changed", .{u.label});
+        if (received != null) return ctx.refuse("{s}: ambiguous received snapshots; nothing changed", .{u.label});
+        received = snap;
+    }
+    _ = try zfs(ctx, &.{ "destroy", clone });
+    if (received) |snap| {
+        _ = try zfs(ctx, &.{ "destroy", snap });
+        const base = snap[0..std.mem.lastIndexOfScalar(u8, snap, '@').?];
+        if (std.mem.eql(u8, base, env.base)) {
+            _ = try zfs(ctx, &.{ "rollback", (try head(ctx, env)).name });
+        } else _ = try zfs(ctx, &.{ "destroy", base });
+    }
+    return null;
+}
+
+fn stage(ctx: Ctx, env: Env, u: catalog.Update, snapshot: []const u8, clone: []const u8, manual: bool, create: bool, made_clone: *bool, activated: *bool, wrote_record: *bool) !void {
     const guid = try get(ctx, "guid", snapshot);
     if (!std.mem.eql(u8, guid, u.target_guid)) return error.ReceivedGuidMismatch;
-    _ = try zfs(ctx, &.{ "clone", "-o", "mountpoint=/", "-o", "canmount=noauto", "-o", "readonly=on", snapshot, clone });
-    made_clone.* = true;
+    if (create) {
+        _ = try zfs(ctx, &.{ "clone", "-o", "mountpoint=/", "-o", "canmount=noauto", "-o", "readonly=on", snapshot, clone });
+        made_clone.* = true;
+    }
+    wrote_record.* = true;
+    try writeRecord(ctx, .{ .environment = env.running, .time = try sys.now(ctx.a), .label = u.label, .staged = clone, .snapshot = snapshot, .confirm = if (manual) "manual" else "auto", .state = "staged" });
+    try history(ctx, "staged", u.label, clone);
     activated.* = true;
     _ = try sys.capture(ctx, &.{ "/sbin/bectl", "-r", env.root, "activate", "-t", u.snapshot });
-    try writeRecord(ctx, .{ .environment = env.running, .time = try sys.now(ctx.a), .label = u.label, .staged = clone, .confirm = if (manual) "manual" else "auto", .state = "staged" });
-    wrote_record.* = true;
-    try history(ctx, "staged", u.label, clone);
 }
 
 fn undoInstall(ctx: Ctx, env: Env, received: []const u8, clone: []const u8, previous: []const u8, made_clone: bool, activated: bool, wrote_record: bool, old_record: ?[]const u8, hist_size: ?u64) !void {
@@ -177,19 +273,28 @@ fn undoInstall(ctx: Ctx, env: Env, received: []const u8, clone: []const u8, prev
     if (made_clone) _ = zfs(ctx, &.{ "destroy", clone }) catch {
         failed = true;
     };
-    _ = zfs(ctx, &.{ "destroy", received }) catch {
-        failed = true;
-    };
-    _ = zfs(ctx, &.{ "rollback", previous }) catch {
-        failed = true;
-    };
+    if (received.len > 0) {
+        _ = zfs(ctx, &.{ "destroy", received }) catch {
+            failed = true;
+        };
+        if (previous.len > 0) {
+            _ = zfs(ctx, &.{ "rollback", previous }) catch {
+                failed = true;
+            };
+        } else {
+            _ = zfs(ctx, &.{ "destroy", env.base }) catch {
+                failed = true;
+            };
+        }
+    }
     if (wrote_record) {
         const p = try ctx.path(fallback_path);
         if (old_record) |bytes| {
-            sys.replace(ctx.a, p, bytes) catch {
+            const actual = sys.read(ctx.a, p) catch "";
+            if (!std.mem.eql(u8, actual, bytes)) sys.replace(ctx.a, p, bytes) catch {
                 failed = true;
             };
-        } else if (sys.c.unlink(p) != 0) {
+        } else if (sys.exists(p) and sys.c.unlink(p) != 0) {
             failed = true;
         }
     }
@@ -264,10 +369,21 @@ pub fn cancel(ctx: Ctx, env: Env) !u8 {
     const written = try get(ctx, "written", env.base);
     if (!std.mem.eql(u8, written, "0"))
         return ctx.refuse("{s}: sealed base {s} changed (written={s}); nothing canceled", .{ r.label, env.base, written });
-    _ = try sys.capture(ctx, &.{ "/sbin/bectl", "-r", env.root, "activate", "-T" });
     // Undo the receive too, so the same update installs again from this base.
+    const received = if (r.snapshot.len > 0) r.snapshot else try ctx.fmt("{s}@{s}", .{ env.base, env.name(r.staged) });
+    if (!std.mem.startsWith(u8, received, try ctx.fmt("{s}/base/", .{env.pool}))) return error.NotSealedRoot;
+    const received_at = std.mem.lastIndexOfScalar(u8, received, '@') orelse return error.NotSealedRoot;
+    const received_base = received[0..received_at];
+    if (!std.mem.eql(u8, received_base, env.base)) {
+        const all = try zfs(ctx, &.{ "list", "-H", "-o", "name", "-r", env.pool });
+        if (hasWord(all, received_base) and !std.mem.eql(u8, try get(ctx, "written", received_base), "0"))
+            return ctx.refuse("{s}: received sealed base changed; nothing canceled", .{r.label});
+    }
+    if (std.mem.eql(u8, received, try get(ctx, "origin", env.running))) return error.ProtectedSnapshot;
+    _ = try sys.capture(ctx, &.{ "/sbin/bectl", "-r", env.root, "activate", "-T" });
     try destroyIfPresent(ctx, env, r.staged);
-    try destroyIfPresent(ctx, env, try ctx.fmt("{s}@{s}", .{ env.base, env.name(r.staged) }));
+    try destroyIfPresent(ctx, env, received);
+    if (!std.mem.eql(u8, received_base, env.base)) try destroyIfPresent(ctx, env, received_base);
     // The received data stays in the base's head until it is rolled back.
     _ = try zfs(ctx, &.{ "rollback", (try head(ctx, env)).name });
     var n = r;

@@ -16,6 +16,7 @@ pub const c = @cImport({
     @cInclude("sys/param.h");
     @cInclude("sys/mount.h");
     @cInclude("sys/stat.h");
+    @cInclude("sys/file.h");
     @cInclude("sys/wait.h");
     @cInclude("stdio.h");
     @cInclude("stdlib.h");
@@ -55,6 +56,41 @@ pub const Ctx = struct {
         return 1;
     }
 };
+
+pub const OperationLock = struct {
+    fd: c_int,
+    pub fn release(self: OperationLock) void {
+        _ = c.close(self.fd);
+    }
+};
+
+// Keep the inode: unlinking a flock file would permit two different locks.
+// O_CLOEXEC prevents a command invoked during the operation retaining it.
+pub fn operationLock(ctx: Ctx) !?OperationLock {
+    const p = try ctx.path("/private/var/db/rmxos/softwareupdate.lock");
+    try mkdirs(ctx.a, std.fs.path.dirname(p).?);
+    const fd = c.open(p, c.O_RDWR | c.O_CREAT | c.O_NOFOLLOW | c.O_CLOEXEC, @as(c_uint, 0o644));
+    if (fd < 0) return error.OperationLock;
+    errdefer _ = c.close(fd);
+    if (c.flock(fd, c.LOCK_EX | c.LOCK_NB) != 0) {
+        var buf: [32]u8 = undefined;
+        var n: isize = 0;
+        // The holder writes its PID immediately after acquiring flock.
+        for (0..20) |_| {
+            n = c.pread(fd, &buf, buf.len, 0);
+            if (n > 0) break;
+            _ = c.usleep(1000);
+        }
+        _ = ctx.refuse("operation held by PID {s}", .{if (n > 0) trim(buf[0..@intCast(n)]) else "unknown"});
+        _ = c.close(fd);
+        return null;
+    }
+    const pid = try ctx.fmt("{d}\n", .{c.getpid()});
+    if (c.ftruncate(fd, 0) != 0) return error.OperationLock;
+    try writeAll(fd, pid);
+    if (c.fsync(fd) != 0) return error.OperationLock;
+    return .{ .fd = fd };
+}
 
 pub fn writeAll(fd: c_int, bytes: []const u8) !void {
     var rest = bytes;
@@ -120,6 +156,11 @@ pub fn replace(a: std.mem.Allocator, p: [:0]const u8, bytes: []const u8) !void {
         if (c.fsync(fd) != 0) return error.Sync;
     }
     if (c.rename(tmp, p) != 0) return error.Rename;
+    const dir = try a.dupeZ(u8, std.fs.path.dirname(p) orelse "/");
+    const dfd = c.open(dir, c.O_RDONLY | c.O_DIRECTORY | c.O_CLOEXEC);
+    if (dfd < 0) return error.Sync;
+    defer _ = c.close(dfd);
+    if (c.fsync(dfd) != 0) return error.Sync;
 }
 
 pub fn append(a: std.mem.Allocator, p: [:0]const u8, bytes: []const u8) !void {

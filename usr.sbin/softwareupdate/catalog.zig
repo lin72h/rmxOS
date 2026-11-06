@@ -16,7 +16,19 @@ pub const Update = struct {
     sha256: []const u8,
     size: u64,
 };
-pub const Catalog = struct { format: []const u8, updates: []Update };
+pub const Full = struct {
+    label: []const u8,
+    build: []const u8,
+    snapshot: []const u8,
+    target_guid: []const u8,
+    stream: []const u8,
+    sha256: []const u8,
+    size: u64,
+    pub fn update(self: Full) Update {
+        return .{ .label = self.label, .build = self.build, .snapshot = self.snapshot, .origin_guid = "0", .target_guid = self.target_guid, .stream = self.stream, .sha256 = self.sha256, .size = self.size };
+    }
+};
+pub const Catalog = struct { format: []const u8, updates: []Update, lineage: []const u8 = "main", full: ?Full = null };
 
 pub const state = "/private/var/db/rmxos/softwareupdate";
 
@@ -24,14 +36,19 @@ pub fn parse(a: std.mem.Allocator, data: []const u8) !Catalog {
     const p = std.json.parseFromSlice(Catalog, a, data, .{ .ignore_unknown_fields = true, .allocate = .alloc_always }) catch return error.MalformedCatalog;
     const v = p.value;
     if (!std.mem.eql(u8, v.format, format)) return error.MalformedCatalog;
-    for (v.updates) |u| {
-        if (u.label.len == 0 or u.snapshot.len == 0 or std.mem.indexOfAny(u8, u.snapshot, "/@ \t\n") != null) return error.MalformedCatalog;
-        if (std.mem.indexOfAny(u8, u.stream, "/\\\n") != null or u.stream.len == 0) return error.MalformedCatalog;
-        _ = std.fmt.parseInt(u64, u.origin_guid, 10) catch return error.MalformedCatalog;
-        _ = std.fmt.parseInt(u64, u.target_guid, 10) catch return error.MalformedCatalog;
-        if (u.sha256.len != 64) return error.MalformedCatalog;
-    }
+    if (v.lineage.len == 0 or v.lineage.len > 64) return error.MalformedCatalog;
+    for (v.lineage) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '-' and ch != '_') return error.MalformedCatalog;
+    for (v.updates) |u| try validate(u);
+    if (v.full) |f| try validate(f.update());
     return v;
+}
+
+fn validate(u: Update) !void {
+    if (u.label.len == 0 or u.snapshot.len == 0 or std.mem.indexOfAny(u8, u.snapshot, "/@ \t\n") != null) return error.MalformedCatalog;
+    if (std.mem.indexOfAny(u8, u.stream, "/\\\n") != null or u.stream.len == 0) return error.MalformedCatalog;
+    _ = std.fmt.parseInt(u64, u.origin_guid, 10) catch return error.MalformedCatalog;
+    _ = std.fmt.parseInt(u64, u.target_guid, 10) catch return error.MalformedCatalog;
+    if (u.sha256.len != 64) return error.MalformedCatalog;
 }
 
 pub fn isUrl(s: []const u8) bool {
