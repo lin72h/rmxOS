@@ -169,7 +169,10 @@ fn run(ctx: Ctx, o: Options) !u8 {
         else => {},
     }
     const lock = switch (o.action) {
-        .install, .confirm, .cancel, .rollback, .download, .background, .boot_check, .list => (try sys.operationLock(ctx)) orelse return 1,
+        // After confirm_delay a running command delays the boot check rather
+        // than costing its confirm; bootCheck reads the record again.
+        .boot_check => try sys.operationLock(ctx, true),
+        .install, .confirm, .cancel, .rollback, .download, .background, .list => (try sys.operationLock(ctx, false)) orelse return 1,
         else => null,
     };
     defer if (lock) |held| held.release();

@@ -176,11 +176,19 @@ and the ESP as they were.
 No other ESP file is written.
 .Pp
 Install, confirm, cancel, rollback, downloads, background scans, catalog lists,
-and the boot check hold a nonblocking
+and the boot check hold an exclusive
 .Xr flock 2
 on
 .Pa /private/var/db/rmxos/softwareupdate.lock .
-A concurrent caller exits 1 with one line naming the holder's PID.
+A concurrent caller exits 1 with one line naming the holder's PID, except the
+boot check: after
+.Cm confirm_delay
+it names the holder, waits for the lock and then reads the fallback record
+again, so a
+.Cm cancel
+or
+.Cm rollback
+meanwhile still prevents the confirm.
 The lock file remains; process exit releases the lock, including after a kill.
 Status and history remain available while an operation runs.
 .Sh OPTIONS

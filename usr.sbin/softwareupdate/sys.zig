@@ -70,7 +70,8 @@ pub const OperationLock = struct {
 
 // Keep the inode: unlinking a flock file would permit two different locks.
 // O_CLOEXEC prevents a command invoked during the operation retaining it.
-pub fn operationLock(ctx: Ctx) !?OperationLock {
+// A held lock is refused, or with `wait` (the boot check) waited for.
+pub fn operationLock(ctx: Ctx, wait: bool) !?OperationLock {
     const p = try ctx.path("/private/var/db/rmxos/softwareupdate.lock");
     try mkdirs(ctx.a, std.fs.path.dirname(p).?);
     const fd = c.open(p, c.O_RDWR | c.O_CREAT | c.O_NOFOLLOW | c.O_CLOEXEC, @as(c_uint, 0o644));
@@ -85,9 +86,14 @@ pub fn operationLock(ctx: Ctx) !?OperationLock {
             if (n > 0) break;
             _ = c.usleep(1000);
         }
-        _ = ctx.refuse("operation held by PID {s}", .{if (n > 0) trim(buf[0..@intCast(n)]) else "unknown"});
-        _ = c.close(fd);
-        return null;
+        const holder = if (n > 0) trim(buf[0..@intCast(n)]) else "unknown";
+        if (!wait) {
+            _ = ctx.refuse("operation held by PID {s}", .{holder});
+            _ = c.close(fd);
+            return null;
+        }
+        ctx.out("Waiting for the operation held by PID {s}.\n", .{holder});
+        while (c.flock(fd, c.LOCK_EX) != 0) if (c.__error().* != c.EINTR) return error.OperationLock;
     }
     const pid = try ctx.fmt("{d}\n", .{c.getpid()});
     if (c.ftruncate(fd, 0) != 0) return error.OperationLock;
