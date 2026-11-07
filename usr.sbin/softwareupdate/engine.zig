@@ -135,6 +135,11 @@ pub fn installChoice(ctx: Ctx, running_env: Env, u: catalog.Update, source: []co
     var env = running_env;
     if (readRecord(ctx)) |r| if (std.mem.eql(u8, r.state, "staged"))
         return ctx.refuse("{s}: {s} is already staged for the next boot; nothing received", .{ u.label, r.label });
+    // Only from the boot environment: an unconfirmed one recorded as the
+    // fallback would be where rollback returns.
+    const boot = try bootfs(ctx, env);
+    if (!std.mem.eql(u8, boot, env.running))
+        return ctx.refuse("{s}: running {s} is not the boot environment {s}; softwareupdate confirm, or rollback and restart, first; nothing received", .{ u.label, env.running, boot });
     const written = try get(ctx, "written", env.base);
     if (!std.mem.eql(u8, written, "0"))
         return ctx.refuse("{s}: sealed base {s} changed (written={s}); nothing received", .{ u.label, env.base, written });

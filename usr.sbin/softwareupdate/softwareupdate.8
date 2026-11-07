@@ -56,7 +56,14 @@ An existing lineage gets a generation below
 a new lineage uses its canonical dataset directly.
 .Pp
 .Fl -install
-reads the catalog, refuses with one line and receives nothing when the base
+reads the catalog, refuses with one line and receives nothing when the running
+environment is not the pool's
+.Cm bootfs
+(a first boot waiting for
+.Cm confirm ,
+or one whose boot check failed: confirm it, or
+.Cm rollback
+and restart, first), when the base
 has changed since its newest snapshot
 .Pq Ql written No not 0 ,
 when the update starts from another GUID than that snapshot's, or when the
