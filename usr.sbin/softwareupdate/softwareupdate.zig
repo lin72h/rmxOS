@@ -163,6 +163,9 @@ fn run(ctx: Ctx, o: Options) !u8 {
             return 0;
         },
         .history => return engine.printHistory(ctx),
+        // A staged environment's boot check first waits for confirm_delay,
+        // without the lock.
+        .boot_check => if (try engine.awaitConfirm(ctx)) |rc| return rc,
         else => {},
     }
     const lock = switch (o.action) {

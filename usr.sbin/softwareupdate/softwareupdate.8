@@ -1,4 +1,4 @@
-.Dd November 6, 2026
+.Dd November 7, 2026
 .Dt SOFTWAREUPDATE 8
 .Os
 .Sh NAME
@@ -75,10 +75,31 @@ the system restarts.
 .Pp
 The boot check
 .Pq Ql --boot-check , No run by Ar org.rmxos.softwareupdate.boot-check
-confirms the new environment on its first boot: it sets the pool's
+confirms the new environment on its first boot once the uptime reaches
+.Cm confirm_delay
+and a good-boot check passes: the four Data datasets are mounted, the
+ownership list below holds, and the base's
+.Ql written
+is 0.
+It then refreshes the ESP's loader
+.Pq see Sx ESP ,
+sets the pool's
 .Cm bootfs
-to it, clears the one-boot setting, writes the history row, and applies
-retention.
+to the new environment, clears the one-boot setting, writes the history row,
+and applies retention.
+The check waits without the operation lock:
+.Cm status
+shows the seconds left,
+.Cm rollback
+during the wait prevents the confirm, and a shutdown during the wait does not
+confirm.
+When a check fails nothing is confirmed: the state is
+.Cm boot-check-failed ,
+the failed checks are in the history and
+.Cm status ,
+and
+.Cm bootfs
+is untouched, so the next restart returns to the fallback.
 A boot that does not reach the check boots the previous environment next.
 The update is listed again as not confirmed.
 Installing its label or using
@@ -90,7 +111,8 @@ again, without removing protected environments or snapshots.
 With
 .Fl -no-auto-confirm
 the check waits for
-.Cm confirm ;
+.Cm confirm ,
+which refreshes the ESP's loader too;
 before the restart,
 .Cm cancel
 removes the staged environment and the received snapshot.
@@ -107,7 +129,14 @@ back to the fallback environment.
 shows the installed label, the base snapshot and its GUID,
 .Ql written
 on the base (a nonzero value is reported as a sealed-base change), the boot
-environment, the fallback, the Data datasets and the last history rows.
+environment, the fallback, during the wait the seconds until the boot check,
+a failed check's reasons, the Data datasets and the last history rows.
+.Fl -history Fl -verbose
+shows every history row, with the failed checks of a
+.Cm boot-check-failed
+row and the sha256s of an
+.Cm esp-refreshed
+row.
 .Pp
 Retention keeps the newest
 .Cm retain
@@ -119,6 +148,32 @@ never writes
 .Pa /boot/loader.conf
 or the ESP's
 .Pa loader.env .
+.Ss ESP
+At confirm, before
+.Cm bootfs
+moves, the ESP's loader follows the new root's
+.Pa /boot/loader.efi .
+The ESP is the one mounted msdosfs file system, or else the one
+.Cm efi
+partition
+.Pq Xr gpart 8 ,
+mounted at a temporary directory for the confirm; without an ESP nothing is
+written.
+The loader is
+.Pa efi/freebsd/loader.efi ,
+or else
+.Pa efi/boot/bootx64.efi .
+When its sha256 differs from the root's, the new loader is written to a
+temporary file beside it, synced and checked against the root's sha256, the
+old one is kept beside it with
+.Pa .prev
+appended
+.Pq Pa loader.efi.prev ,
+and the new one is renamed over it.
+Two ESPs, or any failure, refuse the confirm with one line and leave
+.Cm bootfs
+and the ESP as they were.
+No other ESP file is written.
 .Pp
 Install, confirm, cancel, rollback, downloads, background scans, catalog lists,
 and the boot check hold a nonblocking
@@ -156,7 +211,12 @@ are refused with one line.
 .It Pa /etc/defaults/softwareupdate.conf , Pa /etc/softwareupdate.conf
 .Cm catalog_url ,
 .Cm retain
-(default 3).
+(default 3),
+.Cm confirm_delay
+(seconds, 0 to 600, default 600).
+.Cm confirm_delay
+is accepted only when each file present is a regular file owned by root and
+writable only by root.
 .It Pa /private/var/db/rmxos/fallback , Pa /private/var/db/rmxos/history
 The fallback record and the history.
 .It Pa /private/var/db/rmxos/softwareupdate/

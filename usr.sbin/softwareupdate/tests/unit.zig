@@ -3,6 +3,7 @@ const std = @import("std");
 const su = @import("../softwareupdate.zig");
 const catalog = @import("../catalog.zig");
 const engine = @import("../engine.zig");
+const esp = @import("../esp.zig");
 const sys = @import("../sys.zig");
 const t = std.testing;
 
@@ -73,4 +74,19 @@ test "lineage defaults and full stream catalog" {
     try t.expectError(error.MalformedCatalog, catalog.parse(a, bad_stream));
     const bad_guid = try std.mem.replaceOwned(u8, a, full, "18446744073709551615", "18446744073709551616");
     try t.expectError(error.MalformedCatalog, catalog.parse(a, bad_guid));
+}
+
+test "the one efi partition in gpart show -p" {
+    const root = "=>      40  25165744  vtbd0  GPT  (12G)\n        40  25165744  vtbd0p1  freebsd-zfs  (12G)\n";
+    const one = root ++ "\n=>     40  131008  vtbd1  GPT  (64M)\n       40  131008  vtbd1p1  efi  (64M)\n";
+    try t.expectEqual(@as(?[]const u8, null), try esp.efiPartition(root));
+    try t.expectEqualStrings("vtbd1p1", (try esp.efiPartition(one)).?);
+    try t.expectError(error.MultipleEsps, esp.efiPartition(one ++ "    131048  2048  vtbd1p2  efi  (1.0M)\n"));
+    try t.expectError(error.InvalidDevice, esp.efiPartition("  40  2048  ../x  efi  (1.0M)\n"));
+    try t.expectEqual(@as(?[]const u8, null), try esp.efiPartition("  40  2048  -  free  -  (1.0M)\n"));
+}
+
+test "setting lines: last value wins, quotes and comments" {
+    try t.expectEqualStrings("60", catalog.lookup("confirm_delay=600\n# confirm_delay=1\n confirm_delay = \"60\"\n", "confirm_delay").?);
+    try t.expectEqual(@as(?[]const u8, null), catalog.lookup("retain=3\n", "confirm_delay"));
 }

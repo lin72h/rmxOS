@@ -3,6 +3,8 @@
 // Host fixtures set RMXOS_SU_FIXTURE=DIR: Data and configuration paths are
 // read below DIR, the running environment is DIR/running, the pool must be an
 // rmxsu* fixture pool, and a restart writes DIR/rebooted instead of rebooting.
+// The fixture boot happened at the time(3) second in DIR/booted (without it,
+// when the host booted), and only msdosfs mounts below DIR are ESPs.
 const std = @import("std");
 pub const c = @cImport({
     @cInclude("sys/cdefs.h");
@@ -24,6 +26,8 @@ pub const c = @cImport({
     @cInclude("fcntl.h");
     @cInclude("time.h");
     @cInclude("signal.h");
+    @cInclude("errno.h");
+    @cInclude("string.h");
 });
 
 pub const Ctx = struct {
@@ -119,6 +123,22 @@ pub fn read(a: std.mem.Allocator, p: [:0]const u8) ![]const u8 {
     if (fd < 0) return error.Open;
     defer _ = c.close(fd);
     return readFd(a, fd, 64 * 1024 * 1024);
+}
+
+// A setting file: a regular file owned by root and writable by nobody else.
+pub fn readOwned(a: std.mem.Allocator, p: [:0]const u8) ![]const u8 {
+    const fd = c.open(p, c.O_RDONLY | c.O_NOFOLLOW | c.O_CLOEXEC);
+    if (fd < 0) return error.UnsafeSetting;
+    defer _ = c.close(fd);
+    var st: c.struct_stat = undefined;
+    if (c.fstat(fd, &st) != 0 or st.st_mode & c.S_IFMT != c.S_IFREG or st.st_uid != 0 or st.st_mode & 0o022 != 0)
+        return error.UnsafeSetting;
+    return readFd(a, fd, 1024 * 1024);
+}
+
+// The current errno's text.
+pub fn lastError(a: std.mem.Allocator) []const u8 {
+    return a.dupe(u8, std.mem.span(c.strerror(c.__error().*))) catch "error";
 }
 
 pub fn exists(p: [:0]const u8) bool {
@@ -257,6 +277,48 @@ pub fn sha256File(p: [:0]const u8) ![64]u8 {
     var d: [32]u8 = undefined;
     h.final(&d);
     return std.fmt.bytesToHex(d, .lower);
+}
+
+// Seconds since boot.
+pub fn uptime(ctx: Ctx) !u64 {
+    if (ctx.fixture) if (read(ctx.a, try ctx.path("/booted"))) |text| {
+        const booted = std.fmt.parseInt(i64, trim(text), 10) catch return error.Clock;
+        return @intCast(@max(0, c.time(null) - booted));
+    } else |_| {};
+    var t: c.struct_timespec = undefined;
+    if (c.clock_gettime(c.CLOCK_UPTIME, &t) != 0 or t.tv_sec < 0) return error.Clock;
+    return @intCast(t.tv_sec);
+}
+
+// Wait up to `seconds`; true when SIGTERM, SIGINT or SIGHUP (a shutdown)
+// arrives first. The signals are blocked only while waiting.
+pub fn shutdownWithin(seconds: u64) !bool {
+    var set: c.sigset_t = undefined;
+    var old: c.sigset_t = undefined;
+    _ = c.sigemptyset(&set);
+    for ([_]c_int{ c.SIGTERM, c.SIGINT, c.SIGHUP }) |s| _ = c.sigaddset(&set, s);
+    if (c.sigprocmask(c.SIG_BLOCK, &set, &old) != 0) return error.Signal;
+    defer _ = c.sigprocmask(c.SIG_SETMASK, &old, null);
+    const ts = c.struct_timespec{ .tv_sec = @intCast(seconds), .tv_nsec = 0 };
+    return c.sigtimedwait(&set, null, &ts) > 0;
+}
+
+// Mount points of msdosfs file systems.
+pub fn msdosfsMounts(ctx: Ctx) ![]const []const u8 {
+    const n = c.getfsstat(null, 0, c.MNT_NOWAIT);
+    if (n < 0) return error.MountList;
+    const buf = try ctx.a.alloc(c.struct_statfs, @as(usize, @intCast(n)) + 8);
+    const got = c.getfsstat(buf.ptr, @intCast(buf.len * @sizeOf(c.struct_statfs)), c.MNT_NOWAIT);
+    if (got < 0) return error.MountList;
+    var list: std.ArrayList([]const u8) = .empty;
+    for (buf[0..@intCast(got)]) |*s| {
+        if (!std.mem.eql(u8, std.mem.sliceTo(&s.f_fstypename, 0), "msdosfs")) continue;
+        const on = std.mem.sliceTo(&s.f_mntonname, 0);
+        // A host fixture never sees the host's own ESP.
+        if (ctx.fixture and !(std.mem.startsWith(u8, on, ctx.root) and on.len > ctx.root.len and on[ctx.root.len] == '/')) continue;
+        try list.append(ctx.a, try ctx.a.dupe(u8, on));
+    }
+    return list.items;
 }
 
 // The ZFS dataset mounted at / (fixture: DIR/running).

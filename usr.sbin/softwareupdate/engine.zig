@@ -4,6 +4,7 @@
 const std = @import("std");
 const sys = @import("sys.zig");
 const catalog = @import("catalog.zig");
+const Esp = @import("esp.zig").Esp;
 const Ctx = sys.Ctx;
 
 pub const fallback_path = "/private/var/db/rmxos/fallback";
@@ -94,6 +95,8 @@ pub const Record = struct {
     snapshot: []const u8 = "",
     confirm: []const u8 = "auto",
     state: []const u8 = "",
+    // Why the boot check refused to confirm (state boot-check-failed).
+    reason: []const u8 = "",
 };
 pub fn readRecord(ctx: Ctx) ?Record {
     const text = sys.read(ctx.a, ctx.path(fallback_path) catch return null) catch return null;
@@ -103,7 +106,7 @@ pub fn readRecord(ctx: Ctx) ?Record {
         const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
         const k = line[0..eq];
         const v = line[eq + 1 ..];
-        inline for (.{ "environment", "time", "label", "staged", "snapshot", "confirm", "state" }) |f| {
+        inline for (.{ "environment", "time", "label", "staged", "snapshot", "confirm", "state", "reason" }) |f| {
             if (std.mem.eql(u8, k, f)) @field(r, f) = v;
         }
     }
@@ -111,12 +114,16 @@ pub fn readRecord(ctx: Ctx) ?Record {
 }
 fn writeRecord(ctx: Ctx, r: Record) !void {
     try sys.replace(ctx.a, try ctx.path(fallback_path), try ctx.fmt(
-        "environment={s}\ntime={s}\nlabel={s}\nstaged={s}\nsnapshot={s}\nconfirm={s}\nstate={s}\n",
-        .{ r.environment, r.time, r.label, r.staged, r.snapshot, r.confirm, r.state },
+        "environment={s}\ntime={s}\nlabel={s}\nstaged={s}\nsnapshot={s}\nconfirm={s}\nstate={s}\nreason={s}\n",
+        .{ r.environment, r.time, r.label, r.staged, r.snapshot, r.confirm, r.state, r.reason },
     ));
 }
 fn history(ctx: Ctx, action: []const u8, label: []const u8, environment: []const u8) !void {
-    try sys.append(ctx.a, try ctx.path(history_path), try ctx.fmt("{s}\t{s}\t{s}\t{s}\n", .{ try sys.now(ctx.a), action, label, environment }));
+    return historyReason(ctx, action, label, environment, "");
+}
+// A fifth column, when present, says why.
+fn historyReason(ctx: Ctx, action: []const u8, label: []const u8, environment: []const u8, reason: []const u8) !void {
+    try sys.append(ctx.a, try ctx.path(history_path), try ctx.fmt("{s}\t{s}\t{s}\t{s}{s}{s}\n", .{ try sys.now(ctx.a), action, label, environment, if (reason.len > 0) "\t" else "", reason }));
 }
 
 // Refusals before anything is received, one line each.
@@ -315,42 +322,128 @@ fn undoInstall(ctx: Ctx, env: Env, received: []const u8, clone: []const u8, prev
     if (failed) return error.InstallCleanup;
 }
 
+// The ESP's loader is refreshed before bootfs moves; a failed refresh
+// (error.EspRefresh, the reason in sys.failure) leaves both as they were.
 fn confirmRunning(ctx: Ctx, env: Env, r: Record) !u8 {
-    _ = try sys.capture(ctx, &.{ "/sbin/zpool", "set", try ctx.fmt("bootfs={s}", .{env.running}), env.pool });
+    var esp = try Esp.open(ctx);
+    defer esp.close(ctx);
+    const refreshed = try esp.refresh(ctx);
+    _ = sys.capture(ctx, &.{ "/sbin/zpool", "set", try ctx.fmt("bootfs={s}", .{env.running}), env.pool }) catch |err| {
+        if (refreshed) esp.restore(ctx);
+        return err;
+    };
     // The loader consumed the one-boot setting; clear any remainder.
     _ = sys.run(ctx.a, &.{ "/sbin/bectl", "-r", env.root, "activate", "-T" }, null) catch {};
     var n = r;
     n.state = "confirmed";
     try writeRecord(ctx, n);
+    if (refreshed) try historyReason(ctx, "esp-refreshed", r.label, env.running, esp.detail);
     try history(ctx, "installed", r.label, env.running);
     ctx.out("Confirmed {s}: {s} is the boot environment.\n", .{ r.label, env.running });
     return retain(ctx, env);
 }
 
-// Every boot: the first boot of a staged environment confirms it (unless
-// --no-auto-confirm was given); then the ownership list is asserted.
-pub fn bootCheck(ctx: Ctx, env: Env) !u8 {
-    var rc: u8 = 0;
-    if (readRecord(ctx)) |r| {
-        if (std.mem.eql(u8, r.state, "staged")) {
-            if (std.mem.eql(u8, r.staged, env.running)) {
-                if (std.mem.eql(u8, r.confirm, "manual")) {
-                    var n = r;
-                    n.state = "booted";
-                    try writeRecord(ctx, n);
-                    ctx.out("{s} is running; waiting for softwareupdate confirm.\n", .{r.label});
-                } else rc = try confirmRunning(ctx, env, r);
-            } else {
-                var n = r;
-                n.state = "not-confirmed";
-                try writeRecord(ctx, n);
-                try history(ctx, "not-confirmed", r.label, r.staged);
-                ctx.out("{s} did not reach its boot check; {s} is running.\n", .{ r.label, env.running });
-            }
-        }
+pub const max_confirm_delay = 600;
+
+// confirm_delay from softwareupdate.conf (default and at most 600 seconds),
+// read only from setting files owned by root and writable by nobody else;
+// a refusal's reason is in sys.failure.
+pub fn confirmDelay(ctx: Ctx) !u64 {
+    var value: ?[]const u8 = null;
+    for (catalog.settings_files) |f| {
+        const p = try ctx.path(f);
+        if (!sys.exists(p)) continue;
+        const text = sys.readOwned(ctx.a, p) catch |err| {
+            sys.failure = try ctx.fmt("setting file {s} is not a regular file owned by root and writable only by root", .{f});
+            return err;
+        };
+        if (catalog.lookup(text, "confirm_delay")) |v| value = v;
     }
-    if (try ownership(ctx) != 0) rc = 1;
-    return rc;
+    const v = value orelse return max_confirm_delay;
+    for (v) |ch| if (!std.ascii.isDigit(ch)) return delayRefused(ctx, v);
+    const n = std.fmt.parseInt(u64, v, 10) catch return delayRefused(ctx, v);
+    return if (n > max_confirm_delay) delayRefused(ctx, v) else n;
+}
+fn delayRefused(ctx: Ctx, v: []const u8) error{InvalidConfirmDelay} {
+    sys.failure = ctx.fmt("confirm_delay {s} is not 0 to {d} seconds", .{ v, max_confirm_delay }) catch "confirm_delay is out of range";
+    return error.InvalidConfirmDelay;
+}
+
+// Before the boot check takes the lock (status and rollback stay available):
+// a staged environment's first boot waits until uptime reaches confirm_delay.
+// A shutdown meanwhile leaves it staged, so the next boot is the fallback's.
+pub fn awaitConfirm(ctx: Ctx) !?u8 {
+    const r = readRecord(ctx) orelse return null;
+    if (!std.mem.eql(u8, r.state, "staged") or !std.mem.eql(u8, r.confirm, "auto") or !std.mem.eql(u8, r.staged, try sys.running(ctx))) return null;
+    // An unusable setting is refused under the lock.
+    const delay = confirmDelay(ctx) catch return null;
+    var announced = false;
+    while (true) {
+        const up = try sys.uptime(ctx);
+        if (up >= delay) return null;
+        if (!announced) ctx.out("{s}: boot check in {d} s (confirm_delay {d} s)\n", .{ r.label, delay - up, delay });
+        announced = true;
+        if (try sys.shutdownWithin(delay - up)) return ctx.refuse("{s}: shutdown during confirm_delay; not confirmed", .{r.label});
+    }
+}
+
+// The good-boot check before a confirm: the Data datasets mounted, one owner
+// per service and the base unchanged. Null when all pass, else every failure.
+fn health(ctx: Ctx, env: Env) !?[]const u8 {
+    var failed: std.ArrayList(u8) = .empty;
+    for (data_sets) |d| {
+        const mounted = get(ctx, "mounted", try ctx.fmt("{s}/data/{s}", .{ env.pool, d })) catch "missing";
+        if (!std.mem.eql(u8, mounted, "yes"))
+            try failed.appendSlice(ctx.a, try ctx.fmt("; Data {s} {s}", .{ d, if (std.mem.eql(u8, mounted, "missing")) "missing" else "not mounted" }));
+    }
+    if (try ownership(ctx) != 0) try failed.appendSlice(ctx.a, "; ownership check failed");
+    const written = get(ctx, "written", env.base) catch "unknown";
+    if (!std.mem.eql(u8, written, "0")) try failed.appendSlice(ctx.a, try ctx.fmt("; base {s} written={s}", .{ env.base, written }));
+    return if (failed.items.len == 0) null else failed.items[2..];
+}
+
+// No confirm: bootfs is untouched, so the next restart returns to the fallback.
+fn checkFailed(ctx: Ctx, env: Env, r: Record, why: []const u8) !u8 {
+    const reason = try ctx.a.dupe(u8, why);
+    for (reason) |*ch| if (ch.* == '\n' or ch.* == '\r' or ch.* == '\t') {
+        ch.* = ' ';
+    };
+    var n = r;
+    n.state = "boot-check-failed";
+    n.reason = reason;
+    try writeRecord(ctx, n);
+    try historyReason(ctx, "boot-check-failed", r.label, env.running, reason);
+    return ctx.refuse("{s}: boot check failed: {s}; not confirmed, {s} boots next", .{ r.label, reason, bootfs(ctx, env) catch "the fallback" });
+}
+
+// Every boot: the first boot of a staged environment confirms it after
+// confirm_delay and a good-boot check (unless --no-auto-confirm was given);
+// other boots assert the ownership list.
+pub fn bootCheck(ctx: Ctx, env: Env) !u8 {
+    const r = readRecord(ctx) orelse return ownership(ctx);
+    if (!std.mem.eql(u8, r.state, "staged")) return ownership(ctx);
+    if (!std.mem.eql(u8, r.staged, env.running)) {
+        var n = r;
+        n.state = "not-confirmed";
+        try writeRecord(ctx, n);
+        try history(ctx, "not-confirmed", r.label, r.staged);
+        ctx.out("{s} did not reach its boot check; {s} is running.\n", .{ r.label, env.running });
+        return ownership(ctx);
+    }
+    if (std.mem.eql(u8, r.confirm, "manual")) {
+        var n = r;
+        n.state = "booted";
+        try writeRecord(ctx, n);
+        ctx.out("{s} is running; waiting for softwareupdate confirm.\n", .{r.label});
+        return ownership(ctx);
+    }
+    const delay = confirmDelay(ctx) catch return checkFailed(ctx, env, r, sys.failure);
+    if (try sys.uptime(ctx) < delay) return ctx.refuse("{s}: boot check before confirm_delay; not confirmed", .{r.label});
+    if (try health(ctx, env)) |why| return checkFailed(ctx, env, r, why);
+    return confirmRunning(ctx, env, r) catch |err| switch (err) {
+        error.EspRefresh => checkFailed(ctx, env, r, try ctx.fmt("ESP loader refresh: {s}", .{sys.failure})),
+        else => err,
+    };
 }
 
 pub fn confirm(ctx: Ctx, env: Env) !u8 {
@@ -358,7 +451,10 @@ pub fn confirm(ctx: Ctx, env: Env) !u8 {
     if (!std.mem.eql(u8, r.confirm, "manual")) return ctx.refuse("confirm is only for an install made with --no-auto-confirm", .{});
     if (!std.mem.eql(u8, r.state, "booted") or !std.mem.eql(u8, r.staged, env.running))
         return ctx.refuse("{s} is not the running environment; restart into it before confirm", .{r.label});
-    return confirmRunning(ctx, env, r);
+    return confirmRunning(ctx, env, r) catch |err| switch (err) {
+        error.EspRefresh => ctx.refuse("{s}: ESP loader refresh: {s}; not confirmed", .{ r.label, sys.failure }),
+        else => err,
+    };
 }
 
 pub fn cancel(ctx: Ctx, env: Env) !u8 {
@@ -480,6 +576,13 @@ pub fn status(ctx: Ctx, env: Env) !u8 {
     ctx.out("Boot environment: {s}\n", .{bootfs(ctx, env) catch "-"});
     if (readRecord(ctx)) |r| {
         ctx.out("Fallback: {s} (from {s}, {s}, {s})\n", .{ r.environment, r.label, r.time, r.state });
+        if (std.mem.eql(u8, r.state, "staged") and std.mem.eql(u8, r.staged, env.running) and std.mem.eql(u8, r.confirm, "auto")) {
+            if (confirmDelay(ctx)) |delay| {
+                const up = sys.uptime(ctx) catch 0;
+                ctx.out("Boot check: confirms {s} in {d} s (confirm_delay {d} s, uptime {d} s)\n", .{ r.label, delay -| up, delay, up });
+            } else |_| ctx.out("Boot check: refuses {s}: {s}\n", .{ r.label, sys.failure });
+        }
+        if (std.mem.eql(u8, r.state, "boot-check-failed")) ctx.out("Boot check: failed for {s}: {s}\n", .{ r.label, r.reason });
     } else ctx.out("Fallback: none\n", .{});
     for (data_sets) |d| {
         const ds = try ctx.fmt("{s}/data/{s}", .{ env.pool, d });
@@ -500,8 +603,9 @@ pub fn printHistory(ctx: Ctx) !u8 {
         const action = cols.next() orelse continue;
         const label = cols.next() orelse continue;
         const e = cols.next() orelse "";
+        const reason = cols.rest();
         if (ctx.verbose) {
-            ctx.out("{s: <40} {s: <22} {s: <14} {s}\n", .{ try ctx.fmt("rmxOS {s}", .{label}), time, action, e });
+            ctx.out("{s: <40} {s: <22} {s: <14} {s}{s}{s}\n", .{ try ctx.fmt("rmxOS {s}", .{label}), time, action, e, if (reason.len > 0) "  " else "", reason });
         } else if (std.mem.eql(u8, action, "installed")) ctx.out("{s: <40} {s}\n", .{ try ctx.fmt("rmxOS {s}", .{label}), time });
     }
     return 0;

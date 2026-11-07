@@ -64,18 +64,27 @@ pub fn location(ctx: Ctx, explicit: ?[]const u8) ![]const u8 {
     return error.NoCatalog;
 }
 
+pub const settings_files = [_][]const u8{ "/etc/defaults/softwareupdate.conf", "/etc/softwareupdate.conf" };
+
 pub fn setting(ctx: Ctx, key: []const u8) ?[]const u8 {
     var value: ?[]const u8 = null;
-    for ([_][]const u8{ "/etc/defaults/softwareupdate.conf", "/etc/softwareupdate.conf" }) |f| {
+    for (settings_files) |f| {
         const text = sys.read(ctx.a, ctx.path(f) catch return value) catch continue;
-        var lines = std.mem.splitScalar(u8, text, '\n');
-        while (lines.next()) |raw| {
-            const line = sys.trim(raw);
-            if (line.len == 0 or line[0] == '#') continue;
-            const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
-            if (!std.mem.eql(u8, sys.trim(line[0..eq]), key)) continue;
-            value = std.mem.trim(u8, sys.trim(line[eq + 1 ..]), "\"");
-        }
+        if (lookup(text, key)) |v| value = v;
+    }
+    return value;
+}
+
+// The value of the last key=value line for `key`, unquoted.
+pub fn lookup(text: []const u8, key: []const u8) ?[]const u8 {
+    var value: ?[]const u8 = null;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |raw| {
+        const line = sys.trim(raw);
+        if (line.len == 0 or line[0] == '#') continue;
+        const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        if (!std.mem.eql(u8, sys.trim(line[0..eq]), key)) continue;
+        value = std.mem.trim(u8, sys.trim(line[eq + 1 ..]), "\"");
     }
     return value;
 }
