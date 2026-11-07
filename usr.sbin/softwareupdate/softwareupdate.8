@@ -69,6 +69,15 @@ records the running environment, received snapshot, time and label durably in
 Only then does it activate the clone for one boot
 .Pq Ql bectl activate -t .
 A staging failure undoes the record and label as well as the receive.
+An install cut off after its receive and before its clone leaves the received
+snapshot behind.
+When exactly one snapshot of that name in the lineage has the update's target
+GUID and neither the running nor the fallback environment uses it,
+.Fl -list
+offers the update again and
+.Fl -install
+stages from that snapshot without reading a stream; two such snapshots are
+refused as ambiguous, and a staging failure keeps the snapshot.
 With
 .Fl -restart
 the system restarts.

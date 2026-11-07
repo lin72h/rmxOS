@@ -139,7 +139,7 @@ fn choose(ctx: Ctx, env: engine.Env, c: catalog.Catalog, label: ?[]const u8) !?C
         for (c.updates) |u| {
             if (label) |l| if (!eq(l, u.label)) continue;
             if (eq(u.origin_guid, h.guid)) return .{ .update = u };
-            if ((label != null or eq(u.target_guid, h.guid)) and try engine.retryAvailable(ctx, env, u))
+            if ((label != null or eq(u.target_guid, h.guid)) and try engine.retryAvailable(ctx, env, u, c.lineage))
                 return .{ .update = u, .retry = true };
         }
     }
@@ -147,7 +147,7 @@ fn choose(ctx: Ctx, env: engine.Env, c: catalog.Catalog, label: ?[]const u8) !?C
         if (label == null or eq(label.?, f.label)) {
             const u = f.update();
             if (!same or !eq(try engine.runningGuid(ctx, env), u.target_guid))
-                return .{ .update = u, .full = true, .retry = try engine.retryAvailable(ctx, env, u) };
+                return .{ .update = u, .full = true, .retry = try engine.retryAvailable(ctx, env, u, c.lineage) };
         }
     }
     if (label) |l| if (same) {

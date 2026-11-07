@@ -139,6 +139,7 @@ pub fn installChoice(ctx: Ctx, running_env: Env, u: catalog.Update, source: []co
     if (!std.mem.eql(u8, written, "0"))
         return ctx.refuse("{s}: sealed base {s} changed (written={s}); nothing received", .{ u.label, env.base, written });
     if (try retryExisting(ctx, env, u, manual, lineage)) |rc| return rc;
+    if (try resumeReceived(ctx, env, u, manual, lineage)) |rc| return rc;
     const h: Snapshot = if (full) .{ .name = "", .guid = "0" } else try head(ctx, env);
     if (!std.mem.eql(u8, h.guid, u.origin_guid))
         return ctx.refuse("{s}: update starts from GUID {s}, installed base {s} is GUID {s}; nothing received", .{ u.label, u.origin_guid, h.name, h.guid });
@@ -191,12 +192,63 @@ pub fn runningGuid(ctx: Ctx, env: Env) ![]const u8 {
     return get(ctx, "guid", try get(ctx, "origin", env.running));
 }
 
-pub fn retryAvailable(ctx: Ctx, env: Env, u: catalog.Update) !bool {
+pub fn retryAvailable(ctx: Ctx, env: Env, u: catalog.Update, lineage: []const u8) !bool {
     const clone = try ctx.fmt("{s}/{s}", .{ env.root, u.snapshot });
     if (std.mem.eql(u8, clone, env.running)) return false;
     if (readRecord(ctx)) |r| if (std.mem.eql(u8, r.state, "staged")) return false;
     const all = try zfs(ctx, &.{ "list", "-H", "-o", "name", "-r", env.root });
-    return hasWord(all, clone);
+    return hasWord(all, clone) or try leftover(ctx, env, u, lineage) != .none;
+}
+
+const Leftover = union(enum) { none, ambiguous, one: []const u8 };
+// An install cut off after its receive and before its clone: the one
+// snapshot @<snapshot> in the lineage with the update's target GUID, used by
+// neither the running nor the fallback environment. (Without a clone of that
+// name; a clone is retryExisting's.)
+fn leftover(ctx: Ctx, env: Env, u: catalog.Update, lineage: []const u8) !Leftover {
+    const text = try zfs(ctx, &.{ "list", "-H", "-p", "-t", "snapshot", "-o", "name,guid", "-r", try ctx.fmt("{s}/base", .{env.pool}) });
+    const running_origin = try get(ctx, "origin", env.running);
+    const fallback = if (readRecord(ctx)) |r| r.environment else "";
+    const fallback_origin = if (fallback.len > 0) get(ctx, "origin", fallback) catch "" else "";
+    const suffix = try ctx.fmt("@{s}", .{u.snapshot});
+    var found: ?[]const u8 = null;
+    var count: usize = 0;
+    var lines = std.mem.splitScalar(u8, sys.trim(text), '\n');
+    while (lines.next()) |line| {
+        var cols = std.mem.splitScalar(u8, line, '\t');
+        const name = cols.next() orelse continue;
+        const guid = cols.next() orelse continue;
+        if (!std.mem.endsWith(u8, name, suffix) or !std.mem.eql(u8, guid, u.target_guid) or !try inLineage(ctx, env, name, lineage)) continue;
+        if (std.mem.eql(u8, name, running_origin) or std.mem.eql(u8, name, fallback_origin)) return .none;
+        count += 1;
+        found = name;
+    }
+    return if (count > 1) .ambiguous else if (found) |f| .{ .one = f } else .none;
+}
+
+// Stage from a leftover receive: no stream is read and nothing received. A
+// staging failure undoes only what this attempt made; the snapshot stays.
+fn resumeReceived(ctx: Ctx, env: Env, u: catalog.Update, manual: bool, lineage: []const u8) !?u8 {
+    const snapshot = switch (try leftover(ctx, env, u, lineage)) {
+        .none => return null,
+        .ambiguous => return ctx.refuse("{s}: ambiguous received snapshots; nothing changed", .{u.label}),
+        .one => |name| name,
+    };
+    const clone = try ctx.fmt("{s}/{s}", .{ env.root, u.snapshot });
+    const rp = try ctx.path(fallback_path);
+    const old = if (sys.exists(rp)) try sys.read(ctx.a, rp) else null;
+    const hist_size = sys.size(try ctx.path(history_path));
+    var made = false;
+    var activated = false;
+    var recorded = false;
+    stage(ctx, env, u, snapshot, clone, manual, true, &made, &activated, &recorded) catch |err| {
+        const cause = sys.failure;
+        undoInstall(ctx, env, "", clone, "", made, activated, recorded, old, hist_size) catch |cleanup_err|
+            return ctx.refuse("{s}: {s} {s}; recovery incomplete: {s}", .{ u.label, @errorName(err), cause, @errorName(cleanup_err) });
+        return ctx.refuse("{s}: {s} {s}; resume undone, {s} kept", .{ u.label, @errorName(err), cause, snapshot });
+    };
+    ctx.out("Resumed {s} from {s} into {s}; it boots once on the next restart.\n", .{ u.label, snapshot, clone });
+    return 0;
 }
 
 fn inLineage(ctx: Ctx, env: Env, snapshot: []const u8, lineage: []const u8) !bool {
