@@ -115,8 +115,13 @@ pub const Esp = struct {
 };
 
 // The provider of the one efi partition in `gpart show -p` output, if any.
+// A GEOM label provider (diskid/DISK-..., gpt/...) names a disk that is
+// listed under its device name too, so label providers count only when no
+// efi partition is listed under a device name.
 pub fn efiPartition(text: []const u8) error{ MultipleEsps, InvalidDevice }!?[]const u8 {
-    var found: ?[]const u8 = null;
+    var device: ?[]const u8 = null;
+    var label: ?[]const u8 = null;
+    var labels: usize = 0;
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |line| {
         var f = std.mem.tokenizeAny(u8, line, " \t\r");
@@ -125,11 +130,18 @@ pub fn efiPartition(text: []const u8) error{ MultipleEsps, InvalidDevice }!?[]co
         _ = f.next() orelse continue;
         const provider = f.next() orelse continue;
         if (!std.mem.eql(u8, f.next() orelse "", "efi")) continue;
-        if (found != null) return error.MultipleEsps;
-        for (provider) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '_' and ch != '.') return error.InvalidDevice;
-        found = provider;
+        if (provider[0] == '/' or std.mem.indexOf(u8, provider, "..") != null) return error.InvalidDevice;
+        for (provider) |ch| if (!std.ascii.isAlphanumeric(ch) and std.mem.indexOfScalar(u8, "_.-/", ch) == null) return error.InvalidDevice;
+        if (std.mem.indexOfScalar(u8, provider, '/') != null) {
+            labels += 1;
+            label = provider;
+        } else {
+            if (device != null) return error.MultipleEsps;
+            device = provider;
+        }
     }
-    return found;
+    if (device == null and labels > 1) return error.MultipleEsps;
+    return device orelse label;
 }
 
 fn digest(bytes: []const u8) [64]u8 {

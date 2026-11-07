@@ -159,6 +159,9 @@ partition
 .Pq Xr gpart 8 ,
 mounted at a temporary directory for the confirm; without an ESP nothing is
 written.
+A partition listed under a GEOM label
+.Pq Pa diskid/ ... , Pa gpt/ ...
+as well as under its device name counts once.
 The loader is
 .Pa efi/freebsd/loader.efi ,
 or else

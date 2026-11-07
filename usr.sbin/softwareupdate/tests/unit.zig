@@ -84,6 +84,11 @@ test "the one efi partition in gpart show -p" {
     try t.expectError(error.MultipleEsps, esp.efiPartition(one ++ "    131048  2048  vtbd1p2  efi  (1.0M)\n"));
     try t.expectError(error.InvalidDevice, esp.efiPartition("  40  2048  ../x  efi  (1.0M)\n"));
     try t.expectEqual(@as(?[]const u8, null), try esp.efiPartition("  40  2048  -  free  -  (1.0M)\n"));
+    // The guest's kern.geom.label.disk_ident lists the same ESP twice.
+    const diskid = "=>  34  131072  diskid/DISK-BHYVE-6A2B-0E1C-4F01  GPT  (64M)\n  34  131072  diskid/DISK-BHYVE-6A2B-0E1C-4F01p1  efi  (64M)\n";
+    try t.expectEqualStrings("vtbd1p1", (try esp.efiPartition(one ++ diskid)).?);
+    try t.expectEqualStrings("diskid/DISK-BHYVE-6A2B-0E1C-4F01p1", (try esp.efiPartition(root ++ diskid)).?);
+    try t.expectError(error.MultipleEsps, esp.efiPartition(diskid ++ "  34  131072  gpt/efiboot1  efi  (64M)\n"));
 }
 
 test "setting lines: last value wins, quotes and comments" {
