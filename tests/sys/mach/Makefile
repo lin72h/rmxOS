@@ -20,6 +20,11 @@ SCRIPTS+= mach_build_options_test
 mach_build_options_test: ${.CURDIR}/mach_build_options.zig
 	${ZIG} build-exe ${.ALLSRC} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc \
 	    --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -femit-bin=${.TARGET}
+OSX_SO?= ${SYSROOT}/usr/lib/libosxsupport.so.5
+SCRIPTS+= mach_proc_info_contract_test
+mach_proc_info_contract_test: ${.CURDIR}/mach_proc_info_contract.zig
+	${ZIG} build-exe ${.ALLSRC} ${OSX_SO} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc -lpthread \
+	    --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -femit-bin=${.TARGET}
 SCRIPTS+= mach_exec_workqueue_test
 mach_exec_workqueue_test: ${.CURDIR}/mach_exec_workqueue.zig
 	${ZIG} build-exe ${.ALLSRC} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc \

@@ -120,8 +120,11 @@ proc_listpids(uint32_t type, uint32_t flavor, void *ubuffer, uint32_t buffersize
 	ptr = buf;
 	if (type == PROC_PGRP_ONLY) {
 		count = 0;
+		/* pgfind() needs proctree_lock; members lock after the group. */
+		sx_slock(&proctree_lock);
 		pgrpp = pgfind(flavor);
 		if (pgrpp == NULL) {
+			sx_sunlock(&proctree_lock);
 			free(buf, M_DEVBUF);
 			return (ENOENT);
 		}
@@ -129,16 +132,31 @@ proc_listpids(uint32_t type, uint32_t flavor, void *ubuffer, uint32_t buffersize
 		LIST_FOREACH(p, list, p_pglist) {
 			if (count == numpids)
 				break;
-			*ptr++ = p->p_pid;
-			count++;
+			if (p->p_state == PRS_NEW)
+				continue;
+			PROC_LOCK(p);
+			if (p_cansee(td, p) == 0) {
+				*ptr++ = p->p_pid;
+				count++;
+			}
+			PROC_UNLOCK(p);
 		}
 		PGRP_UNLOCK(pgrpp);
+		sx_sunlock(&proctree_lock);
 		goto copyout;
 	}
 
 	list = &allproc;
 	sx_slock(&allproc_lock);
 	LIST_FOREACH(p, list, p_list) {
+		if (p->p_state == PRS_NEW)
+			continue;
+		/* The credential and parent are read under the process lock. */
+		PROC_LOCK(p);
+		if (p_cansee(td, p) != 0) {
+			PROC_UNLOCK(p);
+			continue;
+		}
 		incr = 0;
 		switch (type) {
 		case PROC_ALL_PIDS:
@@ -151,23 +169,21 @@ proc_listpids(uint32_t type, uint32_t flavor, void *ubuffer, uint32_t buffersize
 				incr = 1;
 			break;
 		case PROC_UID_ONLY:
-			if (p->p_ucred != NULL) {
-				uid = p->p_ucred->cr_uid;
-				if (uid == flavor)
-					incr = 1;
-			}
+			uid = p->p_ucred->cr_uid;
+			if (uid == flavor)
+				incr = 1;
 			break;
 		case PROC_RUID_ONLY:
-			if (p->p_ucred != NULL) {
-				uid = p->p_ucred->cr_ruid;
-				if (uid == flavor)
-					incr = 1;
-			}
+			uid = p->p_ucred->cr_ruid;
+			if (uid == flavor)
+				incr = 1;
 			break;
 		default:
+			PROC_UNLOCK(p);
 			err = EINVAL;
 			goto done;
 		}
+		PROC_UNLOCK(p);
 		if (incr) {
 			*ptr++ = p->p_pid;
 			count++;
@@ -191,15 +207,22 @@ copyout:
 	return (err);
 }
 
+/*
+ * As fill_kinfo_proc_pgrp(): the caller holds proctree_lock and the
+ * process lock, so the group needs no lock of its own and the session
+ * lock follows the process lock.
+ */
 static int
 proc_pidbsdinfo(struct proc *p, struct proc_bsdinfo * pbsd, int zombie)
 {
-	register struct tty *tp;
+	struct tty *tp = NULL;
 	struct  session *sessionp = NULL;
 	struct pgrp * pg;
 	struct ucred *cred;
 	struct filedesc *fdp;
 
+	sx_assert(&proctree_lock, SA_LOCKED);
+	PROC_LOCK_ASSERT(p, MA_OWNED);
 	pg = p->p_pgrp;
 	if (pg)
 		sessionp = pg->pg_session;
@@ -250,10 +273,13 @@ proc_pidbsdinfo(struct proc *p, struct proc_bsdinfo * pbsd, int zombie)
 		pbsd->pbi_flags |= PROC_FLAG_EXEC;
 
 	if (sessionp != NULL) {
+		SESS_LOCK(sessionp);
 		if (p == sessionp->s_leader)
 			pbsd->pbi_flags |= PROC_FLAG_SLEADER;
 		if (sessionp->s_ttyvp)
 			pbsd->pbi_flags |= PROC_FLAG_CTTY;
+		tp = sessionp->s_ttyp;
+		SESS_UNLOCK(sessionp);
 	}
 		
 	/* The process lock keeps a non-NULL snapshot alive during exit. */
@@ -263,18 +289,16 @@ proc_pidbsdinfo(struct proc *p, struct proc_bsdinfo * pbsd, int zombie)
 	
 	pbsd->e_tdev = (uint32_t)NODEV;
 	if (pg != NULL) {
-		PGRP_LOCK(pg);
 		pbsd->pbi_pgid = pg->pg_id;
 		pbsd->pbi_pjobc = pgrp_calc_jobc(pg);
-		PGRP_UNLOCK(pg);
-		if ((p->p_flag & P_CONTROLT) && (sessionp != NULL) && (tp = sessionp->s_ttyp)) {
+		if ((p->p_flag & P_CONTROLT) && tp != NULL) {
 #ifdef notyet
 			pbsd->e_tdev = tp->t_dev;
 #endif
 			if (tp->t_pgrp)
 				pbsd->e_tpgid = tp->t_pgrp->pg_id;
 		}
-	} 
+	}
 	return(0);
 }
 
@@ -398,9 +422,17 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, void *buffer, uint32_t  buffersi
 		if (arg)
 			findzomb = 1;
 	}
+	/* As KERN_PROC_PID: proctree_lock, then the process, then p_cansee. */
+	sx_slock(&proctree_lock);
 	p = findzomb ? pfind_any(pid) : pfind(pid);
 	if (p == NULL) {
+		sx_sunlock(&proctree_lock);
 		err = ESRCH;
+		goto done;
+	}
+	if ((err = p_cansee(curthread, p)) != 0) {
+		PROC_UNLOCK(p);
+		sx_sunlock(&proctree_lock);
 		goto done;
 	}
 	if (p->p_state == PRS_ZOMBIE)
@@ -450,6 +482,7 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, void *buffer, uint32_t  buffersi
 		err = ENOTSUP;
 	}
 	PROC_UNLOCK(p);
+	sx_sunlock(&proctree_lock);
 	if (err == 0)
 		err = copyout(kbuf, buffer, size);
 	if (err == 0)
