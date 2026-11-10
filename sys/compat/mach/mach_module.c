@@ -59,6 +59,32 @@ SYSCTL_UINT(_mach, OID_AUTO, current_task_port_name, CTLFLAG_RWTUN,
     &mach_current_task_port_name, 0,
     "current task Mach port name targeted by mach.current_task_port_status");
 
+/*
+ * Report the kernel options this module was compiled with, so a test can
+ * compare them with the running kernel's kern.features.
+ */
+#ifdef INVARIANTS
+#define	MACH_BUILD_INVARIANTS	1
+#else
+#define	MACH_BUILD_INVARIANTS	0
+#endif
+#ifdef WITNESS
+#define	MACH_BUILD_WITNESS	1
+#else
+#define	MACH_BUILD_WITNESS	0
+#endif
+
+static SYSCTL_NODE(_kern, OID_AUTO, mach, CTLFLAG_RD | CTLFLAG_MPSAFE, 0,
+    "Mach compatibility module");
+
+SYSCTL_INT(_kern_mach, OID_AUTO, build_invariants, CTLFLAG_RD,
+    SYSCTL_NULL_INT_PTR, MACH_BUILD_INVARIANTS,
+    "mach.ko was compiled with INVARIANTS");
+
+SYSCTL_INT(_kern_mach, OID_AUTO, build_witness, CTLFLAG_RD,
+    SYSCTL_NULL_INT_PTR, MACH_BUILD_WITNESS,
+    "mach.ko was compiled with WITNESS");
+
 static int
 sysctl_mach_current_task_space_stats(SYSCTL_HANDLER_ARGS)
 {
