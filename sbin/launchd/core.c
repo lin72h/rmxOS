@@ -52,7 +52,6 @@ void op484_drain_end(unsigned);
 #include <sys/un.h>
 #include <sys/reboot.h>
 #include <sys/wait.h>
-#include <sys/procctl.h>
 #include <sys/sysctl.h>
 #include <sys/sockio.h>
 #include <sys/time.h>
@@ -4478,9 +4477,8 @@ job_callback(void *obj, struct kevent *kev)
 	switch (kev->filter) {
 	case EVFILT_PROC:
 		job_callback_proc(j, kev);
-		/* An anonymous job does not wait for a child. If the SIGCHLD
-		 * callback ran first, its PID was still owned then. Revisit it now
-		 * that the event path has retired that ownership. */
+		/* A SIGCHLD drain may have deferred to this job's NOTE_EXIT.
+		 * Continue after its own event path has consumed the status. */
 		if (pid1_magic)
 			jobmgr_reap_children(root_jobmgr);
 		return;
@@ -7296,61 +7294,38 @@ jobmgr_reap_pid(jobmgr_t jm, pid_t pid)
 	jobmgr_log(jm, LOG_DEBUG, "Reaping PID %d", pid);	
 }
 
-/* Run on the event thread: job ownership and EVFILT_PROC callbacks are
- * serialized here. A waitpid(-1, WNOWAIT) loop cannot pass a job-owned zombie.
- * Enumerate direct children instead, leaving every job's status for job_reap. */
+/* Run only on the event thread, serialized with job ownership and job_reap.
+ * NOTE_EXIT is queued before SIGCHLD. If a managed child is first, leave its
+ * status for that callback: job_callback resumes this drain after job_reap.
+ * Anonymous jobs never consume an exit status and do not prevent collection.
+ * No helper sleeps or process-tree snapshots are needed. */
 void
 jobmgr_reap_children(jobmgr_t jm)
 {
-	struct procctl_reaper_status status;
-	struct procctl_reaper_pids pids;
-	struct procctl_reaper_pidinfo *children;
-	u_int count, i, flags;
-	bool reaped;
-	pid_t result;
+	pid_t pid, result;
 
 	if (jm == NULL)
 		return;
-	do {
-		memset(&status, 0, sizeof(status));
-		if (procctl(P_PID, getpid(), PROC_REAP_STATUS, &status) == -1) {
-			(void)jobmgr_assumes_zero(jm, errno);
-			return;
-		}
-		count = status.rs_descendants;
-		if (count == 0)
-			return;
-		/* Leave room for arrivals between STATUS and GETPIDS. A valid last
-		 * slot means the snapshot may be truncated and must be retried. */
-		count += 16;
-		children = calloc(count, sizeof(*children));
-		if (!jobmgr_assumes(jm, children != NULL))
-			return;
-		memset(&pids, 0, sizeof(pids));
-		pids.rp_count = count;
-		pids.rp_pids = children;
-		if (procctl(P_PID, getpid(), PROC_REAP_GETPIDS, &pids) == -1) {
-			(void)jobmgr_assumes_zero(jm, errno);
-			free(children);
-			return;
-		}
-		reaped = (children[count - 1].pi_flags & REAPER_PIDINFO_VALID) != 0;
-		for (i = 0; i < count; i++) {
-			flags = REAPER_PIDINFO_VALID | REAPER_PIDINFO_CHILD |
-			    REAPER_PIDINFO_ZOMBIE;
-			if ((children[i].pi_flags & flags) != flags ||
-			    jobmgr_find_by_pid_deep(jm, children[i].pi_pid, true) != NULL)
-				continue;
-			do {
-				result = waitpid(children[i].pi_pid, NULL, WNOHANG);
-			} while (result == -1 && errno == EINTR);
-			if (result > 0)
-				reaped = true;
-			else if (result == -1 && errno != ECHILD)
+	for (;;) {
+		do {
+			pid = waitpid(-1, NULL, WNOWAIT | WNOHANG);
+		} while (pid == -1 && errno == EINTR);
+		if (pid <= 0) {
+			if (pid == -1 && errno != ECHILD)
 				(void)jobmgr_assumes_zero(jm, errno);
+			return;
 		}
-		free(children);
-	} while (reaped);
+		if (jobmgr_find_by_pid_deep(jm, pid, false) != NULL)
+			return;
+		do {
+			result = waitpid(pid, NULL, WNOHANG);
+		} while (result == -1 && errno == EINTR);
+		if (result <= 0) {
+			if (result == -1 && errno != ECHILD)
+				(void)jobmgr_assumes_zero(jm, errno);
+			return;
+		}
+	}
 }
 
 struct machservice *

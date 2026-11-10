@@ -155,7 +155,6 @@ fn orphanReap(_: [*c]const c.atf_tc_t) callconv(.c) void {
     _ = c.snprintf(&label, label.len, "org.rmxos.orphan-reap.%d", c.getpid());
     _ = c.snprintf(&gatepath, gatepath.len, "/tmp/orphan-reap-%d.gate", c.getpid());
     _ = c.unlink(&gatepath);
-    const running = client("submit", &label, &gatepath);
 
     var gate: [2]c_int = undefined;
     var ready: [2]c_int = undefined;
@@ -198,6 +197,9 @@ fn orphanReap(_: [*c]const c.atf_tc_t) callconv(.c) void {
         bytes += @intCast(n);
     }
     _ = c.close(ready[0]);
+    // Insert the managed child after all adoptions, so it can be the first
+    // waitable child. Its NOTE_EXIT must resume a deferred orphan drain.
+    const running = client("submit", &label, &gatepath);
     _ = c.printf("orphan_reap adopted=%d ordinary_pid=%lld setup_ms=%lld\n", @as(c_int, total), running.pid, now() - setup_start);
     const start = now();
     // Ordinary job and all strangers can exit beside one another.

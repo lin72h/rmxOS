@@ -123,7 +123,12 @@ fn ports(pid: c_int) usize {
     var mib = [_]c_int{ c.CTL_KERN, c.KERN_PROC, c.KERN_PROC_FILEDESC, pid };
     var bytes: [128 * 1024]u8 = undefined;
     var length: usize = bytes.len;
-    check(c.sysctl(&mib, mib.len, &bytes, &length, null, 0) == 0, "port inventory");
+    if (c.sysctl(&mib, mib.len, &bytes, &length, null, 0) != 0) {
+        const err = c.__error().*;
+        var required: usize = 0;
+        const sized = c.sysctl(&mib, mib.len, null, &required, null, 0);
+        c.atf_tc_fail("port inventory pid=%d errno=%d capacity=%zu returned=%zu sizing_rc=%d required=%zu", pid, err, bytes.len, length, sized, required);
+    }
     return inventory.countPorts(bytes[0..length]) catch c.atf_tc_fail("invalid port records");
 }
 fn sameMaps(before: Maps, after: Maps, label: [*:0]const u8) void {
