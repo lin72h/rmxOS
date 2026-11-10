@@ -149,6 +149,7 @@ static const int init_compat_signals[] = {
 	SIGEMT,	// Reroot through static rescue init
 	SIGTSTP,	// Stop further logins
 	SIGHUP,		// Resume logins after an aborted reboot
+	SIGCHLD,	// Collect children not owned by a job
 };
 
 static const int sigigns[] = { SIGHUP, SIGPIPE, SIGALRM,
@@ -275,7 +276,8 @@ launchd_runtime_init(void)
 	os_assert_zero(launchd_runtime_create_helper(&kqueue_demand_thread,
 	    kqueue_demand_loop));
 
-	os_assert_zero(launchd_runtime_create_helper(&waitpid_thread, waitpid_loop));
+	if (!pid1_magic)
+		os_assert_zero(launchd_runtime_create_helper(&waitpid_thread, waitpid_loop));
 
 #ifdef notyet
 	(void)posix_assumes_zero(sysctlbyname("vfs.generic.noremotehang", NULL, NULL, &p, sizeof(p)));
@@ -362,7 +364,8 @@ launchd_runtime_shutdown(void)
 	error = pthread_mutex_unlock(&helper_lock);
 	os_assert_zero(error);
 	os_assert_zero(pthread_join(kqueue_demand_thread, NULL));
-	os_assert_zero(pthread_join(waitpid_thread, NULL));
+	if (!pid1_magic)
+		os_assert_zero(pthread_join(waitpid_thread, NULL));
 	launchd_stop_update_thread();
 }
 
@@ -371,6 +374,9 @@ static void
 init_compat_callback(void *unused __unused, struct kevent *event)
 {
 	switch (event->ident) {
+	case SIGCHLD:
+		jobmgr_reap_children(root_jobmgr);
+		break;
 	case SIGUSR1:
 		launchd_request_reboot(RB_HALT);
 		break;
@@ -409,7 +415,9 @@ launchd_runtime_init2(void)
 	}
 	if (pid1_magic) {
 		for (i = 0; i < (sizeof(init_compat_signals) / sizeof(int)); i++) {
-			(void)posix_assumes_zero(signal(init_compat_signals[i], SIG_IGN));
+			/* Explicit SIG_IGN would discard job exit status on FreeBSD. */
+			(void)posix_assumes_zero(signal(init_compat_signals[i],
+			    init_compat_signals[i] == SIGCHLD ? SIG_DFL : SIG_IGN));
 			(void)posix_assumes_zero(kevent_mod(init_compat_signals[i],
 			    EVFILT_SIGNAL, EV_ADD, 0, 0, &init_compat_kqueue));
 		}

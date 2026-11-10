@@ -1,6 +1,7 @@
 TESTSDIR= ${TESTSBASE}/lib/launchd
 KYUAFILE= yes
 SCRIPTS+= launchd_consumer_test legacy_ipc_test reply_ownership_test receive_capacity_test
+SCRIPTS+= orphan_reap_test
 SCRIPTSDIR= ${TESTSDIR}
 all: coordination.o libop484_launchd.so
 ZIG?= zig
@@ -40,3 +41,6 @@ CLEANFILES+= op674_reply.h op674_replyUser.c
 
 receive_capacity_test: ${.CURDIR}/receive_capacity.zig
 	${ZIG} build-exe ${.CURDIR}/receive_capacity.zig ${ATF_C_ARCHIVE} ${MACH_SO} ${SYSROOT}/usr/lib/liblaunch.so.5 -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -femit-bin=${.TARGET}
+
+orphan_reap_test: ${.CURDIR}/orphan_reap.zig
+	${ZIG} build-exe ${.CURDIR}/orphan_reap.zig ${ATF_C_ARCHIVE} ${MACH_SO} ${SYSROOT}/usr/lib/liblaunch.so.5 -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -femit-bin=${.TARGET}

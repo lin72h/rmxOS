@@ -52,6 +52,7 @@ void op484_drain_end(unsigned);
 #include <sys/un.h>
 #include <sys/reboot.h>
 #include <sys/wait.h>
+#include <sys/procctl.h>
 #include <sys/sysctl.h>
 #include <sys/sockio.h>
 #include <sys/time.h>
@@ -4476,7 +4477,13 @@ job_callback(void *obj, struct kevent *kev)
 
 	switch (kev->filter) {
 	case EVFILT_PROC:
-		return job_callback_proc(j, kev);
+		job_callback_proc(j, kev);
+		/* An anonymous job does not wait for a child. If the SIGCHLD
+		 * callback ran first, its PID was still owned then. Revisit it now
+		 * that the event path has retired that ownership. */
+		if (pid1_magic)
+			jobmgr_reap_children(root_jobmgr);
+		return;
 	case EVFILT_TIMER:
 		return job_callback_timer(j, (void *) kev->ident);
 	case EVFILT_READ:
@@ -7053,6 +7060,8 @@ jobmgr_new(jobmgr_t jm, mach_port_t requestorport, mach_port_t transfer_port, bo
 			(void)jobmgr_assumes_zero_p(jmr, kevent_mod(SIGUSR2, EVFILT_SIGNAL, EV_ADD, 0, 0, jmr));
 		}
 		(void)jobmgr_assumes_zero_p(jmr, kevent_mod(SIGINFO, EVFILT_SIGNAL, EV_ADD, 0, 0, jmr));
+		if (pid1_magic)
+			jobmgr_reap_children(jmr);
 		(void)jobmgr_assumes_zero_p(jmr, kevent_mod(0, EVFILT_FS, EV_ADD, VQ_MOUNT|VQ_UNMOUNT|VQ_UPDATE, 0, jmr));
 	}
 
@@ -7285,6 +7294,63 @@ jobmgr_reap_pid(jobmgr_t jm, pid_t pid)
 
 	waitpid(pid, (int *) 0, 0);
 	jobmgr_log(jm, LOG_DEBUG, "Reaping PID %d", pid);	
+}
+
+/* Run on the event thread: job ownership and EVFILT_PROC callbacks are
+ * serialized here. A waitpid(-1, WNOWAIT) loop cannot pass a job-owned zombie.
+ * Enumerate direct children instead, leaving every job's status for job_reap. */
+void
+jobmgr_reap_children(jobmgr_t jm)
+{
+	struct procctl_reaper_status status;
+	struct procctl_reaper_pids pids;
+	struct procctl_reaper_pidinfo *children;
+	u_int count, i, flags;
+	bool reaped;
+	pid_t result;
+
+	if (jm == NULL)
+		return;
+	do {
+		memset(&status, 0, sizeof(status));
+		if (procctl(P_PID, getpid(), PROC_REAP_STATUS, &status) == -1) {
+			(void)jobmgr_assumes_zero(jm, errno);
+			return;
+		}
+		count = status.rs_descendants;
+		if (count == 0)
+			return;
+		/* Leave room for arrivals between STATUS and GETPIDS. A valid last
+		 * slot means the snapshot may be truncated and must be retried. */
+		count += 16;
+		children = calloc(count, sizeof(*children));
+		if (!jobmgr_assumes(jm, children != NULL))
+			return;
+		memset(&pids, 0, sizeof(pids));
+		pids.rp_count = count;
+		pids.rp_pids = children;
+		if (procctl(P_PID, getpid(), PROC_REAP_GETPIDS, &pids) == -1) {
+			(void)jobmgr_assumes_zero(jm, errno);
+			free(children);
+			return;
+		}
+		reaped = (children[count - 1].pi_flags & REAPER_PIDINFO_VALID) != 0;
+		for (i = 0; i < count; i++) {
+			flags = REAPER_PIDINFO_VALID | REAPER_PIDINFO_CHILD |
+			    REAPER_PIDINFO_ZOMBIE;
+			if ((children[i].pi_flags & flags) != flags ||
+			    jobmgr_find_by_pid_deep(jm, children[i].pi_pid, true) != NULL)
+				continue;
+			do {
+				result = waitpid(children[i].pi_pid, NULL, WNOHANG);
+			} while (result == -1 && errno == EINTR);
+			if (result > 0)
+				reaped = true;
+			else if (result == -1 && errno != ECHILD)
+				(void)jobmgr_assumes_zero(jm, errno);
+		}
+		free(children);
+	} while (reaped);
 }
 
 struct machservice *
