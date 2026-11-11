@@ -750,7 +750,10 @@ vm_map_copyout_kernel_buffer(
 		}
 	}
 	else {
-		panic("unexpected map %p", map);
+		/*
+		 * Both receive paths pass current_map(); refuse any other
+		 * map and leave the copy to the caller.
+		 */
 #if 0
 		vm_map_t oldmap;
 
