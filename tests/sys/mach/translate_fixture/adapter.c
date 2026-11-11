@@ -19,6 +19,7 @@
 #include <sys/file.h>
 #include <sys/capsicum.h>
 #include <sys/rwlock.h>
+#include <sys/sx.h>
 #include <sys/time.h>
 #include <vm/vm.h>
 #include <vm/vm_map.h>
@@ -177,6 +178,7 @@ void rmx_fixture_set_timeout(void *t, uint32_t value) { ((thread_t)t)->timeout =
 size_t rmx_fixture_proc_size(void);
 size_t rmx_fixture_bsdinfo_size(void);
 void rmx_fixture_proc_copy(void *);
+void rmx_fixture_proc_release(void);
 void rmx_fixture_proc_set_fd(void *, void *);
 void rmx_fixture_proc_set_group(void *, void *);
 int rmx_fixture_nfiles(void *);
@@ -207,7 +209,20 @@ int rmx_fixture_owned(void *object) { return (io_lock_owned(object)); }
 void rmx_fixture_unlock(void *object) { io_unlock(object); }
 size_t rmx_fixture_proc_size(void) { return (sizeof(struct proc)); }
 size_t rmx_fixture_bsdinfo_size(void) { return (sizeof(struct proc_bsdinfo)); }
-void rmx_fixture_proc_copy(void *p) { bcopy(curproc, p, sizeof(struct proc)); }
+/*
+ * proc_pidbsdinfo() runs under proctree_lock and the process lock.  The
+ * snapshot is taken with both held, so its copy of p_mtx reads as owned
+ * by this thread; rmx_fixture_proc_release() drops them after the call.
+ */
+void rmx_fixture_proc_copy(void *p) {
+	sx_slock(&proctree_lock);
+	PROC_LOCK(curproc);
+	bcopy(curproc, p, sizeof(struct proc));
+}
+void rmx_fixture_proc_release(void) {
+	PROC_UNLOCK(curproc);
+	sx_sunlock(&proctree_lock);
+}
 void rmx_fixture_proc_set_fd(void *p, void *fd) { ((struct proc *)p)->p_fd = fd; }
 void rmx_fixture_proc_set_group(void *p, void *pg) { ((struct proc *)p)->p_pgrp = pg; }
 int rmx_fixture_nfiles(void *info) { return (((struct proc_bsdinfo *)info)->pbi_nfiles); }

@@ -192,6 +192,7 @@ extern fn free(*anyopaque, *anyopaque) void;
 extern fn rmx_fixture_proc_size() usize;
 extern fn rmx_fixture_bsdinfo_size() usize;
 extern fn rmx_fixture_proc_copy(*anyopaque) void;
+extern fn rmx_fixture_proc_release() void;
 extern fn rmx_fixture_proc_set_fd(*anyopaque, ?*anyopaque) void;
 extern fn rmx_fixture_proc_set_group(*anyopaque, ?*anyopaque) void;
 extern fn rmx_fixture_nfiles(*anyopaque) c_int;
@@ -215,7 +216,9 @@ export fn rmx_proc_observe(_: u32, out: *Observation) c_int {
     defer free(snapshot, allocator);
     const info = malloc(rmx_fixture_bsdinfo_size(), allocator, 2) orelse return 12;
     defer free(info, allocator);
+    // The copy holds proctree_lock and the process lock until release.
     rmx_fixture_proc_copy(snapshot);
+    defer rmx_fixture_proc_release();
     rmx_fixture_proc_set_fd(snapshot, null);
     rmx_fixture_proc_set_group(snapshot, null);
     out.result = proc_pidbsdinfo(snapshot, info, 0);
