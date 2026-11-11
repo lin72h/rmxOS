@@ -570,7 +570,9 @@ _vm_map_entry_dispose(
  *		source map. The original space may be optionally
  *		deallocated.
  *
- *		If successful, returns a new copy object.
+ *		If successful, returns a new copy object; a kernel_map
+ *		source is then freed.  On failure the source stays the
+ *		caller's.
  */
 static kern_return_t
 vm_map_copyin_internal(
@@ -595,10 +597,8 @@ vm_map_copyin_internal(
 	});
 	copy = (vm_map_copy_t) malloc(size, M_MACH_VM, M_NOWAIT|M_ZERO);
 alloc_failed:
-	if (copy == VM_MAP_COPY_NULL) {
-		kr = KERN_RESOURCE_SHORTAGE;
-		goto fail;
-	}
+	if (copy == VM_MAP_COPY_NULL)
+		return (KERN_RESOURCE_SHORTAGE);
 	copy->type = VM_MAP_COPY_KERNEL_BUFFER;
 	copy->size = len;
 	copy->offset = 0;
@@ -624,10 +624,6 @@ alloc_failed:
 	}
 	*copy_result = copy;
 	return KERN_SUCCESS;
-fail:
-	if (src_map == kernel_map)
-		free((void *)src_addr, M_MACH_VM);
-	return (kr);
 }
 
 /*

@@ -1057,7 +1057,11 @@ mach_port_get_set_status(
 		 */
 		kr = vm_map_copyin(kernel_map, (vm_offset_t)addr, size_used,
 				   FALSE, &memory);
-		assert(kr == KERN_SUCCESS);
+		if (kr != KERN_SUCCESS) {
+			/* A failed copyin leaves the buffer to us. */
+			free(addr, M_MACH_VM);
+			return kr;
+		}
 	}
 
 	*members = (mach_port_name_t *) memory;
