@@ -48,7 +48,7 @@ fn oolAllocation() void {
     point("1*return(1)");
     const rc = c.syscall(c.SYS_mach_msg_trap, &msg, @as(u32, 0x11), @as(u32, 44), @as(u32, 0), @as(u32, 0), @as(u32, 1000), @as(u32, 0));
     point("off");
-    fact("ool_sender_error", 0x1000000c, rc); // MACH_SEND_INVALID_MEMORY
+    fact("ool_sender_error", 0x400, rc); // MACH_MSG_VM_KERNEL, as macOS reports a failed kernel allocation
     fact("ool_no_queued_message", 0x10004003, c.syscall(c.SYS_mach_msg_trap, &msg, @as(u32, 0x102), @as(u32, 0), @as(u32, @sizeOf(Message)), port, @as(u32, 0), @as(u32, 0)));
     fact("ool_receive_right_survives", 0, c.close(@intCast(port)));
 }

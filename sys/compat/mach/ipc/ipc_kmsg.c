@@ -1633,8 +1633,14 @@ ipc_kmsg_copyin_ool_descriptor(
 		 * is being deallocated.  This is an invalid
 		 * path if RT.
 		 */
-		if (vm_map_copyin(map, addr, length,
-						  dealloc, copy) != KERN_SUCCESS) {
+		switch (vm_map_copyin(map, addr, length, dealloc, copy)) {
+		case KERN_SUCCESS:
+			break;
+		case KERN_RESOURCE_SHORTAGE:
+			/* No kernel buffer, or mach.ool_max_total; as macOS. */
+			*mr = MACH_MSG_VM_KERNEL;
+			return NULL;
+		default:
 			*mr = MACH_SEND_INVALID_MEMORY;
 			return NULL;
 		}
@@ -1779,6 +1785,9 @@ ipc_kmsg_copyin_ool_ports_descriptor(
  *	Returns:
  *		MACH_MSG_SUCCESS	Successful copyin.
  *		MACH_SEND_INVALID_MEMORY	Can't grab out-of-line memory.
+ *		MACH_MSG_VM_KERNEL	No kernel memory for out-of-line data,
+ *					or over mach.ool_max_message or
+ *					mach.ool_max_total.
  *		MACH_SEND_INVALID_RIGHT	Can't copyin port right in body.
  *		MACH_SEND_INVALID_TYPE	Bad type specification.
  *		MACH_SEND_MSG_TOO_SMALL	Body is too small for types/data.

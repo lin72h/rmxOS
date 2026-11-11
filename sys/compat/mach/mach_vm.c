@@ -686,10 +686,10 @@ alloc_failed:
 		free((void *)src_addr, M_MACH_VM);
 	} else {
 
-		kr = copyinmap(src_map, src_addr, copy->cpy_kdata, (vm_size_t) len);
-		if (kr != KERN_SUCCESS) {
+		if (copyinmap(src_map, src_addr, copy->cpy_kdata,
+		    (vm_size_t) len) != 0) {
 			vm_map_copy_discard(copy);
-			return kr;
+			return (KERN_INVALID_ADDRESS);
 		}
 		if (src_destroy) {
 			(void) vm_map_remove(
