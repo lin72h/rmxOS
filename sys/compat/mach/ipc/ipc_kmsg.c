@@ -285,6 +285,8 @@
 #include <sys/mach/ipc_kobject.h>
 #include <sys/mach/thread.h>
 
+#include <compat/mach/mach_ool.h>
+
 #pragma pack(4)
 
 int mach_ipc_entry_lookup_failed_log;
@@ -341,6 +343,33 @@ extern vm_size_t	msg_ool_size_small;
 #define MSG_OOL_SIZE_SMALL	msg_ool_size_small
 #define DESC_SIZE_ADJUSTMENT	((mach_msg_size_t)(sizeof(mach_msg_ool_descriptor64_t) - \
 				 sizeof(mach_msg_ool_descriptor32_t)))
+
+/*
+ * An OOL port array holds count kernel-sized ipc_object_t values, eight
+ * bytes a port, and counts in the OOL bytes as a copy buffer does.
+ */
+static mach_msg_return_t
+ipc_kmsg_ool_ports_alloc(mach_msg_type_number_t count, void **array)
+{
+	vm_size_t len = (vm_size_t)count * sizeof(mach_port_t);
+
+	if (mach_ool_reserve(len) != KERN_SUCCESS)
+		return (MACH_MSG_VM_KERNEL);
+	*array = malloc(len, M_MACH_TMP, M_NOWAIT);
+	if (*array == NULL) {
+		mach_ool_release(len);
+		return (MACH_SEND_NO_BUFFER);
+	}
+	return (MACH_MSG_SUCCESS);
+}
+
+void
+ipc_kmsg_ool_ports_free(void *array, mach_msg_type_number_t count)
+{
+
+	free(array, M_MACH_TMP);
+	mach_ool_release((vm_size_t)count * sizeof(mach_port_t));
+}
 /*
  * Forward declarations
  */
@@ -667,9 +696,8 @@ ipc_kmsg_clean_body(
 		assert(dsc->count != 0);
 
 		/* The array contains count kernel-sized ipc_object_t values,
-		 * allocated by copyin with M_MACH_TMP, not user names.
-		 * FreeBSD typed free does not take a size argument. */
-		free(objects, M_MACH_TMP);
+		 * allocated by copyin, not user names. */
+		ipc_kmsg_ool_ports_free(objects, dsc->count);
 		break;
 	    }
 	    default : {
@@ -1636,7 +1664,7 @@ ipc_kmsg_copyin_ool_ports_descriptor(
 	ipc_kmsg_t kmsg,
 	mach_msg_return_t *mr)
 {
-	vm_size_t            		plength, pnlength;
+	vm_size_t            		pnlength;
 	kern_return_t          		kr;
 	boolean_t            		dealloc;
 	vm_offset_t          		addr;
@@ -1676,15 +1704,11 @@ ipc_kmsg_copyin_ool_ports_descriptor(
         return NULL;
     }
 
-	plength = count * sizeof(mach_port_t);
     pnlength = count * sizeof(mach_port_name_t);
 
-	data = malloc(plength, M_MACH_TMP, M_NOWAIT);
-
-	if (data == NULL) {
-		*mr = MACH_SEND_NO_BUFFER;
+	*mr = ipc_kmsg_ool_ports_alloc(count, &data);
+	if (*mr != MACH_MSG_SUCCESS)
 		return NULL;
-	}
 #ifdef __LP64__
     mach_port_name_t *names = &((mach_port_name_t *)data)[count];
 #else
@@ -1692,7 +1716,7 @@ ipc_kmsg_copyin_ool_ports_descriptor(
 #endif
 
 	if (copyinmap(map, addr, names, pnlength)) {
-		free(data, M_MACH_TMP);
+		ipc_kmsg_ool_ports_free(data, count);
 		*mr = MACH_SEND_INVALID_MEMORY;
 		return (NULL);
 	}
@@ -1724,7 +1748,7 @@ ipc_kmsg_copyin_ool_ports_descriptor(
 				if (IPC_OBJECT_VALID(object))
 					ipc_object_destroy(object, result_disp);
 			}
-			free(data, M_MACH_TMP);
+			ipc_kmsg_ool_ports_free(data, count);
 			dsc->address = NULL;
 			*mr = MACH_SEND_INVALID_RIGHT;
 			return NULL;
@@ -1779,6 +1803,7 @@ ipc_kmsg_copyin_body(
     int				is_task_64bit;
     mach_msg_size_t		i, dsc_count;
     vm_size_t			space_needed = 0;
+    vm_size_t			ool_bytes = 0;
     vm_offset_t			paddr = 0;
     kern_return_t		mr = 0;
 	vm_size_t           size, descriptor_size = 0;
@@ -1866,6 +1891,23 @@ ipc_kmsg_copyin_body(
 					goto out;
 				}
 			}
+			ool_bytes += size;
+			break;
+		case MACH_MSG_OOL_PORTS_DESCRIPTOR:
+#if defined(__LP64__)
+			ool_bytes += (vm_size_t)((mach_msg_ool_ports_descriptor64_t *)
+			    daddr)->count * sizeof(mach_port_t);
+#else
+			ool_bytes += (vm_size_t)daddr->ool_ports.count *
+			    sizeof(mach_port_t);
+#endif
+			break;
+		}
+		/* Every copy is a kernel buffer: bound the message's OOL bytes. */
+		if (ool_bytes > mach_ool_max_message) {
+			ipc_kmsg_clean_partial(kmsg, 0, NULL, 0, 0);
+			mr = MACH_MSG_VM_KERNEL;
+			goto out;
 		}
 	}
 	if (space_needed > 8*1024*1024 /* XXX come up with a better define */) {
@@ -2660,7 +2702,7 @@ ipc_kmsg_copyout_ool_ports_descriptor(mach_msg_ool_ports_descriptor_t *dsc,
             void *data = dsc->address;
             if (copyoutmap(map, data, addr, pnlength) != KERN_SUCCESS)
                 *mr |= MACH_MSG_VM_SPACE;
-            free(data, M_MACH_TMP);
+            ipc_kmsg_ool_ports_free(data, count);
 		}
 	} else
 		addr = 0;

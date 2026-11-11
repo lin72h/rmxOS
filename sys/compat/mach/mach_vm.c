@@ -33,6 +33,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/kernel.h>
+#include <sys/sysctl.h>
 #include <sys/mount.h>
 #include <sys/proc.h>
 #include <sys/mman.h>
@@ -64,8 +66,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/mach/vm_map_server.h>
 #include <sys/mach/host_priv_server.h>
 
+#include <compat/mach/mach_ool.h>
+
 
 extern vm_size_t	msg_ool_size_small;
+extern vm_size_t	ipc_kmsg_max_body_space;
 #if 0
 void _vm_map_clip_end(vm_map_t map, vm_map_entry_t entry, vm_offset_t end);
 void _vm_map_clip_start(vm_map_t map, vm_map_entry_t entry, vm_offset_t start);
@@ -563,6 +568,71 @@ _vm_map_entry_dispose(
 }
 
 /*
+ * OOL accounting.  Every OOL copy is a kernel buffer until the receiver's
+ * copyout, so senders can make the kernel hold as many bytes as ports can
+ * queue.  mach_ool_bytes counts the bytes held in copy buffers and OOL port
+ * arrays; a reservation raises it first and checks it after, so two senders
+ * cannot both pass mach_ool_max_total, and a refused reservation takes its
+ * bytes back at once.  A message's OOL bytes are bounded separately by
+ * mach_ool_max_message in ipc_kmsg_copyin_body().
+ */
+static u_long mach_ool_bytes;
+static u_long mach_ool_bytes_peak;
+static u_long mach_ool_max_total;
+u_long mach_ool_max_message;
+
+SYSCTL_DECL(_mach);
+SYSCTL_ULONG(_mach, OID_AUTO, ool_max_message, CTLFLAG_RWTUN,
+    &mach_ool_max_message, 0,
+    "Most OOL bytes, regions and port arrays, one message may carry");
+SYSCTL_ULONG(_mach, OID_AUTO, ool_max_total, CTLFLAG_RWTUN,
+    &mach_ool_max_total, 0,
+    "Most bytes all OOL copy buffers may hold");
+SYSCTL_ULONG(_mach, OID_AUTO, ool_bytes, CTLFLAG_RD,
+    &mach_ool_bytes, 0, "Bytes held in OOL copy buffers");
+SYSCTL_ULONG(_mach, OID_AUTO, ool_bytes_peak, CTLFLAG_RD,
+    &mach_ool_bytes_peak, 0, "Most bytes held in OOL copy buffers since boot");
+
+static void
+mach_ool_init(void *arg __unused)
+{
+
+	/* The defaults depend on the machine; tunables override them. */
+	mach_ool_max_message = ipc_kmsg_max_body_space;
+	mach_ool_max_total = ptoa(physmem) / 8;
+	TUNABLE_ULONG_FETCH("mach.ool_max_message", &mach_ool_max_message);
+	TUNABLE_ULONG_FETCH("mach.ool_max_total", &mach_ool_max_total);
+}
+SYSINIT(mach_ool, SI_SUB_KLD, SI_ORDER_ANY, mach_ool_init, NULL);
+
+kern_return_t
+mach_ool_reserve(vm_size_t len)
+{
+	u_long total, peak;
+
+	total = atomic_fetchadd_long(&mach_ool_bytes, len) + len;
+	if (total > atomic_load_long(&mach_ool_max_total)) {
+		atomic_subtract_long(&mach_ool_bytes, len);
+		return (KERN_RESOURCE_SHORTAGE);
+	}
+	peak = atomic_load_long(&mach_ool_bytes_peak);
+	while (total > peak &&
+	    !atomic_fcmpset_long(&mach_ool_bytes_peak, &peak, total))
+		;
+	return (KERN_SUCCESS);
+}
+
+void
+mach_ool_release(vm_size_t len)
+{
+	u_long held __diagused;
+
+	held = atomic_fetchadd_long(&mach_ool_bytes, -len);
+	KASSERT(held >= len, ("%s: %lu bytes held, %zu released", __func__,
+	    held, len));
+}
+
+/*
  *	Routine: vm_map_copyin_internal [internal use only]
  *
  *	Description:
@@ -590,6 +660,10 @@ vm_map_copyin_internal(
 		/* "len" is too big and doesn't fit in a "vm_size_t" */
 		return KERN_RESOURCE_SHORTAGE;
 	}
+	/* Count the bytes before allocating them. */
+	kr = mach_ool_reserve(len);
+	if (kr != KERN_SUCCESS)
+		return (kr);
 	size =  (vm_size_t) (sizeof(struct vm_map_copy) + len);
 	copy = VM_MAP_COPY_NULL;
 	KFAIL_POINT_CODE(DEBUG_FP, mach_ool_copyin_alloc, {
@@ -597,8 +671,10 @@ vm_map_copyin_internal(
 	});
 	copy = (vm_map_copy_t) malloc(size, M_MACH_VM, M_NOWAIT|M_ZERO);
 alloc_failed:
-	if (copy == VM_MAP_COPY_NULL)
+	if (copy == VM_MAP_COPY_NULL) {
+		mach_ool_release(len);
 		return (KERN_RESOURCE_SHORTAGE);
+	}
 	copy->type = VM_MAP_COPY_KERNEL_BUFFER;
 	copy->size = len;
 	copy->offset = 0;
@@ -1248,6 +1324,8 @@ vm_map_copy_discard(
 
 	if (copy->type == VM_MAP_COPY_OBJECT)
 		vm_object_deallocate(copy->cpy_object);
+	else if (copy->type == VM_MAP_COPY_KERNEL_BUFFER)
+		mach_ool_release(copy->size);
 	free(copy, M_MACH_VM);
 }
 

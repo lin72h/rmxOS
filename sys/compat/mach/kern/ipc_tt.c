@@ -134,6 +134,8 @@
 #include <sys/mach/task_server.h>
 #include <sys/mach/host_priv_server.h>
 
+#include <compat/mach/mach_ool.h>
+
 #define THR_ACT_NULL NULL
 
 /* Self-only kernel APIs; MIG uses the checked destination-preserving entries. */
@@ -965,8 +967,7 @@ mach_ports_register(
 	 */
 
 	if (portsCnt != 0)
-		kfree((vm_offset_t) memory,
-		      (vm_size_t) (portsCnt * sizeof(mach_port_t)));
+		ipc_kmsg_ool_ports_free(memory, portsCnt);
 
 	return KERN_SUCCESS;
 }
