@@ -39,8 +39,8 @@ fn report(name: [*:0]const u8) c_int {
 fn body(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const kernel_invariants = feature("kern.features.invariants");
     const kernel_witness = feature("kern.features.witness");
-    const module_invariants = report("kern.mach.build_invariants");
-    const module_witness = report("kern.mach.build_witness");
+    const module_invariants = report("mach.build_invariants");
+    const module_witness = report("mach.build_witness");
     _ = c.printf("build_options expected_invariants=%d observed_invariants=%d expected_witness=%d observed_witness=%d\n", kernel_invariants, module_invariants, kernel_witness, module_witness);
     if (module_invariants != kernel_invariants) c.atf_tc_fail("mach.ko INVARIANTS=%d kernel=%d", module_invariants, kernel_invariants);
     if (module_witness != kernel_witness) c.atf_tc_fail("mach.ko WITNESS=%d kernel=%d", module_witness, kernel_witness);
