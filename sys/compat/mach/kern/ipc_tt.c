@@ -1002,15 +1002,19 @@ mach_ports_lookup(
 
 	size = (vm_size_t) (TASK_PORT_REGISTER_MAX * sizeof(ipc_port_t));
 
-	memory = KALLOC(size, rt);
-	if (memory == 0)
+	/*
+	 * The reply carries this array as OOL ports; the receiver's copyout
+	 * frees it with ipc_kmsg_ool_ports_free(), so count it as copyin does.
+	 */
+	if (mach_ool_reserve(size) != KERN_SUCCESS)
 		return KERN_RESOURCE_SHORTAGE;
+	memory = (vm_offset_t) malloc(size, M_MACH_TMP, M_WAITOK);
 
 	itk_lock(task);
 	if (task->itk_self == IP_NULL) {
 		itk_unlock(task);
 
-		KFREE(memory, size, rt);
+		ipc_kmsg_ool_ports_free((void *) memory, TASK_PORT_REGISTER_MAX);
 		return KERN_INVALID_ARGUMENT;
 	}
 
