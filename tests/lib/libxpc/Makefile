@@ -4,6 +4,7 @@ SCRIPTS+= xpc_receive_test
 SCRIPTS+= receive_pending_test
 SCRIPTS+= raw_drop_test
 SCRIPTS+= object_model_test decode_lifetime_test stage_a_test bsm_header_test
+SCRIPTS+= ool_limit_test
 CLEANFILES+= ${SCRIPTS}
 SCRIPTSDIR= ${TESTSDIR}
 ZIG?= zig
@@ -31,6 +32,10 @@ stage_a_test: ${.CURDIR}/stage_a.zig
 bsm_header_test: ${.CURDIR}/bsm_header.zig
 	${ZIG} build-exe ${.ALLSRC} ${SYSROOT}/usr/lib/libbsm.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc \
 	    --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}
+ool_limit_test: ${.CURDIR}/ool_limit.zig
+	${ZIG} build-exe ${.ALLSRC} ${XPC_SO} ${SYSROOT}/usr/lib/libdispatch.so.5 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/usr/lib/libBlocksRuntime.so \
+	    ${SYSROOT}/lib/libthr.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include \
+	    -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -femit-bin=${.TARGET}
 xpc_receive_test: ${.CURDIR}/xpc_receive.zig ${.CURDIR}/reconnect.zig
 	${ZIG} build-exe ${.CURDIR}/xpc_receive.zig ${XPC_SO} ${SYSROOT}/usr/lib/libdispatch.so.5 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/lib/libthr.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -rpath ${XPC_TEST_RPATH} -femit-bin=${.TARGET}
 .include <bsd.test.mk>

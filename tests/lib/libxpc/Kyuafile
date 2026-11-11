@@ -7,3 +7,4 @@ atf_test_program{name="object_model_test"}
 atf_test_program{name="decode_lifetime_test"}
 atf_test_program{name="stage_a_test"}
 atf_test_program{name="bsm_header_test"}
+atf_test_program{name="ool_limit_test"}
