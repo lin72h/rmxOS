@@ -632,12 +632,8 @@ ipc_kmsg_clean_body(
 		if (dsc->size == 0) {
 		    assert(dsc->address == (void *) 0);
 		} else {
-		    if (dsc->copy == MACH_MSG_PHYSICAL_COPY &&
-			    dsc->size < MSG_OOL_SIZE_SMALL) {
-			    free(dsc->address, M_MACH_VM);
-		    } else {
-		    	vm_map_copy_discard((vm_map_copy_t) dsc->address);
-		    }
+		    /* Every copy, physical or virtual, is a vm_map_copy_t. */
+		    vm_map_copy_discard((vm_map_copy_t) dsc->address);
 		}
 		break;
 	    }

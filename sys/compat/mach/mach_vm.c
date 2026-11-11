@@ -612,7 +612,7 @@ alloc_failed:
 
 		kr = copyinmap(src_map, src_addr, copy->cpy_kdata, (vm_size_t) len);
 		if (kr != KERN_SUCCESS) {
-			free(copy, M_MACH_VM);
+			vm_map_copy_discard(copy);
 			return kr;
 		}
 		if (src_destroy) {
@@ -698,7 +698,7 @@ vm_map_copyout_kernel_buffer(
 	}
 
 	if (kr == KERN_SUCCESS) {
-		free(copy, M_MACH_VM);
+		vm_map_copy_discard(copy);
 	} else if (!overwrite) {
 		/* Failure retains copy for the caller; undo only our allocation. */
 		(void)vm_map_remove(map, *addr, *addr + round_page(copy->size));
