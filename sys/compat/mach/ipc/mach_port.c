@@ -954,8 +954,6 @@ mach_port_gst_helper(
 	ipc_port_t		port;
 	ipc_entry_num_t actual = *actualp;
 
-	assert(port != IP_NULL);
-
 	TAILQ_FOREACH(port, &pset->ips_ports, ip_next) {
 		assert(ip_active(port));
 		name = port->ip_receiver_name;
@@ -963,8 +961,9 @@ mach_port_gst_helper(
 		assert(port->ip_pset == pset);
 		if (actual < maxnames)
 			names[actual] = name;
-		*actualp = actual+1;
+		actual++;
 	}
+	*actualp = actual;
 }
 
 /*

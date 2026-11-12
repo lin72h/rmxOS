@@ -154,6 +154,24 @@ fn regionsIntact(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(ok, "an OOL region did not arrive intact or left bytes counted");
 }
 
+// The kernel's registered-port reply holds three OOL ports until copyout.
+fn portsLookup(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const start = lim.bytes();
+    var ports: c.mach_port_array_t = null;
+    var count: c.mach_msg_type_number_t = 0;
+    const rc = c.mach_ports_lookup(c.mach_task_self(), &ports, &count);
+    const after = lim.bytes();
+    _ = c.printf("mach_ports_lookup expected_rc=0 observed_rc=%d expected_count=3 observed_count=%u expected_bytes=%lu observed_bytes=%lu\n", rc, count, start, after);
+    need(rc == c.KERN_SUCCESS, "mach_ports_lookup failed");
+    need(count == 3, "mach_ports_lookup did not return three registered ports");
+    need(after == start, "mach_ports_lookup reply left OOL bytes counted");
+    for (ports[0..count]) |port| {
+        if (port != c.MACH_PORT_NULL and port != c.MACH_PORT_DEAD)
+            need(c.mach_port_deallocate(c.mach_task_self(), port) == 0, "registered send right release");
+    }
+    lim.release(@intFromPtr(ports), count * @sizeOf(c.mach_port_t));
+}
+
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "require.user", "%s", "root");
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "30");
@@ -162,11 +180,11 @@ fn cleanup(_: [*c]const c.atf_tc_t) callconv(.c) void {
     lim.cleanup();
 }
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-var cases: [4]c.atf_tc_t = undefined;
+var cases: [5]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "message_limit", "total_limit", "ports_array", "regions_intact" };
-    const bodies = .{ &messageLimit, &totalLimit, &portsArray, &regionsIntact };
-    inline for (0..4) |i| {
+    const names = [_][*:0]const u8{ "message_limit", "total_limit", "ports_array", "regions_intact", "ports_lookup" };
+    const bodies = .{ &messageLimit, &totalLimit, &portsArray, &regionsIntact, &portsLookup };
+    inline for (0..names.len) |i| {
         const err = c.atf_tc_init(&cases[i], names[i], &head, bodies[i], &cleanup, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
         const added = c.atf_tp_add_tc(tp, &cases[i]);

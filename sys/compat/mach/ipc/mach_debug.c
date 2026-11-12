@@ -254,6 +254,7 @@ mach_port_space_info(
 	ipc_info_tree_name_array_t	*treep,
 	mach_msg_type_number_t 		*treeCntp)
 {
+	return KERN_NOT_SUPPORTED;
 #if 0
 	ipc_info_name_t *table_info;
 	unsigned int table_potential, table_actual;
