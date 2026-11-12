@@ -75,27 +75,26 @@ pub fn mountfrom(root: *[1024:0]u8) isize {
     return call(390, 0, ptr("vfs.root.mountfrom"), ptr(root), root.len);
 }
 pub const Root = union(enum) { legacy, sealed: []const u8, unreadable };
-// The kernel environment's root: a sealed zfs: root, any other readable root
-// (booted as before), or a value PID 1 cannot read.
-pub fn classify(count: isize, root: []const u8) Root {
+// Data.build is written by sealed compose and also read by datasync. A ZFS
+// root without that layout mark boots as before, even while mounted read-only.
+pub fn classify(count: isize, root: []const u8, has_mark: bool) Root {
     if (count <= 0 or count >= root.len) return .unreadable;
     const value = std.mem.sliceTo(root, 0);
     if (value.len == 0) return .unreadable;
-    if (!std.mem.startsWith(u8, value, "zfs:")) return .legacy;
+    if (!std.mem.startsWith(u8, value, "zfs:") or !has_mark) return .legacy;
     return .{ .sealed = value[4..] };
 }
-pub const Missing = enum { volatile_data, legacy };
-// A missing private dataset selects volatile Data only on a sealed (read-only)
-// root; an old read-write root without Data boots as before.
-pub fn privateMissing(read_only: bool) Missing {
-    return if (read_only) .volatile_data else .legacy;
+pub const Data = enum { mounted, volatile_data, failed, legacy, unreadable };
+pub fn dataMode(kind: Root, private_result: isize) Data {
+    return switch (kind) {
+        .legacy => .legacy,
+        .unreadable => .unreadable,
+        .sealed => if (private_result == 0) .mounted else if (private_result == -2) .volatile_data else .failed,
+    };
 }
-// statfs(2) (FreeBSD 12+ layout): f_flags is the u64 at offset 8; MNT_RDONLY 1.
-pub fn rootReadOnly() ?bool {
-    var buf: [2344]u8 align(8) = undefined;
-    if (call(555, ptr("/"), ptr(&buf), 0, 0) != 0) return null;
-    const flags = std.mem.readInt(u64, buf[8..16], .little);
-    return flags & 1 != 0;
+fn sealedMark() bool {
+    // access(2), F_OK: existence, with no libc or configuration-file access.
+    return call(33, ptr("/System/Library/Templates/Data.build"), 0, 0, 0) == 0;
 }
 // No usable root name: keep a single-user shell on the console instead of
 // starting launchd without Data.
@@ -129,9 +128,9 @@ export fn rmxos_start(stack: [*]const usize) callconv(.c) noreturn {
     const pid1 = call(20, 0, 0, 0, 0) == 1;
     var root: [1024:0]u8 = @splat(0);
     var is_volatile = false;
-    const kind: Root = if (pid1) classify(mountfrom(&root), &root) else .legacy;
+    const kind: Root = if (pid1) classify(mountfrom(&root), &root, sealedMark()) else .legacy;
     if (kind == .unreadable) rescueShell("rmxos: cannot read vfs.root.mountfrom; single-user shell, Data not mounted\n");
-    if (kind == .sealed) sealed: {
+    if (kind == .sealed) {
         const dataset = kind.sealed;
         const end = std.mem.indexOfScalar(u8, dataset, '/') orelse stop("rmxos: invalid root dataset\n");
         const pool = dataset[0..end];
@@ -142,8 +141,7 @@ export fn rmxos_start(stack: [*]const usize) callconv(.c) noreturn {
             const from = std.fmt.bufPrintZ(&buf, "{s}/data/{s}", .{ pool, name }) catch stop("rmxos: dataset name too long\n");
             const rc = mount("zfs", from, path);
             if (rc != 0) {
-                if (i == 0 and rc == -2 and privateMissing(rootReadOnly() orelse true) == .legacy) break :sealed;
-                if (i == 0 and rc == -2) {
+                if (i == 0 and dataMode(kind, rc) == .volatile_data) {
                     if (mount("tmpfs", "tmpfs", "/private") != 0) stop("rmxos: tmpfs fallback failed\n");
                     mkdir("/private/etc", 0o755);
                     mkdir("/private/var", 0o755);
