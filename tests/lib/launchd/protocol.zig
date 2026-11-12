@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 // A fixed-size local control protocol, shared by the guest client and PID 1.
-pub const socket_path = "/op484-launchd.sock";
+pub const socket_dir = "/var/db/rmxos";
+pub const socket_path = socket_dir ++ "/op484-launchd.sock";
 pub const Request = extern struct {
     magic: u32 = 0x48400001,
     operation: u32,

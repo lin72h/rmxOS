@@ -157,6 +157,9 @@ fn choose(ctx: Ctx, env: engine.Env, c: catalog.Catalog, label: ?[]const u8) !?C
 }
 
 fn run(ctx: Ctx, o: Options) !u8 {
+    // This job also loads on stock roots. Do not wait, lock, or create Data
+    // paths unless sealed compose supplied the same mark PID 1 reads.
+    if (o.action == .boot_check and !sys.exists(try ctx.path("/System/Library/Templates/Data.build"))) return 0;
     switch (o.action) {
         .none, .help => {
             ctx.out("{s}", .{help});
@@ -273,4 +276,44 @@ fn contains(list: []const []const u8, s: []const u8) bool {
 
 test {
     _ = @import("tests/unit.zig");
+}
+
+test "boot check without the sealed mark creates nothing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var name: [64:0]u8 = undefined;
+    const template = "/tmp/rmxsu-stock-XXXXXX";
+    @memcpy(name[0..template.len], template);
+    name[template.len] = 0;
+    const dir = sys.c.mkdtemp(&name) orelse return error.Mkdir;
+    defer _ = sys.c.rmdir(dir);
+    const ctx = Ctx{ .a = a, .root = std.mem.span(dir), .fixture = true };
+    try std.testing.expectEqual(@as(u8, 0), try run(ctx, .{ .action = .boot_check }));
+    // rmdir succeeds only when nothing was created below this fixture root.
+    try std.testing.expectEqual(@as(c_int, 0), sys.c.rmdir(dir));
+}
+
+test "boot check with the sealed mark keeps the lock and discovery path" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var name: [64:0]u8 = undefined;
+    const template = "/tmp/rmxsu-sealed-XXXXXX";
+    @memcpy(name[0..template.len], template);
+    name[template.len] = 0;
+    const dir = sys.c.mkdtemp(&name) orelse return error.Mkdir;
+    const ctx = Ctx{ .a = a, .root = std.mem.span(dir), .fixture = true };
+    defer {
+        _ = sys.c.unlink(ctx.path("/private/var/db/rmxos/softwareupdate.lock") catch unreachable);
+        _ = sys.c.unlink(ctx.path("/System/Library/Templates/Data.build") catch unreachable);
+        for ([_][]const u8{ "/private/var/db/rmxos", "/private/var/db", "/private/var", "/private", "/System/Library/Templates", "/System/Library", "/System", "" }) |p| {
+            _ = sys.c.rmdir(ctx.path(p) catch unreachable);
+        }
+    }
+    try sys.replace(a, try ctx.path("/System/Library/Templates/Data.build"), "sealed-test\n");
+    // Deliberately omit /running: the existing discovery path returns Open,
+    // after taking its lock, without ever invoking host ZFS commands.
+    try std.testing.expectError(error.Open, run(ctx, .{ .action = .boot_check }));
+    try std.testing.expect(sys.exists(try ctx.path("/private/var/db/rmxos/softwareupdate.lock")));
 }

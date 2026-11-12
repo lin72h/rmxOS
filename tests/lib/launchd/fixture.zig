@@ -375,6 +375,9 @@ fn initialize(_: ?*anyopaque) callconv(.c) ?*anyopaque {
     address.sun_family = c.AF_UNIX;
     @memcpy(std.mem.asBytes(&address.sun_path)[0..p.socket_path.len], p.socket_path);
     for (0..600) |_| {
+        // Writable on stock and sealed layouts, outside cleanvar's /var/run.
+        // Retry mkdir too: a stock root is read-only until rc remounts it.
+        _ = c.mkdir(p.socket_dir, 0o755);
         _ = c.unlink(p.socket_path);
         if (c.bind(listener, @ptrCast(&address), @sizeOf(c.sockaddr_un)) == 0) break;
         _ = c.usleep(100_000);
