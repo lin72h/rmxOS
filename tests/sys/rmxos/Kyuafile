@@ -1,3 +1,4 @@
 syntax(2)
 test_suite("FreeBSD")
 atf_test_program{name="macos_sysctl_test"}
+atf_test_program{name="base_modes_test"}
