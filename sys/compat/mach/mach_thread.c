@@ -144,12 +144,22 @@ mach_thread_switch(mach_port_name_t thread_name __unused, int option,
 		depress.td = td;
 		depress.active = true;
 		callout_init(&depress.timer, 1);
+		/* Lower before arming, so an early expiry always restores. */
 		thread_lock(td);
 		sched_prio(td, PRI_MAX_TIMESHARE);
-		/* Zero means no timer, not an infinite wait after resumption. */
-		if (option_time != 0)
+		thread_unlock(td);
+		/*
+		 * Zero means no timer, not an infinite wait after resumption.
+		 * callout_process() holds the callout lock while it takes a
+		 * run-queue lock, so arm with no thread lock held.
+		 */
+		if (option_time != 0) {
+			THREAD_LOCK_ASSERT(td, MA_NOTOWNED);
 			callout_reset_sbt(&depress.timer, SBT_1MS * option_time,
 			    0, mach_depress_expire, &depress, 0);
+		}
+		/* An expiry before this lock has already restored the priority. */
+		thread_lock(td);
 		mi_switch(SW_VOL | SWT_RELINQUISH);
 		/* Like XNU's continuation, abort depression when we resume. */
 		thread_lock(td);
