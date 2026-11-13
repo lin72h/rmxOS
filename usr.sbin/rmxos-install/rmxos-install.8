@@ -1,0 +1,139 @@
+.Dd November 13, 2026
+.Dt RMXOS-INSTALL 8
+.Os
+.Sh NAME
+.Nm rmxos-install
+.Nd write a whole fresh rmxOS disk from a full stream
+.Sh SYNOPSIS
+.Nm
+.Fl -disk Ar disk
+.Fl -catalog Ar DIR | URL
+.Fl -hostname Ar name
+.Fl -user Ar name
+.Fl -key Ar file
+.Fl -console Ar list
+.Op Fl -pool Ar name
+.Op Fl -altroot Ar dir
+.Op Fl -swap Ar size
+.Op Fl -zone Ar name
+.Op Fl -erase
+.Sh DESCRIPTION
+.Nm
+writes
+.Ar disk
+in the shape every
+.Xr softwareupdate 8
+update leaves, without asking anything, for UEFI machines:
+.Bl -enum
+.It
+A GPT with a 260 MB FAT32 ESP, optional swap of
+.Ar size ,
+and one ZFS partition.
+There is no BIOS boot partition.
+.It
+The pool
+.Ar name
+(default
+.Cm rmxroot )
+created under the alternate root
+.Ar dir
+(default
+.Pa /mnt )
+with
+.Cm mountpoint=none ,
+.Cm atime=off ,
+.Cm compression=lz4
+and no cache file.
+.It
+The catalog's full stream received by softwareupdate's engine onto
+.Ar pool Ns /base/ Ns Ar lineage ,
+its snapshot cloned to
+.Ar pool Ns /ROOT/ Ns Ar snapshot ,
+held as
+.Cm rmxos-head
+and set as the pool's
+.Cm bootfs .
+.It
+Data:
+.Ar pool Ns /data
+and its
+.Cm private ,
+.Cm Users
+(case-insensitive),
+.Cm Library
+and
+.Cm local ,
+with
+.Pa /private/etc
+populated from the base's template by
+.Pa /usr/libexec/rmxos-datasync .
+.It
+The seeds on Data:
+.Pa rc.conf
+with the hostname, DHCP on the default interface,
+.Cm sshd_enable
+and
+.Xr mac_do 4 ;
+the first user, home
+.Pa /Users/ Ns Ar name ,
+whose only login is the public key in
+.Ar file ,
+and who becomes root with
+.Xr mdo 1
+by a
+.Va security.mac.do.rules
+line in
+.Pa sysctl.conf ;
+root's password locked;
+.Pa localtime
+from
+.Ar zone
+(default
+.Cm UTC ) ;
+and the first
+.Cm installed
+line of the update history.
+.It
+The environment's
+.Pa /boot/loader.efi
+at
+.Pa EFI/BOOT/BOOTX64.EFI
+and
+.Pa efi/freebsd/loader.efi
+on the ESP, and
+.Pa efi/freebsd/loader.env
+holding only the console lines for
+.Ar list ,
+a comma-separated list of loader consoles
+.Pq Cm comconsole , efi , vidconsole , nullconsole , spinconsole .
+.El
+.Pp
+Everything is unmounted and the pool exported at the end; the machine's own
+loader imports it.
+.Pp
+Before any write,
+.Nm
+refuses a disk that holds the running root, an imported pool, a mount or
+swap, a disk that is not empty (it has a partition table, or its first or
+last MiB is not zero) unless
+.Fl -erase
+is given, and a catalog without a full stream.
+A failure part-way names what was made, unmounts and exports the pool.
+.Sh ENVIRONMENT
+.Bl -tag -width RMXOS_SU_FIXTURE
+.It Ev RMXOS_SU_FIXTURE
+A host test directory: only an
+.Xr md 4
+disk backed by a file below it, an alternate root below it and a pool whose
+name starts with
+.Cm rmxsu
+are accepted.
+.El
+.Sh EXIT STATUS
+0 when the disk is written, 1 after a one-line refusal or failure, 2 for a
+usage error.
+.Sh SEE ALSO
+.Xr mdo 1 ,
+.Xr mac_do 4 ,
+.Xr softwareupdate 8 ,
+.Xr zpool 8
