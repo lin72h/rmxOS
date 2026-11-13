@@ -33,6 +33,11 @@ Other tools:
 .Op Fl -restart
 .Nm
 .Cm confirm | cancel
+.Nm
+.Fl i | -install
+.Ar label | Fl a
+.Fl -pool Ar pool
+.Fl -altroot Ar dir
 .Sh DESCRIPTION
 The sealed base is the ZFS dataset
 .Ar pool Ns /base/ Ns Ar lineage
@@ -218,6 +223,29 @@ Developer option: read
 and its streams from a directory or URL.
 .It Fl -no-scan
 Use the last fetched catalog.
+.It Fl -pool Ar pool Fl -altroot Ar dir
+With
+.Fl -install :
+install the catalog's full stream into
+.Ar pool ,
+which must be imported under the alternate root
+.Ar dir
+(not
+.Pa / ) ,
+as the image builder leaves its pool:
+.Ar pool Ns /base/ Ns Ar lineage
+received sealed and unmounted, its newest snapshot cloned to
+.Ar pool Ns /ROOT/ Ns Ar snapshot
+and held as
+.Cm rmxos-head ,
+and that clone set as the pool's
+.Cm bootfs .
+There is no one-time boot and no fallback record: nothing on
+.Ar pool
+precedes it.
+An existing
+.Ar pool Ns /base/ Ns Ar lineage
+or clone is refused; a failure undoes what was made.
 .It Fl -verbose , Fl -force , Fl -agree-to-license
 Accepted;
 .Fl -verbose
