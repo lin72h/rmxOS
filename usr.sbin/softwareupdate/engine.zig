@@ -4,8 +4,9 @@
 // An install is the same receive, clone and select on a named target: a pool
 // imported under an alternate root, as the image builder leaves its pool.
 const std = @import("std");
-const sys = @import("sys.zig");
-const catalog = @import("catalog.zig");
+// The installer (rmxos-install) imports this module and shares its context.
+pub const sys = @import("sys.zig");
+pub const catalog = @import("catalog.zig");
 const Esp = @import("esp.zig").Esp;
 const Ctx = sys.Ctx;
 
@@ -156,6 +157,12 @@ fn writeRecord(ctx: Ctx, r: Record) !void {
 }
 fn history(ctx: Ctx, action: []const u8, label: []const u8, environment: []const u8) !void {
     return historyReason(ctx, action, label, environment, "");
+}
+// A new installation's first lifecycle line, written by the installer with
+// ctx.root at the target's alternate root, once its Data is mounted there.
+pub fn recordInstalled(ctx: Ctx, label: []const u8, environment: []const u8) !void {
+    try sys.mkdirs(ctx.a, std.fs.path.dirname(try ctx.path(history_path)).?);
+    return history(ctx, "installed", label, environment);
 }
 // A fifth column, when present, says why.
 fn historyReason(ctx: Ctx, action: []const u8, label: []const u8, environment: []const u8, reason: []const u8) !void {

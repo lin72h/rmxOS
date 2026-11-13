@@ -34,7 +34,6 @@ pub const help =
     \\        --catalog DIR|URL          Read catalog.json from DIR or URL (developer option)
     \\        --no-auto-confirm          With --install: wait for confirm after the restart
     \\        confirm | cancel           Only for an install made with --no-auto-confirm
-    \\        --pool POOL --altroot DIR  With --install: the catalog's full stream into POOL, imported under DIR, as its boot environment
     \\
 ;
 
@@ -51,9 +50,6 @@ pub const Options = struct {
     force: bool = false,
     no_auto_confirm: bool = false,
     catalog: ?[]const u8 = null,
-    // A named target (install, reinstall from recovery) instead of the running system.
-    pool: ?[]const u8 = null,
-    altroot: ?[]const u8 = null,
 };
 // macOS flags rmxOS does not carry; each refused with one line.
 pub const refused = [_][]const u8{ "--fetch-full-installer", "--list-full-installers", "--install-rosetta", "--stdinpass", "--user", "--safari-only" };
@@ -98,11 +94,6 @@ pub fn parse(a: std.mem.Allocator, args: []const []const u8) !Options {
             if (i + 1 == args.len or o.catalog != null) return error.Usage;
             i += 1;
             o.catalog = args[i];
-        } else if (eq(x, "--pool") or eq(x, "--altroot")) {
-            const slot = if (eq(x, "--pool")) &o.pool else &o.altroot;
-            if (i + 1 == args.len or slot.* != null) return error.Usage;
-            i += 1;
-            slot.* = args[i];
         } else if (x.len > 0 and x[0] != '-' and (o.action == .install or o.action == .download)) {
             try o.labels.append(a, x);
         } else return error.Usage;
@@ -110,9 +101,6 @@ pub fn parse(a: std.mem.Allocator, args: []const []const u8) !Options {
     if (o.restart and o.action != .install and o.action != .rollback) return error.Usage;
     if (o.no_auto_confirm and o.action != .install) return error.Usage;
     if (o.action == .install and o.labels.items.len == 0 and !o.all and !o.recommended and !o.os_only) return error.Usage;
-    // A named target boots what is installed: no one-time boot, restart or confirm.
-    if ((o.pool == null) != (o.altroot == null)) return error.Usage;
-    if (o.pool != null and (o.action != .install or o.restart or o.no_auto_confirm or o.labels.items.len > 1)) return error.Usage;
     return o;
 }
 fn eq(a: []const u8, b: []const u8) bool {
@@ -191,7 +179,7 @@ fn run(ctx: Ctx, o: Options) !u8 {
         else => null,
     };
     defer if (lock) |held| held.release();
-    const env = if (o.pool) |p| try engine.open(ctx, .{ .pool = .{ .name = p, .altroot = o.altroot.? } }) else try engine.discover(ctx);
+    const env = try engine.discover(ctx);
     switch (o.action) {
         .status, .dump_state => return engine.status(ctx, env),
         .rollback => {
@@ -211,11 +199,6 @@ fn run(ctx: Ctx, o: Options) !u8 {
         error.MalformedCatalog => return ctx.refuse("catalog.json is not a {s} catalog", .{catalog.format}),
         else => return err,
     };
-    if (env.target == .pool) {
-        const f = loaded.catalog.full orelse return ctx.refuse("the catalog has no full stream for {s}", .{env.pool});
-        if (o.labels.items.len == 1 and !eq(o.labels.items[0], f.label)) return ctx.refuse("{s}: not the catalog's full stream {s}", .{ o.labels.items[0], f.label });
-        return engine.installTarget(ctx, env, f.update(), loaded.source, loaded.catalog.lineage);
-    }
     const next = try choose(ctx, env, loaded.catalog, null);
     switch (o.action) {
         .list => {

@@ -96,22 +96,12 @@ test "setting lines: last value wins, quotes and comments" {
     try t.expectEqual(@as(?[]const u8, null), catalog.lookup("retain=3\n", "confirm_delay"));
 }
 
-test "named target: --pool and --altroot together, only with --install" {
+test "installing onto another pool is rmxos-install's, not softwareupdate's" {
     var arena = std.heap.ArenaAllocator.init(t.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const o = try su.parse(a, &.{ "--install", "-a", "--pool", "rmxsu581", "--altroot", "/mnt" });
-    try t.expectEqualStrings("rmxsu581", o.pool.?);
-    try t.expectEqualStrings("/mnt", o.altroot.?);
-    try t.expect((try su.parse(a, &.{ "-i", "rmxos-c", "--pool", "p", "--altroot", "/mnt" })).labels.items.len == 1);
-    try t.expectError(error.Usage, su.parse(a, &.{ "--install", "-a", "--pool", "rmxsu581" }));
+    try t.expectError(error.Usage, su.parse(a, &.{ "--install", "-a", "--pool", "rmxsu581", "--altroot", "/mnt" }));
     try t.expectError(error.Usage, su.parse(a, &.{ "--install", "-a", "--altroot", "/mnt" }));
-    try t.expectError(error.Usage, su.parse(a, &.{ "-l", "--pool", "p", "--altroot", "/mnt" }));
-    try t.expectError(error.Usage, su.parse(a, &.{ "status", "--pool", "p", "--altroot", "/mnt" }));
-    try t.expectError(error.Usage, su.parse(a, &.{ "--install", "-a", "-R", "--pool", "p", "--altroot", "/mnt" }));
-    try t.expectError(error.Usage, su.parse(a, &.{ "--install", "-a", "--no-auto-confirm", "--pool", "p", "--altroot", "/mnt" }));
-    try t.expectError(error.Usage, su.parse(a, &.{ "-i", "x", "y", "--pool", "p", "--altroot", "/mnt" }));
-    try t.expectError(error.Usage, su.parse(a, &.{ "--install", "-a", "--pool", "p", "--pool", "q", "--altroot", "/mnt" }));
 }
 
 test "named target refusals come before any pool command" {
