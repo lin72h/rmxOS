@@ -95,3 +95,40 @@ test "setting lines: last value wins, quotes and comments" {
     try t.expectEqualStrings("60", catalog.lookup("confirm_delay=600\n# confirm_delay=1\n confirm_delay = \"60\"\n", "confirm_delay").?);
     try t.expectEqual(@as(?[]const u8, null), catalog.lookup("retain=3\n", "confirm_delay"));
 }
+
+test "named target: --pool and --altroot together, only with --install" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const o = try su.parse(a, &.{ "--install", "-a", "--pool", "rmxsu581", "--altroot", "/mnt" });
+    try t.expectEqualStrings("rmxsu581", o.pool.?);
+    try t.expectEqualStrings("/mnt", o.altroot.?);
+    try t.expect((try su.parse(a, &.{ "-i", "rmxos-c", "--pool", "p", "--altroot", "/mnt" })).labels.items.len == 1);
+    try t.expectError(error.Usage, su.parse(a, &.{ "--install", "-a", "--pool", "rmxsu581" }));
+    try t.expectError(error.Usage, su.parse(a, &.{ "--install", "-a", "--altroot", "/mnt" }));
+    try t.expectError(error.Usage, su.parse(a, &.{ "-l", "--pool", "p", "--altroot", "/mnt" }));
+    try t.expectError(error.Usage, su.parse(a, &.{ "status", "--pool", "p", "--altroot", "/mnt" }));
+    try t.expectError(error.Usage, su.parse(a, &.{ "--install", "-a", "-R", "--pool", "p", "--altroot", "/mnt" }));
+    try t.expectError(error.Usage, su.parse(a, &.{ "--install", "-a", "--no-auto-confirm", "--pool", "p", "--altroot", "/mnt" }));
+    try t.expectError(error.Usage, su.parse(a, &.{ "-i", "x", "y", "--pool", "p", "--altroot", "/mnt" }));
+    try t.expectError(error.Usage, su.parse(a, &.{ "--install", "-a", "--pool", "p", "--pool", "q", "--altroot", "/mnt" }));
+}
+
+test "named target refusals come before any pool command" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    // fixture=true and no command backend: each of these would fail on a run.
+    const ctx = sys.Ctx{ .a = arena.allocator(), .root = "/nonexistent-rmxsu-unit", .fixture = true };
+    const cases = [_]struct { pool: []const u8, altroot: []const u8, err: anyerror }{
+        .{ .pool = "zroot", .altroot = "/mnt", .err = error.FixturePool },
+        .{ .pool = "rmxsu581", .altroot = "/", .err = error.AltrootIsRoot },
+        .{ .pool = "rmxsu581", .altroot = "///", .err = error.AltrootIsRoot },
+        .{ .pool = "rmxsu581", .altroot = "mnt", .err = error.InvalidAltroot },
+        .{ .pool = "rmxsu581", .altroot = "", .err = error.InvalidAltroot },
+        .{ .pool = "rmxsu581", .altroot = "/mnt/../", .err = error.InvalidAltroot },
+        .{ .pool = "rmxsu/581", .altroot = "/mnt", .err = error.InvalidPool },
+        .{ .pool = "5rmxsu", .altroot = "/mnt", .err = error.InvalidPool },
+        .{ .pool = "", .altroot = "/mnt", .err = error.InvalidPool },
+    };
+    for (cases) |x| try t.expectError(x.err, engine.open(ctx, .{ .pool = .{ .name = x.pool, .altroot = x.altroot } }));
+}

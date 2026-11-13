@@ -1,6 +1,8 @@
 // The update lifecycle on the sealed layout: an update is a zfs send -i delta
 // received into pool/base/main as it is, cloned to pool/ROOT/<snapshot>,
 // activated for one boot and confirmed by the boot check. No promotion ever.
+// An install is the same receive, clone and select on a named target: a pool
+// imported under an alternate root, as the image builder leaves its pool.
 const std = @import("std");
 const sys = @import("sys.zig");
 const catalog = @import("catalog.zig");
@@ -18,11 +20,45 @@ pub const Env = struct {
     root: []const u8,
     base: []const u8,
     lineage: []const u8,
+    // "" for a named target: no environment of its pool is running.
     running: []const u8,
+    target: Target = .running,
     fn name(_: Env, dataset: []const u8) []const u8 {
         return dataset[(std.mem.lastIndexOfScalar(u8, dataset, '/') orelse return dataset) + 1 ..];
     }
 };
+
+// Where receive, clone and select act: the running system (discover), or a
+// pool imported under an alternate root (install, reinstall from recovery),
+// which is selected as bootfs directly; there is nothing to fall back to.
+pub const Target = union(enum) {
+    running,
+    pool: struct { name: []const u8, altroot: []const u8 },
+};
+
+pub fn open(ctx: Ctx, target: Target) !Env {
+    return switch (target) {
+        .running => discover(ctx),
+        .pool => |p| named(ctx, p.name, p.altroot),
+    };
+}
+
+// A named target is never the mounted root: its pool must be imported under
+// the alternate root given, and that root is not /.
+fn named(ctx: Ctx, pool: []const u8, altroot: []const u8) !Env {
+    if (pool.len == 0 or pool.len > 64 or !std.ascii.isAlphabetic(pool[0])) return error.InvalidPool;
+    for (pool) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '_' and ch != '-' and ch != '.') return error.InvalidPool;
+    if (ctx.fixture and !std.mem.startsWith(u8, pool, "rmxsu")) return error.FixturePool;
+    const want = std.mem.trimEnd(u8, altroot, "/");
+    if (altroot.len == 0 or altroot[0] != '/' or std.mem.indexOf(u8, altroot, "..") != null) return error.InvalidAltroot;
+    if (want.len == 0) return error.AltrootIsRoot;
+    const actual = sys.trim(try sys.capture(ctx, &.{ "/sbin/zpool", "get", "-H", "-o", "value", "altroot", pool }));
+    if (!std.mem.eql(u8, std.mem.trimEnd(u8, actual, "/"), want)) {
+        sys.failure = try ctx.fmt("pool {s} is imported under {s}, not {s}", .{ pool, actual, want });
+        return error.NotUnderAltroot;
+    }
+    return .{ .pool = pool, .root = try ctx.fmt("{s}/ROOT", .{pool}), .base = "", .lineage = "", .running = "", .target = .{ .pool = .{ .name = pool, .altroot = want } } };
+}
 
 pub fn discover(ctx: Ctx) !Env {
     const running = try sys.running(ctx);
@@ -148,21 +184,7 @@ pub fn installChoice(ctx: Ctx, running_env: Env, u: catalog.Update, source: []co
     const h: Snapshot = if (full) .{ .name = "", .guid = "0" } else try head(ctx, env);
     if (!std.mem.eql(u8, h.guid, u.origin_guid))
         return ctx.refuse("{s}: update starts from GUID {s}, installed base {s} is GUID {s}; nothing received", .{ u.label, u.origin_guid, h.name, h.guid });
-    const path = catalog.stream(ctx, source, u) catch return ctx.refuse("{s}: stream {s} unavailable; nothing received", .{ u.label, u.stream });
-    const got = sys.size(path) orelse 0;
-    if (got != u.size)
-        return ctx.refuse("{s}: stream is truncated ({d} of {d} bytes); nothing received", .{ u.label, got, u.size });
-    const digest = try sys.sha256File(path);
-    if (!std.mem.eql(u8, &digest, u.sha256))
-        return ctx.refuse("{s}: stream sha256 {s} does not match the catalog; nothing received", .{ u.label, digest });
-    const hd = header(ctx, path) catch return ctx.refuse("{s}: not a zfs send stream; nothing received", .{u.label});
-    const origin = try ctx.fmt("{d}", .{hd.from});
-    const target = try ctx.fmt("{d}", .{hd.to});
-    if (!std.mem.eql(u8, origin, h.guid) or !std.mem.eql(u8, target, u.target_guid))
-        return ctx.refuse("{s}: stream origin GUID {s} (target {s}) does not match base GUID {s}; nothing received", .{ u.label, origin, target, h.guid });
-
-    const at = std.mem.lastIndexOfScalar(u8, hd.name, '@') orelse return error.NotAStream;
-    if (!std.mem.eql(u8, hd.name[at + 1 ..], u.snapshot)) return ctx.refuse("{s}: stream snapshot does not match the catalog; nothing received", .{u.label});
+    const v = (try verifiedStream(ctx, u, source, h.guid)) orelse return 1;
     if (full) {
         const canonical = try ctx.fmt("{s}/base/{s}", .{ env.pool, lineage });
         const all = try zfs(ctx, &.{ "list", "-H", "-o", "name", "-r", env.pool });
@@ -171,14 +193,13 @@ pub fn installChoice(ctx: Ctx, running_env: Env, u: catalog.Update, source: []co
         if (hasWord(all, env.base)) return ctx.refuse("{s}: full-stream destination {s} already exists; nothing received", .{ u.label, env.base });
     }
     const snapshot = try ctx.fmt("{s}@{s}", .{ env.base, u.snapshot });
-    const received = try ctx.fmt("{s}{s}", .{ env.base, hd.name[at..] });
+    const received = try ctx.fmt("{s}{s}", .{ env.base, v.at });
     const clone = try ctx.fmt("{s}/{s}", .{ env.root, u.snapshot });
     const record_path = try ctx.path(fallback_path);
     const old_record = if (sys.exists(record_path)) try sys.read(ctx.a, record_path) else null;
     const hist_path = try ctx.path(history_path);
     const hist_size = sys.size(hist_path);
-    const args: []const []const u8 = if (full) &.{ "/sbin/zfs", "receive", "-u", "-o", "mountpoint=none", "-o", "canmount=off", "-o", "readonly=on", env.base } else &.{ "/sbin/zfs", "receive", "-u", env.base };
-    const r = try sys.run(ctx.a, args, path);
+    const r = try receiveStream(ctx, env.base, v.path, full);
     if (r.status != 0) return ctx.refuse("{s}: zfs receive failed: {s}", .{ u.label, sys.firstLine(r.stderr) });
     var made_clone = false;
     var activated = false;
@@ -191,6 +212,132 @@ pub fn installChoice(ctx: Ctx, running_env: Env, u: catalog.Update, source: []co
     };
     ctx.out("Installed {s} into {s}; it boots once on the next restart.\n", .{ u.label, clone });
     return 0;
+}
+
+const Verified = struct { path: [:0]const u8, at: []const u8 };
+// The catalog's stream before anything is received: its size and sha256, a
+// zfs send stream from `origin` to the update's target GUID and snapshot.
+// Null after a one-line refusal.
+fn verifiedStream(ctx: Ctx, u: catalog.Update, source: []const u8, origin_guid: []const u8) !?Verified {
+    const path = catalog.stream(ctx, source, u) catch return refused(ctx.refuse("{s}: stream {s} unavailable; nothing received", .{ u.label, u.stream }));
+    const got = sys.size(path) orelse 0;
+    if (got != u.size)
+        return refused(ctx.refuse("{s}: stream is truncated ({d} of {d} bytes); nothing received", .{ u.label, got, u.size }));
+    const digest = try sys.sha256File(path);
+    if (!std.mem.eql(u8, &digest, u.sha256))
+        return refused(ctx.refuse("{s}: stream sha256 {s} does not match the catalog; nothing received", .{ u.label, digest }));
+    const hd = header(ctx, path) catch return refused(ctx.refuse("{s}: not a zfs send stream; nothing received", .{u.label}));
+    const origin = try ctx.fmt("{d}", .{hd.from});
+    const target = try ctx.fmt("{d}", .{hd.to});
+    if (!std.mem.eql(u8, origin, origin_guid) or !std.mem.eql(u8, target, u.target_guid))
+        return refused(ctx.refuse("{s}: stream origin GUID {s} (target {s}) does not match base GUID {s}; nothing received", .{ u.label, origin, target, origin_guid }));
+    const at = std.mem.lastIndexOfScalar(u8, hd.name, '@') orelse return error.NotAStream;
+    if (!std.mem.eql(u8, hd.name[at + 1 ..], u.snapshot)) return refused(ctx.refuse("{s}: stream snapshot does not match the catalog; nothing received", .{u.label}));
+    return .{ .path = path, .at = hd.name[at..] };
+}
+fn refused(_: u8) ?Verified {
+    return null;
+}
+
+// The three steps an update and an install share. A full stream arrives
+// sealed and unmounted, as the image builder receives it.
+fn receiveStream(ctx: Ctx, dest: []const u8, path: [:0]const u8, full: bool) !sys.Result {
+    const args: []const []const u8 = if (full) &.{ "/sbin/zfs", "receive", "-u", "-o", "mountpoint=none", "-o", "canmount=off", "-o", "readonly=on", dest } else &.{ "/sbin/zfs", "receive", "-u", dest };
+    return sys.run(ctx.a, args, path);
+}
+fn cloneEnvironment(ctx: Ctx, snapshot: []const u8, clone: []const u8) !void {
+    _ = try zfs(ctx, &.{ "clone", "-o", "mountpoint=/", "-o", "canmount=noauto", "-o", "readonly=on", snapshot, clone });
+}
+// The running system boots a new environment once, so the boot check can
+// fall back; a named target's pool boots it from now on.
+fn select(ctx: Ctx, env: Env, clone: []const u8) !void {
+    switch (env.target) {
+        .running => _ = try sys.capture(ctx, &.{ "/sbin/bectl", "-r", env.root, "activate", "-t", env.name(clone) }),
+        .pool => _ = try sys.capture(ctx, &.{ "/sbin/zpool", "set", try ctx.fmt("bootfs={s}", .{clone}), env.pool }),
+    }
+}
+
+pub const head_tag = "rmxos-head";
+const Made = struct { base_parent: bool = false, root: bool = false, received: bool = false, clone: bool = false, hold: bool = false };
+
+// Install the catalog's full stream on a named target: <pool>/base/<lineage>
+// received, its newest snapshot cloned to <pool>/ROOT/<snapshot> and held as
+// rmxos-head, then bootfs. No fallback record or history: those are the
+// running system's, and the target's Data does not exist yet.
+pub fn installTarget(ctx: Ctx, target_env: Env, u: catalog.Update, source: []const u8, lineage: []const u8) !u8 {
+    if (target_env.target != .pool) return error.NotNamedTarget;
+    var env = target_env;
+    if (!std.mem.eql(u8, u.origin_guid, "0"))
+        return ctx.refuse("{s}: {s} takes a full stream; nothing received", .{ u.label, env.pool });
+    env.lineage = lineage;
+    env.base = try ctx.fmt("{s}/base/{s}", .{ env.pool, lineage });
+    const clone = try ctx.fmt("{s}/{s}", .{ env.root, u.snapshot });
+    const all = try zfs(ctx, &.{ "list", "-H", "-t", "all", "-o", "name", "-r", env.pool });
+    for ([_][]const u8{ env.base, clone }) |existing| if (hasWord(all, existing))
+        return ctx.refuse("{s}: {s} already exists; nothing received", .{ u.label, existing });
+    const v = (try verifiedStream(ctx, u, source, "0")) orelse return 1;
+    const snapshot = try ctx.fmt("{s}@{s}", .{ env.base, u.snapshot });
+    var made = Made{};
+    installSteps(ctx, env, u, v.path, snapshot, clone, all, &made) catch |err| {
+        const cause = sys.failure;
+        undoTarget(ctx, env, snapshot, clone, made) catch |cleanup_err|
+            return ctx.refuse("{s}: {s} {s}; recovery incomplete: {s}", .{ u.label, @errorName(err), cause, @errorName(cleanup_err) });
+        return ctx.refuse("{s}: {s} {s}; install undone", .{ u.label, @errorName(err), cause });
+    };
+    ctx.out("Installed {s} into {s}; {s} boots it.\n", .{ u.label, clone, env.pool });
+    return 0;
+}
+
+fn installSteps(ctx: Ctx, env: Env, u: catalog.Update, path: [:0]const u8, snapshot: []const u8, clone: []const u8, all: []const u8, made: *Made) !void {
+    // The image builder's parents: base unmountable, ROOT without a mountpoint.
+    const parent = try ctx.fmt("{s}/base", .{env.pool});
+    if (!hasWord(all, parent)) {
+        _ = try zfs(ctx, &.{ "create", "-o", "canmount=off", parent });
+        made.base_parent = true;
+    }
+    if (!hasWord(all, env.root)) {
+        _ = try zfs(ctx, &.{ "create", "-o", "mountpoint=none", "-o", "canmount=off", env.root });
+        made.root = true;
+    }
+    const r = try receiveStream(ctx, env.base, path, true);
+    if (r.status != 0) {
+        sys.failure = sys.firstLine(r.stderr);
+        return error.ReceiveFailed;
+    }
+    made.received = true;
+    if (!std.mem.eql(u8, (try head(ctx, env)).name, snapshot)) return error.ReceivedSnapshotMismatch;
+    if (!std.mem.eql(u8, try get(ctx, "guid", snapshot), u.target_guid)) return error.ReceivedGuidMismatch;
+    try cloneEnvironment(ctx, snapshot, clone);
+    made.clone = true;
+    _ = try zfs(ctx, &.{ "hold", head_tag, snapshot });
+    made.hold = true;
+    try select(ctx, env, clone);
+}
+
+// bootfs is set last, so a failure never leaves it pointing at what is undone.
+fn undoTarget(ctx: Ctx, env: Env, snapshot: []const u8, clone: []const u8, made: Made) !void {
+    var failed = false;
+    if (made.hold) _ = zfs(ctx, &.{ "release", head_tag, snapshot }) catch {
+        failed = true;
+    };
+    if (made.clone) _ = zfs(ctx, &.{ "destroy", clone }) catch {
+        failed = true;
+    };
+    if (made.received) {
+        _ = zfs(ctx, &.{ "destroy", snapshot }) catch {
+            failed = true;
+        };
+        _ = zfs(ctx, &.{ "destroy", env.base }) catch {
+            failed = true;
+        };
+    }
+    if (made.root) _ = zfs(ctx, &.{ "destroy", env.root }) catch {
+        failed = true;
+    };
+    if (made.base_parent) _ = zfs(ctx, &.{ "destroy", try ctx.fmt("{s}/base", .{env.pool}) }) catch {
+        failed = true;
+    };
+    if (failed) return error.InstallCleanup;
 }
 
 pub fn runningGuid(ctx: Ctx, env: Env) ![]const u8 {
@@ -318,14 +465,14 @@ fn stage(ctx: Ctx, env: Env, u: catalog.Update, snapshot: []const u8, clone: []c
     const guid = try get(ctx, "guid", snapshot);
     if (!std.mem.eql(u8, guid, u.target_guid)) return error.ReceivedGuidMismatch;
     if (create) {
-        _ = try zfs(ctx, &.{ "clone", "-o", "mountpoint=/", "-o", "canmount=noauto", "-o", "readonly=on", snapshot, clone });
+        try cloneEnvironment(ctx, snapshot, clone);
         made_clone.* = true;
     }
     wrote_record.* = true;
     try writeRecord(ctx, .{ .environment = env.running, .time = try sys.now(ctx.a), .label = u.label, .staged = clone, .snapshot = snapshot, .confirm = if (manual) "manual" else "auto", .state = "staged" });
     try history(ctx, "staged", u.label, clone);
     activated.* = true;
-    _ = try sys.capture(ctx, &.{ "/sbin/bectl", "-r", env.root, "activate", "-t", u.snapshot });
+    try select(ctx, env, clone);
 }
 
 fn undoInstall(ctx: Ctx, env: Env, received: []const u8, clone: []const u8, previous: []const u8, made_clone: bool, activated: bool, wrote_record: bool, old_record: ?[]const u8, hist_size: ?u64) !void {
