@@ -442,12 +442,41 @@ fn failedStart(_: [*c]const c.atf_tc_t) callconv(.c) void {
     _ = c.printf("failed_start_summary expected=100 observed=%u\n", passed);
     if (passed != 100) c.atf_tc_fail("failed-start expected=100 observed=%u", passed);
 }
+// XNU's workq_reqthreads refuses reqcount <= 0; macOS returns EINVAL through
+// both request calls. A later request of one still runs exactly one callback.
+fn countRefused(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    begin();
+    setup();
+    for ([_]c_int{ 0, -1 }) |n| {
+        const direct = c._pthread_workqueue_addthreads(n, priority(false));
+        const legacy = c.pthread_workqueue_addthreads_np(c.WORKQ_DEFAULT_PRIOQUEUE, 0, n);
+        _ = c.printf("addthreads count=%d expected=%d observed_addthreads=%d observed_addthreads_np=%d\n", n, @as(c_int, c.EINVAL), direct, legacy);
+        if (direct != c.EINVAL or legacy != c.EINVAL) c.atf_tc_fail("count=%d expected=EINVAL observed=%d/%d", n, direct, legacy);
+    }
+    request(1, priority(false));
+    if (!await(&entered, 1)) c.atf_tc_fail("request after refusals expected=1 observed=%u", entered.load(.seq_cst));
+    drain(1);
+    if (entered.load(.seq_cst) != 1) c.atf_tc_fail("callbacks expected=1 observed=%u", entered.load(.seq_cst));
+}
+// macOS ignores _pthread_workqueue_init's flags. Registration is once per process.
+fn initFlags(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    begin();
+    const rc = c._pthread_workqueue_init(&callback, 0, 123);
+    _ = c.printf("workqueue_init flags=123 expected=0 observed=%d\n", rc);
+    if (rc != 0) c.atf_tc_fail("init flags=123 expected=0 observed=%d", rc);
+    request(1, priority(false));
+    if (!await(&entered, 1)) c.atf_tc_fail("request after init expected=1 observed=%u", entered.load(.seq_cst));
+    drain(1);
+    if (entered.load(.seq_cst) != 1) c.atf_tc_fail("callbacks expected=1 observed=%u", entered.load(.seq_cst));
+}
 const Case = struct { name: [*:0]const u8, body: *const fn ([*c]const c.atf_tc_t) callconv(.c) void };
 const cases = [_]Case{
     .{ .name = "refused_served_after_failed_start", .body = &failedStart },
     .{ .name = "refused_served_on_return", .body = &refusedReturn },
     .{ .name = "refused_served_by_timer", .body = &refusedTimer },
     .{ .name = "registration_once", .body = &registration },
+    .{ .name = "addthreads_count_refused", .body = &countRefused },
+    .{ .name = "init_flags_ignored", .body = &initFlags },
     .{ .name = "features", .body = &features },
     .{ .name = "blocked_constrained", .body = &constrained },
     .{ .name = "blocked_overcommit", .body = &overcommit },

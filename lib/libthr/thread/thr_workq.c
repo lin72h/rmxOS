@@ -1294,7 +1294,8 @@ twq_addthreads_common(uint32_t numthreads, pthread_priority_t priority)
 	int lane;
 	int error;
 
-	if ((int)numthreads < 0)
+	/* XNU's workq_reqthreads refuses reqcount <= 0. */
+	if ((int)numthreads <= 0)
 		return (EINVAL);
 
 	_thr_check_init();
@@ -1390,11 +1391,11 @@ pthread_workqueue_setup(struct pthread_workqueue_config *cfg, size_t cfg_size)
 int
 _pthread_workqueue_init_with_workloop(pthread_workqueue_function2_t queue_func,
     pthread_workqueue_function_kevent_t kevent_func,
-    pthread_workqueue_function_workloop_t workloop_func, int offset, int flags)
+    pthread_workqueue_function_workloop_t workloop_func, int offset,
+    int flags __unused)
 {
 
-	if (flags != 0)
-		return (ENOTSUP);
+	/* macOS accepts and ignores flags here. */
 	if (kevent_func != NULL || workloop_func != NULL)
 		return (ENOTSUP);
 	return (twq_configure_runtime(queue_func, NULL, (uint64_t)offset, 0));
