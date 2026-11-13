@@ -32,7 +32,7 @@
 
 /* Fake the CrashReporterClient API */
 #define CRGetCrashLogMessage() 0
-#define CRSetCrashLogMessage(x) /* nothing */
+#define CRSetCrashLogMessage(x) ((void)(x))
 
 #else /* !LIBC_NO_LIBCRASHREPORTERCLIENT */
 
