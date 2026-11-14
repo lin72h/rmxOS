@@ -1,4 +1,4 @@
-module os [system] [extern_c] {
+module _rmxos_os [system] [extern_c] {
 	module base {
 		header "base.h"
 		export *
