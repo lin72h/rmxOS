@@ -175,8 +175,6 @@ SUBDIR=	alias \
 	whois \
 	write \
 	xargs \
-	xcode-select \
-	xcrun \
 	xinstall \
 	xo \
 	xz \
