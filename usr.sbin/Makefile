@@ -223,6 +223,7 @@ SUBDIR.${MK_TESTS}+=	tests
 .include <bsd.arch.inc.mk>
 
 SUBDIR+= softwareupdate
+SUBDIR+= rmxos-install
 
 SUBDIR_PARALLEL=
 
