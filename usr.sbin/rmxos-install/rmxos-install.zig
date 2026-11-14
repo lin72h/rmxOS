@@ -171,6 +171,7 @@ const Run = struct {
     ctx: Ctx,
     o: Options,
     disk: []const u8,
+    has_table: bool,
     made: std.ArrayList([]const u8) = .empty,
     esp: []const u8 = "",
     pool_created: bool = false,
@@ -195,10 +196,11 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     const argv = init.args.toSlice(a) catch return 1;
     const o = parse(argv[1..]) catch {
         sys.writeAll(2, usage) catch {};
+        sys.writeAll(2, "rmxos-install: invalid arguments; nothing written\n") catch {};
         return 2;
     };
     validate(o) catch |err| return refuse(ctx, "{s}; nothing written", .{@errorName(err)});
-    return install(ctx, o) catch |err| refuse(ctx, "{s}{s}{s}", .{ @errorName(err), if (sys.failure.len > 0) ": " else "", sys.failure });
+    return install(ctx, o) catch |err| refuse(ctx, "{s}{s}{s}; nothing written", .{ @errorName(err), if (sys.failure.len > 0) ": " else "", sys.failure });
 }
 fn refuse(ctx: Ctx, comptime f: []const u8, args: anytype) u8 {
     sys.writeAll(2, std.fmt.allocPrint(ctx.a, "rmxos-install: " ++ f ++ "\n", args) catch return 1) catch {};
@@ -212,15 +214,17 @@ fn install(ctx: Ctx, o: Options) !u8 {
     const loaded = catalog.load(ctx, o.catalog, false) catch |err| return refuse(ctx, "catalog {s}: {s}; nothing written", .{ o.catalog, @errorName(err) });
     const full = loaded.catalog.full orelse return refuse(ctx, "catalog {s} has no full stream; nothing written", .{o.catalog});
     const disk = diskName(o.disk);
-    if (try diskRefusal(ctx, o, disk)) |why| return refuse(ctx, "{s}: {s}; nothing written", .{ disk, why });
-    const pools = try sys.capture(ctx, &.{ "/sbin/zpool", "list", "-H", "-o", "name" });
+    const checked = try diskRefusal(ctx, o, disk);
+    if (checked.refusal) |why| return refuse(ctx, "{s}: {s}; nothing written", .{ disk, why });
+    const pools = sys.capture(ctx, &.{ "/sbin/zpool", "list", "-H", "-o", "name" }) catch
+        return refuse(ctx, "cannot read imported pool names; nothing written", .{});
     var names = std.mem.tokenizeAny(u8, pools, " \t\r\n");
     while (names.next()) |n| if (eq(n, o.pool)) return refuse(ctx, "a pool named {s} is already imported; nothing written", .{o.pool});
     if (ctx.fixture and !std.mem.startsWith(u8, o.pool, "rmxsu")) return refuse(ctx, "{s}: a host run acts only on rmxsu pools; nothing written", .{o.pool});
     if (ctx.fixture and !std.mem.startsWith(u8, o.altroot, try ctx.fmt("{s}/", .{ctx.root}))) return refuse(ctx, "{s}: a host run's alternate root lies below {s}; nothing written", .{ o.altroot, ctx.root });
     for ([_][]const u8{ o.altroot, try espDir(ctx, o) }) |d| if (!emptyOrAbsent(try ctx.z(d))) return refuse(ctx, "{s} is not an empty directory; nothing written", .{d});
 
-    var r = Run{ .ctx = ctx, .o = o, .disk = disk };
+    var r = Run{ .ctx = ctx, .o = o, .disk = disk, .has_table = checked.has_table };
     const clone = try ctx.fmt("{s}/ROOT/{s}", .{ o.pool, full.snapshot });
     steps(&r, key, loaded.source, loaded.catalog.lineage, full, clone) catch |err| {
         const cause = sys.failure;
@@ -245,54 +249,94 @@ fn emptyOrAbsent(p: [:0]const u8) bool {
     return true;
 }
 
-// Null when the disk may be written; otherwise why not.
-fn diskRefusal(ctx: Ctx, o: Options, disk: []const u8) !?[]const u8 {
+pub const DiskCheck = struct { refusal: ?[]const u8 = null, has_table: bool = false };
+
+// A failed command is null, distinct from a successful empty result.
+pub const DiskLookups = struct {
+    geom: ?[]const u8,
+    tables: ?[]const u8,
+    pools: ?[]const u8,
+    mounts: ?[]const u8,
+    swaps: ?[]const u8,
+};
+
+// conftxt is depth-first. A disk's subtree includes every layered provider,
+// not just PART and LABEL; names outside that subtree must not match it.
+fn diskProviders(a: std.mem.Allocator, disk: []const u8, text: []const u8) ![]const []const u8 {
+    var providers: std.ArrayList([]const u8) = .empty;
+    var root: ?usize = null;
+    var previous: usize = 0;
+    var rows = std.mem.tokenizeScalar(u8, text, '\n');
+    while (rows.next()) |row| {
+        var words = std.mem.tokenizeAny(u8, row, " \t\r");
+        const first = words.next() orelse continue;
+        const level = try std.fmt.parseInt(usize, first, 10);
+        _ = words.next() orelse return error.GeomOutput;
+        const name = words.next() orelse return error.GeomOutput;
+        if (level > previous + 1) return error.GeomOutput;
+        previous = level;
+        if (root) |r| {
+            if (level <= r) root = null;
+        }
+        if (eq(name, disk)) root = level;
+        if (root != null) try providers.append(a, name);
+    }
+    if (providers.items.len == 0) return error.GeomOutput;
+    return providers.items;
+}
+
+// Pure lookup check: unit tests supply successful text or failed lookups.
+pub fn diskUse(a: std.mem.Allocator, disk: []const u8, lookups: DiskLookups) !DiskCheck {
+    inline for (.{ .{ "geom", "GEOM tree" }, .{ "tables", "partition tables" }, .{ "pools", "imported pool status" }, .{ "mounts", "mounts" }, .{ "swaps", "swap" } }) |lookup| {
+        if (@field(lookups, lookup[0]) == null) return .{ .refusal = "cannot read " ++ lookup[1] };
+    }
+    const providers = diskProviders(a, disk, lookups.geom.?) catch return .{ .refusal = "cannot read GEOM tree for disk" };
+    var result = DiskCheck{};
+    // Query all tables: successful absence is normal for a blank disk.
+    // Querying a named blank disk instead returns a command failure.
+    var rows = std.mem.splitScalar(u8, lookups.tables.?, '\n');
+    while (rows.next()) |row| {
+        var words = std.mem.tokenizeAny(u8, row, " \t\r");
+        if (!eq(words.next() orelse continue, "=>")) continue;
+        for (0..2) |_| _ = words.next() orelse return .{ .refusal = "cannot read partition tables" };
+        const name = words.next() orelse return .{ .refusal = "cannot read partition tables" };
+        _ = words.next() orelse return .{ .refusal = "cannot read partition tables" };
+        if (eq(name, disk)) result.has_table = true;
+    }
+    for (providers) |p| {
+        const path = try std.fmt.allocPrint(a, "/dev/{s}", .{p});
+        const reason = if (hasWord(lookups.pools.?, path)) "is in an imported pool" else if (hasWord(lookups.mounts.?, path)) "is mounted" else if (hasWord(lookups.swaps.?, path)) "is in use as swap" else continue;
+        result.refusal = try std.fmt.allocPrint(a, "{s} {s}", .{ path, reason });
+        return result;
+    }
+    return result;
+}
+
+fn diskRefusal(ctx: Ctx, o: Options, disk: []const u8) !DiskCheck {
     const dev = try ctx.fmt("/dev/{s}", .{disk});
-    if (!sys.exists(try ctx.z(dev))) return "no such disk";
+    if (!sys.exists(try ctx.z(dev))) return .{ .refusal = "no such disk" };
     if (ctx.fixture) {
-        if (!std.mem.startsWith(u8, disk, "md")) return "a host run writes only md disks";
-        const list = sys.capture(ctx, &.{ "/sbin/mdconfig", "-l", "-v", "-u", disk[2..] }) catch return "not an attached md";
+        if (!std.mem.startsWith(u8, disk, "md")) return .{ .refusal = "a host run writes only md disks" };
+        const list = sys.capture(ctx, &.{ "/sbin/mdconfig", "-l", "-v", "-u", disk[2..] }) catch return .{ .refusal = "cannot read attached md" };
         // md0  vnode  8192M  /path/disk.img  <label>
         var cols = std.mem.tokenizeAny(u8, list, " \t\r\n");
         for (0..3) |_| _ = cols.next();
         const backing = cols.next() orelse "";
-        if (!std.mem.startsWith(u8, backing, try ctx.fmt("{s}/", .{ctx.root}))) return "a host run writes only an md backed below its fixture directory";
+        if (!std.mem.startsWith(u8, backing, try ctx.fmt("{s}/", .{ctx.root}))) return .{ .refusal = "a host run writes only an md backed below its fixture directory" };
     }
-    // Every provider on the disk: the disk, its partitions and their labels.
-    var providers: std.ArrayList([]const u8) = .empty;
-    try providers.append(ctx.a, disk);
-    const table = sys.run(ctx.a, &.{ "/sbin/gpart", "show", "-p", disk }, null) catch null;
-    const has_table = table != null and table.?.status == 0;
-    if (has_table) {
-        var words = std.mem.tokenizeAny(u8, table.?.stdout, " \t\r\n");
-        while (words.next()) |w| if (std.mem.startsWith(u8, w, disk) and w.len > disk.len and !std.ascii.isDigit(w[disk.len])) try providers.append(ctx.a, w);
-    }
-    const labels = sys.capture(ctx, &.{ "/sbin/glabel", "status", "-s" }) catch "";
-    var rows = std.mem.splitScalar(u8, labels, '\n');
-    while (rows.next()) |row| {
-        var cols = std.mem.tokenizeAny(u8, row, " \t");
-        const label = cols.next() orelse continue;
-        _ = cols.next();
-        const component = cols.next() orelse continue;
-        for (providers.items) |p| if (eq(component, p)) {
-            try providers.append(ctx.a, label);
-            break;
-        };
-    }
-    const status = sys.capture(ctx, &.{ "/sbin/zpool", "status", "-P" }) catch "";
-    const mounts = sys.capture(ctx, &.{ "/sbin/mount", "-p" }) catch "";
-    const swaps = sys.capture(ctx, &.{ "/sbin/swapctl", "-l" }) catch "";
-    for (providers.items) |p| {
-        const path = try ctx.fmt("/dev/{s}", .{p});
-        if (hasWord(status, path)) return try ctx.fmt("{s} is in an imported pool", .{path});
-        if (hasWord(mounts, path)) return try ctx.fmt("{s} is mounted", .{path});
-        if (hasWord(swaps, path)) return try ctx.fmt("{s} is in use as swap", .{path});
-    }
+    const checked = try diskUse(ctx.a, disk, .{
+        .geom = sys.capture(ctx, &.{ "/sbin/sysctl", "-n", "kern.geom.conftxt" }) catch null,
+        .tables = sys.capture(ctx, &.{ "/sbin/gpart", "show", "-p" }) catch null,
+        .pools = sys.capture(ctx, &.{ "/sbin/zpool", "status", "-P" }) catch null,
+        .mounts = sys.capture(ctx, &.{ "/sbin/mount", "-p" }) catch null,
+        .swaps = sys.capture(ctx, &.{ "/sbin/swapctl", "-l" }) catch null,
+    });
+    if (checked.refusal != null) return checked;
     if (!o.erase) {
-        if (has_table) return "holds a partition table (--erase to overwrite it)";
-        if (!try zeroEnds(ctx, dev)) return "is not empty (--erase to overwrite it)";
+        if (checked.has_table) return .{ .refusal = "holds a partition table (--erase to overwrite it)" };
+        if (!try zeroEnds(ctx, dev)) return .{ .refusal = "is not empty (--erase to overwrite it)" };
     }
-    return null;
+    return checked;
 }
 fn hasWord(text: []const u8, word: []const u8) bool {
     var words = std.mem.tokenizeAny(u8, text, " \t\r\n");
@@ -340,7 +384,7 @@ fn steps(r: *Run, key: []const u8, source: []const u8, lineage: []const u8, full
     const o = r.o;
     const disk = r.disk;
     if (o.erase) {
-        _ = sys.run(ctx.a, &.{ "/sbin/gpart", "destroy", "-F", disk }, null) catch {};
+        if (r.has_table) _ = try r.cmd(&.{ "/sbin/gpart", "destroy", "-F", disk });
         try wipeEnds(ctx, try ctx.fmt("/dev/{s}", .{disk}));
         try r.did("erased {s}", .{disk});
     }
@@ -358,6 +402,7 @@ fn steps(r: *Run, key: []const u8, source: []const u8, lineage: []const u8, full
     try r.did("ZFS partition {s}", .{part});
     try wipeEnds(ctx, try ctx.fmt("/dev/{s}", .{part}));
     _ = try r.cmd(&.{ "/sbin/newfs_msdos", "-F", "32", "-c", "1", try ctx.fmt("/dev/{s}", .{esp}) });
+    try r.did("FAT32 filesystem on ESP {s}", .{esp});
 
     // The pool as the image builder creates its own.
     try sys.mkdirs(ctx.a, o.altroot);

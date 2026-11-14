@@ -118,6 +118,14 @@ swap, a disk that is not empty (it has a partition table, or its first or
 last MiB is not zero) unless
 .Fl -erase
 is given, and a catalog without a full stream.
+All providers in the disk's GEOM subtree count, including encryption,
+NOP, mirror and label providers above its partitions.
+A failed GEOM, partition-table, imported-pool, mount or swap lookup refuses
+the install and reports that nothing was written.
+With
+.Fl -erase ,
+an existing partition table is destroyed before erasing the disk's ends;
+a failed table destruction stops the install.
 A failure part-way names what was made, unmounts and exports the pool.
 .Sh ENVIRONMENT
 .Bl -tag -width RMXOS_SU_FIXTURE
