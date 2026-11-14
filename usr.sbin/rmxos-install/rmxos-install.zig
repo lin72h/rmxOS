@@ -229,7 +229,9 @@ fn install(ctx: Ctx, o: Options) !u8 {
     steps(&r, key, loaded.source, loaded.catalog.lineage, full, clone) catch |err| {
         const cause = sys.failure;
         settle(&r);
-        const list = try std.mem.join(ctx.a, ", ", r.made.items);
+        // Stay in the partial-write failure path even if formatting runs out
+        // of memory; the outer catch is only for pre-write refusals.
+        const list = std.mem.join(ctx.a, ", ", r.made.items) catch "unavailable";
         return refuse(ctx, "{s}{s}{s}; made: {s}; left on {s} (rerun with --erase)", .{ @errorName(err), if (cause.len > 0) ": " else "", cause, if (list.len > 0) list else "nothing", disk });
     };
     ctx.out("Installed {s} on {s}: pool {s} boots {s}; first user {s}; console {s}.\n", .{ full.label, disk, o.pool, clone, o.user, o.console });
