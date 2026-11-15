@@ -132,3 +132,54 @@ test "seed texts: loader.env console only, rc.conf, mac_do rule" {
     try t.expectEqualStrings("zfs_enable=\"YES\"\nhostname=\"host-1\"\nifconfig_DEFAULT=\"DHCP\"\nsshd_enable=\"YES\"\nkld_list=\"mac_do\"\n", rc);
     try t.expectEqualStrings("security.mac.do.rules=\"uid=1001>uid=0,gid=*,+gid=*\"\n", try ri.macDoRule(a, "1001"));
 }
+
+const engine = @import("engine");
+const sys = engine.sys;
+const dirent = @cImport(@cInclude("dirent.h"));
+
+// A scratch directory below $TMPDIR (default /tmp); `clear` removes it.
+fn scratch(a: std.mem.Allocator) ![:0]const u8 {
+    const base = if (sys.c.getenv("TMPDIR")) |p| std.mem.span(p) else "/tmp";
+    const p = try std.fmt.allocPrintSentinel(a, "{s}/rmxos-install-unit-XXXXXX", .{std.mem.trimEnd(u8, base, "/")}, 0);
+    if (sys.c.mkdtemp(p.ptr) == null) return error.Scratch;
+    return p;
+}
+fn clear(a: std.mem.Allocator, p: [:0]const u8) void {
+    const d = dirent.opendir(p) orelse {
+        _ = sys.c.unlink(p);
+        return;
+    };
+    var names: std.ArrayList([:0]const u8) = .empty;
+    while (dirent.readdir(d)) |ent| {
+        const name = std.mem.span(@as([*:0]const u8, @ptrCast(&ent.*.d_name)));
+        if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) continue;
+        names.append(a, std.fmt.allocPrintSentinel(a, "{s}/{s}", .{ p, name }, 0) catch continue) catch continue;
+    }
+    _ = dirent.closedir(d);
+    for (names.items) |n| clear(a, n);
+    _ = sys.c.rmdir(p);
+}
+
+test "ESP files: the engine's populate writes every loader path and loader.env" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const top = try scratch(a);
+    defer clear(a, top);
+    const ctx = sys.Ctx{ .a = a, .root = "", .fixture = true };
+    const dir = try std.fmt.allocPrint(a, "{s}/esp", .{top});
+    try engine.esp.populate(ctx, dir, "the root's loader\n", try ri.loaderEnv(a, "comconsole"));
+    try t.expectEqualStrings("EFI/BOOT/BOOTX64.EFI", engine.esp.loaders[0]);
+    try t.expectEqualStrings("efi/freebsd/loader.efi", engine.esp.loaders[1]);
+    for (engine.esp.loaders ++ [_][]const u8{engine.esp.loader_env}, 0..) |rel, i| {
+        const p = try std.fmt.allocPrintSentinel(a, "{s}/{s}", .{ dir, rel }, 0);
+        const want = if (i < engine.esp.loaders.len) "the root's loader\n" else "console=comconsole\ncomconsole_speed=115200\n";
+        try t.expectEqualStrings(want, try sys.read(a, p));
+        try t.expect(!sys.exists(try std.fmt.allocPrintSentinel(a, "{s}.new", .{p}, 0)));
+    }
+    // A path that cannot be written names itself.
+    const blocked = try std.fmt.allocPrint(a, "{s}/blocked", .{top});
+    try sys.replace(a, try std.fmt.allocPrintSentinel(a, "{s}/EFI", .{blocked}, 0), "a file where a directory goes\n");
+    try t.expectError(error.EspFiles, engine.esp.populate(ctx, blocked, "x", "y"));
+    try t.expect(std.mem.startsWith(u8, sys.failure, "EFI/BOOT/BOOTX64.EFI: mkdir: "));
+}

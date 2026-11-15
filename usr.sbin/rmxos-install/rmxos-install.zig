@@ -506,10 +506,9 @@ fn espFiles(r: *Run) !void {
     try sys.mkdirs(ctx.a, dir);
     _ = try r.cmd(&.{ "/sbin/mount_msdosfs", try ctx.fmt("/dev/{s}", .{r.esp}), dir });
     r.esp_mounted = dir;
+    // Every loader path an update refreshes, and loader.env: the engine's table.
     const loader = try sys.read(ctx.a, try r.at("/boot/loader.efi"));
-    for ([_][]const u8{ "/EFI/BOOT/BOOTX64.EFI", "/efi/freebsd/loader.efi" }) |p|
-        try sys.replace(ctx.a, try ctx.z(try ctx.fmt("{s}{s}", .{ dir, p })), loader);
-    try sys.replace(ctx.a, try ctx.z(try ctx.fmt("{s}/efi/freebsd/loader.env", .{dir})), try loaderEnv(ctx.a, r.o.console));
+    try engine.esp.populate(ctx, dir, loader, try loaderEnv(ctx.a, r.o.console));
     _ = try r.cmd(&.{ "/sbin/umount", dir });
     r.esp_mounted = null;
 }

@@ -1,4 +1,4 @@
-.Dd November 13, 2026
+.Dd November 15, 2026
 .Dt RMXOS-INSTALL 8
 .Os
 .Sh NAME
@@ -96,16 +96,19 @@ line of the update history.
 .It
 The environment's
 .Pa /boot/loader.efi
-at
-.Pa EFI/BOOT/BOOTX64.EFI
+at every ESP path an update refreshes
+.Pq see Xr softwareupdate 8 :
+.Pa EFI/BOOT/BOOTX64.EFI ,
+which the firmware starts because no boot entry is made, and
+.Pa efi/freebsd/loader.efi ;
 and
-.Pa efi/freebsd/loader.efi
-on the ESP, and
 .Pa efi/freebsd/loader.env
 holding only the console lines for
 .Ar list ,
 a comma-separated list of loader consoles
 .Pq Cm comconsole , efi , vidconsole , nullconsole , spinconsole .
+No update rewrites
+.Pa loader.env .
 .El
 .Pp
 Everything is unmounted and the pool exported at the end; the machine's own

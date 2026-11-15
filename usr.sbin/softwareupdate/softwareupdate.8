@@ -1,4 +1,4 @@
-.Dd November 7, 2026
+.Dd November 15, 2026
 .Dt SOFTWAREUPDATE 8
 .Os
 .Sh NAME
@@ -97,7 +97,7 @@ and a good-boot check passes: the four Data datasets are mounted, the
 ownership list below holds, and the base's
 .Ql written
 is 0.
-It then refreshes the ESP's loader
+It then refreshes the ESP's loaders
 .Pq see Sx ESP ,
 sets the pool's
 .Cm bootfs
@@ -128,7 +128,7 @@ With
 .Fl -no-auto-confirm
 the check waits for
 .Cm confirm ,
-which refreshes the ESP's loader too;
+which refreshes the ESP's loaders too;
 before the restart,
 .Cm cancel
 removes the staged environment and the received snapshot.
@@ -150,7 +150,7 @@ a failed check's reasons, the Data datasets and the last history rows.
 .Fl -history Fl -verbose
 shows every history row, with the failed checks of a
 .Cm boot-check-failed
-row and the sha256s of an
+row and each loader path and sha256 of an
 .Cm esp-refreshed
 row.
 .Pp
@@ -167,31 +167,55 @@ or the ESP's
 .Ss ESP
 At confirm, before
 .Cm bootfs
-moves, the ESP's loader follows the new root's
+moves, the ESP's loaders follow the new root's
 .Pa /boot/loader.efi .
-The ESP is the one mounted msdosfs file system, or else the one
+The ESP is the
 .Cm efi
 partition
-.Pq Xr gpart 8 ,
-mounted at a temporary directory for the confirm; without an ESP nothing is
-written.
-A partition listed under a GEOM label
-.Pq Pa diskid/ ... , Pa gpt/ ...
-as well as under its device name counts once.
-The loader is
-.Pa efi/freebsd/loader.efi ,
-or else
-.Pa efi/boot/bootx64.efi .
-When its sha256 differs from the root's, the new loader is written to a
-temporary file beside it, synced and checked against the root's sha256, the
-old one is kept beside it with
+.Pq Xr gpart 8
+on the disk that holds the pool
+.Pq Xr zpool 8 Cm status Fl P ;
+the GEOM tree
+.Pq Va kern.geom.conftxt
+places a label or layer
+.Pq Pa diskid/ ... , Pa gpt/ ... , Pa .eli
+on its disk, and a partition listed under a GEOM label as well as under its
+device name counts once.
+Where that partition is already mounted, under its device name or a label
+.Pq Pa /boot/efi No from Pa /dev/gpt/efiboot0 ,
+it is used in place; otherwise it is mounted at a temporary directory for the
+confirm.
+A FAT file system mounted from any other disk, and an
+.Cm efi
+partition on any other disk, are left alone.
+When the pool's disk has no
+.Cm efi
+partition, or the pool is on more than one disk, one line says so and nothing
+is written.
+.Pp
+The loaders are
+.Pa EFI/BOOT/BOOTX64.EFI ,
+the path the firmware starts when it has no boot entry (none is made), and
+.Pa efi/freebsd/loader.efi ;
+at least one must be on the ESP.
+Each one there whose sha256 differs from the root's gets the new loader
+written to a temporary file beside it, synced and checked against the root's
+sha256; the old one is kept beside it with
 .Pa .prev
 appended
-.Pq Pa loader.efi.prev ,
+.Pq Pa BOOTX64.EFI.prev , Pa loader.efi.prev ,
 and the new one is renamed over it.
-Two ESPs, or any failure, refuse the confirm with one line and leave
-.Cm bootfs
-and the ESP as they were.
+The
+.Cm esp-refreshed
+history row names each loader written.
+Two
+.Cm efi
+partitions on the pool's disk, or any failure, refuse the confirm with one
+line and leave
+.Cm bootfs ,
+every loader and every
+.Pa .prev
+as they were.
 No other ESP file is written.
 .Pp
 Install, confirm, cancel, rollback, downloads, background scans, catalog lists,

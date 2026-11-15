@@ -7,7 +7,9 @@ const std = @import("std");
 // The installer (rmxos-install) imports this module and shares its context.
 pub const sys = @import("sys.zig");
 pub const catalog = @import("catalog.zig");
-const Esp = @import("esp.zig").Esp;
+// rmxos-install populates the ESP through this module; the confirm refreshes it.
+pub const esp = @import("esp.zig");
+const Esp = esp.Esp;
 const Ctx = sys.Ctx;
 
 pub const fallback_path = "/private/var/db/rmxos/fallback";
@@ -533,14 +535,14 @@ fn undoInstall(ctx: Ctx, env: Env, received: []const u8, clone: []const u8, prev
     if (failed) return error.InstallCleanup;
 }
 
-// The ESP's loader is refreshed before bootfs moves; a failed refresh
+// The ESP's loaders are refreshed before bootfs moves; a failed refresh
 // (error.EspRefresh, the reason in sys.failure) leaves both as they were.
 fn confirmRunning(ctx: Ctx, env: Env, r: Record) !u8 {
-    var esp = try Esp.open(ctx);
-    defer esp.close(ctx);
-    const refreshed = try esp.refresh(ctx);
+    var e = try Esp.open(ctx, env.pool);
+    defer e.close(ctx);
+    const refreshed = try e.refresh(ctx);
     _ = sys.capture(ctx, &.{ "/sbin/zpool", "set", try ctx.fmt("bootfs={s}", .{env.running}), env.pool }) catch |err| {
-        if (refreshed) esp.restore(ctx);
+        if (refreshed) e.restore(ctx);
         return err;
     };
     // The loader consumed the one-boot setting; clear any remainder.
@@ -548,7 +550,7 @@ fn confirmRunning(ctx: Ctx, env: Env, r: Record) !u8 {
     var n = r;
     n.state = "confirmed";
     try writeRecord(ctx, n);
-    if (refreshed) try historyReason(ctx, "esp-refreshed", r.label, env.running, esp.detail);
+    if (refreshed) try historyReason(ctx, "esp-refreshed", r.label, env.running, e.detail);
     try history(ctx, "installed", r.label, env.running);
     ctx.out("Confirmed {s}: {s} is the boot environment.\n", .{ r.label, env.running });
     return retain(ctx, env);

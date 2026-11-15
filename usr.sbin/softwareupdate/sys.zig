@@ -4,7 +4,7 @@
 // read below DIR, the running environment is DIR/running, the pool must be an
 // rmxsu* fixture pool, and a restart writes DIR/rebooted instead of rebooting.
 // The fixture boot happened at the time(3) second in DIR/booted (without it,
-// when the host booted), and only msdosfs mounts below DIR are ESPs.
+// when the host booted), and only msdosfs mounts below DIR count as mounted.
 const std = @import("std");
 pub const c = @cImport({
     @cInclude("sys/cdefs.h");
@@ -309,20 +309,22 @@ pub fn shutdownWithin(seconds: u64) !bool {
     return c.sigtimedwait(&set, null, &ts) > 0;
 }
 
-// Mount points of msdosfs file systems.
-pub fn msdosfsMounts(ctx: Ctx) ![]const []const u8 {
+pub const Mount = struct { on: []const u8, from: []const u8 };
+
+// Mounted msdosfs file systems: mount point and device.
+pub fn msdosfsMounts(ctx: Ctx) ![]const Mount {
     const n = c.getfsstat(null, 0, c.MNT_NOWAIT);
     if (n < 0) return error.MountList;
     const buf = try ctx.a.alloc(c.struct_statfs, @as(usize, @intCast(n)) + 8);
     const got = c.getfsstat(buf.ptr, @intCast(buf.len * @sizeOf(c.struct_statfs)), c.MNT_NOWAIT);
     if (got < 0) return error.MountList;
-    var list: std.ArrayList([]const u8) = .empty;
+    var list: std.ArrayList(Mount) = .empty;
     for (buf[0..@intCast(got)]) |*s| {
         if (!std.mem.eql(u8, std.mem.sliceTo(&s.f_fstypename, 0), "msdosfs")) continue;
         const on = std.mem.sliceTo(&s.f_mntonname, 0);
         // A host fixture never sees the host's own ESP.
         if (ctx.fixture and !(std.mem.startsWith(u8, on, ctx.root) and on.len > ctx.root.len and on[ctx.root.len] == '/')) continue;
-        try list.append(ctx.a, try ctx.a.dupe(u8, on));
+        try list.append(ctx.a, .{ .on = try ctx.a.dupe(u8, on), .from = try ctx.a.dupe(u8, std.mem.sliceTo(&s.f_mntfromname, 0)) });
     }
     return list.items;
 }
