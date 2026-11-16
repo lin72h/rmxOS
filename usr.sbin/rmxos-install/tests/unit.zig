@@ -4,6 +4,7 @@ const ri = @import("../rmxos-install.zig");
 const t = std.testing;
 const owner = @import("../owner.zig");
 const admin = @import("../rmxos-owner.zig");
+const seed = @import("../rmxos-owner-seed.zig");
 
 test "owner options are all supplied or all absent" {
     const bare = [_][]const u8{ "--disk", "md5", "--catalog", "/c", "--console", "efi" };
@@ -215,4 +216,156 @@ test "ESP files: the engine's populate writes every loader path and loader.env" 
     try sys.replace(a, try std.fmt.allocPrintSentinel(a, "{s}/EFI", .{blocked}, 0), "a file where a directory goes\n");
     try t.expectError(error.EspFiles, engine.esp.populate(ctx, blocked, "x", "y"));
     try t.expect(std.mem.startsWith(u8, sys.failure, "EFI/BOOT/BOOTX64.EFI: mkdir: "));
+}
+
+// Stands in for every command owner.applyWith runs: records each argv, fails
+// the program named, answers usershow with this process's ids (so chown works
+// unprivileged) and locks root in the scratch master.passwd as pw would.
+const Recorder = struct {
+    a: std.mem.Allocator,
+    root: []const u8,
+    fail: ?[]const u8 = null,
+    calls: std.ArrayList([]const u8) = .empty,
+    config: ?[]const u8 = null,
+    pub fn capture(self: *Recorder, argv: []const []const u8) ![]const u8 {
+        try self.calls.append(self.a, try std.mem.join(self.a, " ", argv));
+        if (self.fail) |f| if (std.mem.eql(u8, argv[0], f)) return error.CommandFailed;
+        const verb = if (argv.len > 3) argv[3] else "";
+        if (std.mem.eql(u8, verb, "useradd")) {
+            for (argv, 0..) |x, i| if (std.mem.eql(u8, x, "-C")) {
+                self.config = try sys.read(self.a, try self.a.dupeZ(u8, argv[i + 1]));
+            };
+        }
+        if (std.mem.eql(u8, verb, "usershow")) return std.fmt.allocPrint(self.a, "owner:*:{d}:{d}::0:0:owner:/Users/owner:/bin/sh\n", .{ sys.c.getuid(), sys.c.getgid() });
+        if (std.mem.eql(u8, verb, "lock")) {
+            const pw = try std.fmt.allocPrintSentinel(self.a, "{s}/private/etc/master.passwd", .{self.root}, 0);
+            const text = try sys.read(self.a, pw);
+            try t.expect(std.mem.startsWith(u8, text, "root::"));
+            try sys.replace(self.a, pw, try std.fmt.allocPrint(self.a, "root:*LOCKED*:{s}", .{text["root:".len..]}));
+        }
+        return "";
+    }
+};
+const root_line = "root::0:0::0:0:Charlie &:/root:/bin/sh\n";
+const template_passwd = root_line ++ "toor:*:0:0::0:0:Bourne-again Superuser:/root:\n";
+fn ownerRoot(a: std.mem.Allocator) ![:0]const u8 {
+    const top = try scratch(a);
+    for ([_][]const u8{ "/private/etc", "/Users", "/private/var/run", "/private/var/db/rmxos" }) |d| try sys.mkdirs(a, try std.fmt.allocPrint(a, "{s}{s}", .{ top, d }));
+    try sys.replace(a, try std.fmt.allocPrintSentinel(a, "{s}/private/etc/master.passwd", .{top}, 0), template_passwd);
+    try sys.replace(a, try std.fmt.allocPrintSentinel(a, "{s}/private/etc/rc.conf", .{top}, 0), "zfs_enable=\"YES\"\n");
+    return top;
+}
+fn file(a: std.mem.Allocator, top: []const u8, rel: []const u8) ![:0]const u8 {
+    return std.fmt.allocPrintSentinel(a, "{s}{s}", .{ top, rel }, 0);
+}
+
+test "owner: live only on the running root, after the files and before the lock; pw logs nowhere elsewhere" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const ctx = sys.Ctx{ .a = a, .root = "", .fixture = false };
+    // The exact root rmxos-owner defaults to and rmxos-owner-seed passes.
+    try t.expect(owner.live(ctx, "/"));
+    for ([_][]const u8{ "//", "/.", "/mnt", "/Users/me/wip-mach/stage/op647/fixture/mnt" }) |r| try t.expect(!owner.live(ctx, r));
+    try t.expect(!owner.live(.{ .a = a, .root = "", .fixture = true }, "/"));
+    try t.expectEqualStrings("logfile = no\n", try owner.pwConfig(a, ""));
+    try t.expectEqualStrings("defaultclass = staff\nlogfile = no\n", try owner.pwConfig(a, "defaultclass = staff"));
+    try t.expectEqualStrings("defaultclass = staff\nlogfile = no\n", try owner.pwConfig(a, "defaultclass = staff\n"));
+
+    const v = owner.Values{ .hostname = "op647", .user = "owner", .key = "ssh-ed25519 AAAAC3Nza owner@op647\n" };
+    const uid = try std.fmt.allocPrint(a, "{d}", .{sys.c.getuid()});
+    const rule = try owner.ruleValue(a, uid);
+    const live = try owner.liveCommands(a, "op647", uid);
+    try t.expectEqualStrings("/bin/hostname op647", try std.mem.join(a, " ", live[0]));
+    try t.expectEqualStrings("/sbin/kldload -n mac_do", try std.mem.join(a, " ", live[1]));
+    try t.expectEqualStrings(try std.fmt.allocPrint(a, "/sbin/sysctl security.mac.do.rules={s}", .{rule}), try std.mem.join(a, " ", live[2]));
+
+    // The running system: every command, in order.
+    {
+        const top = try ownerRoot(a);
+        defer clear(a, top);
+        const etc = try std.fmt.allocPrint(a, "{s}/private/etc", .{top});
+        var r = Recorder{ .a = a, .root = top };
+        try owner.applyWith(ctx, top, v, true, &r);
+        const want = [_][]const u8{
+            try std.fmt.allocPrint(a, "/usr/sbin/pw -V {s} useradd -n owner -d /Users/owner -s /bin/sh -c owner -w no", .{etc}),
+            try std.fmt.allocPrint(a, "/usr/sbin/pw -V {s} usershow -n owner", .{etc}),
+            "/bin/hostname op647",
+            "/sbin/kldload -n mac_do",
+            try std.fmt.allocPrint(a, "/sbin/sysctl security.mac.do.rules={s}", .{rule}),
+            try std.fmt.allocPrint(a, "/usr/sbin/pw -V {s} lock root", .{etc}),
+            try std.fmt.allocPrint(a, "/usr/sbin/pwd_mkdb -d {s} -p {s}/master.passwd", .{ etc, etc }),
+        };
+        try t.expectEqual(want.len, r.calls.items.len);
+        for (want, r.calls.items) |w, got| try t.expectEqualStrings(w, got);
+        try t.expect(r.config == null);
+        // The live value is the line sysctl.conf now holds.
+        try t.expectEqualStrings(try owner.macDoRule(a, uid), try sys.read(a, try file(a, top, "/private/etc/sysctl.conf")));
+        try t.expect(std.mem.startsWith(u8, try sys.read(a, try file(a, top, "/private/etc/master.passwd")), "root:*LOCKED*:"));
+        try t.expectEqualStrings("owner\n", try sys.read(a, try file(a, top, "/private/var/db/rmxos/owner")));
+    }
+    // Any other root: files only; useradd logs nowhere, keeping the root's pw.conf.
+    {
+        const top = try ownerRoot(a);
+        defer clear(a, top);
+        const etc = try std.fmt.allocPrint(a, "{s}/private/etc", .{top});
+        try sys.replace(a, try file(a, top, "/private/etc/pw.conf"), "defaultclass = staff");
+        var r = Recorder{ .a = a, .root = top };
+        try owner.applyWith(ctx, top, v, false, &r);
+        const want = [_][]const u8{
+            try std.fmt.allocPrint(a, "/usr/sbin/pw -V {s} useradd -n owner -d /Users/owner -s /bin/sh -c owner -w no -C {s}{s}", .{ etc, top, owner.pw_config }),
+            try std.fmt.allocPrint(a, "/usr/sbin/pw -V {s} usershow -n owner", .{etc}),
+            try std.fmt.allocPrint(a, "/usr/sbin/pw -V {s} lock root", .{etc}),
+            try std.fmt.allocPrint(a, "/usr/sbin/pwd_mkdb -d {s} -p {s}/master.passwd", .{ etc, etc }),
+        };
+        try t.expectEqual(want.len, r.calls.items.len);
+        for (want, r.calls.items) |w, got| try t.expectEqualStrings(w, got);
+        try t.expectEqualStrings("defaultclass = staff\nlogfile = no\n", r.config.?);
+        try t.expect(!sys.exists(try file(a, top, owner.pw_config)));
+        try t.expectEqualStrings("defaultclass = staff", try sys.read(a, try file(a, top, "/private/etc/pw.conf")));
+        try t.expectEqualStrings("owner\n", try sys.read(a, try file(a, top, "/private/var/db/rmxos/owner")));
+    }
+    // A failure of each live command: the files are written, root is as it was.
+    for (live, 0..) |argv, i| {
+        const top = try ownerRoot(a);
+        defer clear(a, top);
+        var r = Recorder{ .a = a, .root = top, .fail = argv[0] };
+        try t.expectError(error.CommandFailed, owner.applyWith(ctx, top, v, true, &r));
+        try t.expectEqual(3 + i, r.calls.items.len);
+        try t.expect(std.mem.startsWith(u8, r.calls.items[r.calls.items.len - 1], argv[0]));
+        for (r.calls.items) |c| try t.expect(std.mem.indexOf(u8, c, " lock root") == null and !std.mem.startsWith(u8, c, "/usr/sbin/pwd_mkdb"));
+        try t.expectEqualStrings(template_passwd, try sys.read(a, try file(a, top, "/private/etc/master.passwd")));
+        try t.expect(!sys.exists(try file(a, top, "/private/var/db/rmxos/owner")));
+        try t.expectEqualStrings(v.key, try sys.read(a, try file(a, top, "/Users/owner/.ssh/authorized_keys")));
+        try t.expectEqualStrings(try owner.macDoRule(a, uid), try sys.read(a, try file(a, top, "/private/etc/sysctl.conf")));
+    }
+}
+
+test "owner seed: a mount directory left by an earlier run is reused; anything else refuses" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const top = try scratch(a);
+    defer clear(a, top);
+    const mode = struct {
+        fn of(p: [:0]const u8) !sys.c.mode_t {
+            var st: sys.c.struct_stat = undefined;
+            if (sys.c.lstat(p, &st) != 0) return error.Stat;
+            return st.st_mode;
+        }
+    }.of;
+    const dir = try file(a, top, "/m");
+    try seed.mountDirectory(dir);
+    try t.expectEqual(@as(sys.c.mode_t, sys.c.S_IFDIR | 0o700), try mode(dir));
+    try t.expectEqual(@as(c_int, 0), sys.c.chmod(dir, 0o755));
+    try seed.mountDirectory(dir);
+    try t.expectEqual(@as(sys.c.mode_t, sys.c.S_IFDIR | 0o700), try mode(dir));
+    const plain = try file(a, top, "/f");
+    try sys.replace(a, plain, "not a directory\n");
+    try t.expectError(error.MountDirectory, seed.mountDirectory(plain));
+    try t.expectEqualStrings("not a directory\n", try sys.read(a, plain));
+    const link = try file(a, top, "/l");
+    try t.expectEqual(@as(c_int, 0), sys.c.symlink(dir, link));
+    try t.expectError(error.MountDirectory, seed.mountDirectory(link));
+    try t.expectEqual(@as(sys.c.mode_t, sys.c.S_IFLNK), (try mode(link)) & sys.c.S_IFMT);
 }

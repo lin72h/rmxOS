@@ -63,7 +63,7 @@ fn run(ctx: sys.Ctx, root: []const u8) !void {
         if (!std.mem.startsWith(u8, command, try ctx.fmt("{s}/", .{ctx.root}))) return error.FixtureCommand;
     }
     const mountpoint = try owner.at(ctx, root, "/private/var/run/rmxos-owner-seed");
-    if (sys.c.mkdir(mountpoint, 0o700) != 0) return error.MountDirectory;
+    try mountDirectory(mountpoint);
     defer _ = sys.c.rmdir(mountpoint);
     _ = try sys.capture(ctx, &.{ "/sbin/mount_msdosfs", "-o", "ro", device, mountpoint });
     var mounted = true;
@@ -79,6 +79,15 @@ fn run(ctx: sys.Ctx, root: []const u8) !void {
     _ = try sys.capture(ctx, &.{ "/sbin/umount", mountpoint });
     mounted = false;
     report(ctx, "owner-seed: owner applied; root locked");
+}
+// The mount point, made here or left by a run that stopped before its rmdir
+// (boot's cleanvar removes only files and sockets under /var/run). Anything
+// but a directory there, a symlink included, refuses before any mount.
+pub fn mountDirectory(p: [:0]const u8) !void {
+    if (sys.c.mkdir(p, 0o700) == 0) return;
+    var st: sys.c.struct_stat = undefined;
+    if (sys.c.lstat(p, &st) != 0 or st.st_mode & sys.c.S_IFMT != sys.c.S_IFDIR) return error.MountDirectory;
+    if (sys.c.chmod(p, 0o700) != 0) return error.MountDirectory;
 }
 fn read(ctx: sys.Ctx, dir: []const u8, name: []const u8) ![]const u8 {
     const path = try ctx.z(try ctx.fmt("{s}/{s}", .{ dir, name }));

@@ -40,8 +40,12 @@ pub fn rcConf(a: std.mem.Allocator, template: []const u8, host: []const u8) ![]c
     try out.print(a, "hostname=\"{s}\"\nifconfig_DEFAULT=\"DHCP\"\nsshd_enable=\"YES\"\nkld_list=\"mac_do\"\n", .{host});
     return out.items;
 }
+// The user's mdo rule: sysctl.conf's line and the running system's value.
+pub fn ruleValue(a: std.mem.Allocator, uid: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(a, "uid={s}>uid=0,gid=*,+gid=*", .{uid});
+}
 pub fn macDoRule(a: std.mem.Allocator, uid: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(a, "security.mac.do.rules=\"uid={s}>uid=0,gid=*,+gid=*\"\n", .{uid});
+    return std.fmt.allocPrint(a, "security.mac.do.rules=\"{s}\"\n", .{try ruleValue(a, uid)});
 }
 
 pub const Values = struct { hostname: []const u8, user: []const u8, key: []const u8 };
@@ -85,12 +89,46 @@ pub fn machineRcConf(a: std.mem.Allocator, template: []const u8) ![]const u8 {
     try out.appendSlice(a, "ifconfig_DEFAULT=\"DHCP\"\nsshd_enable=\"YES\"\n");
     return out.items;
 }
-// Lock the existing etc directory inode, not a file pw/pwd_mkdb replaces.
-// Validation and refusal neither create a lock file nor change target files.
+// The running system: rmxos-owner's default root and the boot reader's.
+// An installer's or any other root, and every fixture, writes files only.
+pub fn live(ctx: sys.Ctx, root: []const u8) bool {
+    return !ctx.fixture and eq(root, "/");
+}
+// What the running system gets at once, after the files: the host name,
+// mac_do (kept if loaded) and the rule sysctl.conf now holds.
+pub fn liveCommands(a: std.mem.Allocator, host: []const u8, uid: []const u8) ![3][]const []const u8 {
+    return .{
+        try a.dupe([]const u8, &.{ "/bin/hostname", host }),
+        try a.dupe([]const u8, &.{ "/sbin/kldload", "-n", "mac_do" }),
+        try a.dupe([]const u8, &.{ "/sbin/sysctl", try std.fmt.allocPrint(a, "security.mac.do.rules={s}", .{try ruleValue(a, uid)}) }),
+    };
+}
+// pw(8) appends to the log its pw.conf names, a path on the system pw runs
+// on. For any root but the running system's, useradd gets this config: the
+// root's own pw.conf settings, then no log (pw.conf cuts a path at a space).
+pub fn pwConfig(a: std.mem.Allocator, existing: []const u8) ![]const u8 {
+    const sep = if (existing.len != 0 and existing[existing.len - 1] != '\n') "\n" else "";
+    return std.fmt.allocPrint(a, "{s}{s}logfile = no\n", .{ existing, sep });
+}
+pub const pw_config = "/private/var/run/rmxos-owner.pw.conf";
+// The commands apply runs; unit tests pass a recorder instead.
+pub const Exec = struct {
+    ctx: sys.Ctx,
+    pub fn capture(self: Exec, argv: []const []const u8) ![]const u8 {
+        return sys.capture(self.ctx, argv);
+    }
+};
 pub fn apply(ctx: sys.Ctx, root: []const u8, v: Values) !void {
     try validate(v);
     if (sys.c.geteuid() != 0) return error.NotRoot;
     if (ctx.fixture and !std.mem.startsWith(u8, root, try ctx.fmt("{s}/", .{ctx.root}))) return error.FixtureRoot;
+    return applyWith(ctx, root, v, live(ctx, root), Exec{ .ctx = ctx });
+}
+// Lock the existing etc directory inode, not a file pw/pwd_mkdb replaces.
+// Validation and refusal neither create a lock file nor change target files.
+// Every command goes through exec; rmxos-owner(8) lists what each step leaves.
+pub fn applyWith(ctx: sys.Ctx, root: []const u8, v: Values, running: bool, exec: anytype) !void {
+    try validate(v);
     const etc = try at(ctx, root, "/private/etc");
     const lock = sys.c.open(etc, sys.c.O_RDONLY | sys.c.O_DIRECTORY | sys.c.O_CLOEXEC);
     if (lock < 0) return error.OwnerRoot;
@@ -103,15 +141,30 @@ pub fn apply(ctx: sys.Ctx, root: []const u8, v: Values) !void {
     const rc = try at(ctx, root, "/private/etc/rc.conf");
     const rc_text = try rcConf(ctx.a, sys.read(ctx.a, rc) catch "", v.hostname);
     const key = try publicKey(v.key);
-    _ = try sys.capture(ctx, &.{ "/usr/sbin/pw", "-V", etc, "useradd", "-n", v.user, "-d", try ctx.fmt("/Users/{s}", .{v.user}), "-s", "/bin/sh", "-c", v.user, "-w", "no" });
-    const shown = sys.trim(try sys.capture(ctx, &.{ "/usr/sbin/pw", "-V", etc, "usershow", "-n", v.user }));
+    {
+        var add: std.ArrayList([]const u8) = .empty;
+        try add.appendSlice(ctx.a, &.{ "/usr/sbin/pw", "-V", etc, "useradd", "-n", v.user, "-d", try ctx.fmt("/Users/{s}", .{v.user}), "-s", "/bin/sh", "-c", v.user, "-w", "no" });
+        var config: ?[:0]const u8 = null;
+        defer if (config) |p| {
+            _ = sys.c.unlink(p);
+        };
+        if (!running) {
+            const own = sys.read(ctx.a, try at(ctx, root, "/private/etc/pw.conf")) catch |err| if (err == error.Open) "" else return err;
+            const p = try at(ctx, root, pw_config);
+            config = p;
+            try sys.replace(ctx.a, p, try pwConfig(ctx.a, own));
+            try add.appendSlice(ctx.a, &.{ "-C", p });
+        }
+        _ = try exec.capture(add.items);
+    }
+    const shown = sys.trim(try exec.capture(&.{ "/usr/sbin/pw", "-V", etc, "usershow", "-n", v.user }));
     var fields = std.mem.splitScalar(u8, shown, ':');
     _ = fields.next();
     _ = fields.next();
     const uid = fields.next() orelse return error.UserShow;
     const gid = fields.next() orelse return error.UserShow;
     // The user's way in comes first: a failure before the lock leaves root
-    // as it was, on the console. rmxos-owner(8) lists what each step leaves.
+    // as it was, on the console.
     const u = try std.fmt.parseInt(u32, uid, 10);
     const g = try std.fmt.parseInt(u32, gid, 10);
     const home = try at(ctx, root, try ctx.fmt("/Users/{s}", .{v.user}));
@@ -126,8 +179,12 @@ pub fn apply(ctx: sys.Ctx, root: []const u8, v: Values) !void {
     const settings = try at(ctx, root, "/private/etc/sysctl.conf");
     try sys.replace(ctx.a, settings, try ctx.fmt("{s}{s}", .{ sys.read(ctx.a, settings) catch "", try macDoRule(ctx.a, uid) }));
     try sys.replace(ctx.a, rc, rc_text);
+    // On the running system the files take effect now, still before the lock.
+    if (running) for (try liveCommands(ctx.a, v.hostname, uid)) |argv| {
+        _ = try exec.capture(argv);
+    };
     // Root last, then the databases; the marker records completion.
-    _ = try sys.capture(ctx, &.{ "/usr/sbin/pw", "-V", etc, "lock", "root" });
-    _ = try sys.capture(ctx, &.{ "/usr/sbin/pwd_mkdb", "-d", etc, "-p", try at(ctx, root, "/private/etc/master.passwd") });
+    _ = try exec.capture(&.{ "/usr/sbin/pw", "-V", etc, "lock", "root" });
+    _ = try exec.capture(&.{ "/usr/sbin/pwd_mkdb", "-d", etc, "-p", try at(ctx, root, "/private/etc/master.passwd") });
     try sys.replace(ctx.a, try at(ctx, root, "/private/var/db/rmxos/owner"), try ctx.fmt("{s}\n", .{v.user}));
 }

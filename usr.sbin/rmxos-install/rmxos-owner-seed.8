@@ -30,9 +30,14 @@ the third contains one OpenSSH public key line.
 Each file is limited to 65536 bytes.
 The volume is mounted read-only at
 .Pa /private/var/run/rmxos-owner-seed .
+A directory there, left by a run that stopped before removing it, is
+reused; anything else at that path, a symbolic link included, is refused
+before the mount and nothing is written.
 All files are read and validated before invoking
 .Xr rmxos-owner 8
-with those values.
+with those values and the root
+.Pa / ,
+so the host name and the mdo rule apply at once, without a second boot.
 The volume is then unmounted and the temporary mount directory removed.
 Missing or invalid input changes no owner files and produces one diagnostic
 line with its reason.

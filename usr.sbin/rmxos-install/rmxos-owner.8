@@ -69,6 +69,25 @@ gets the hostname, DHCP, sshd and
 .Xr mac_do 4
 settings.
 .It
+On the running system only, that is with the root
+.Pa / ,
+the default and what
+.Xr rmxos-owner-seed 8
+passes at boot:
+.Xr hostname 1
+sets the host name,
+.Xr kldload 8
+loads mac_do unless it is loaded, and
+.Xr sysctl 8
+sets security.mac.do.rules to the rule of step 3, so the user can use
+.Xr mdo 1
+without a reboot.
+With any other
+.Fl -altroot ,
+including another spelling of
+.Pa / ,
+nothing is applied: the files take effect at that system's next boot.
+.It
 Root's password is locked and the password databases are rebuilt with
 .Xr pwd_mkdb 8 .
 .It
@@ -77,15 +96,30 @@ The user name is written to
 .El
 .Pp
 No file is left half written: each is written aside and renamed into place.
-The hostname, the mac_do module and the mdo rule take effect at the next
-boot.
+.Pp
+.Xr pw 8
+records the new account in the log its
+.Xr pw.conf 5
+names, a path on the system it runs on.
+On the running system that is its own
+.Pa /var/log/userlog .
+For any other root the account is logged nowhere: step 1 gives
+.Xr pw 8
+a temporary
+.Pa /private/var/run/rmxos-owner.pw.conf
+below the root, holding the root's own
+.Pa pw.conf
+settings and
+.Dq logfile = no ,
+and removes it after the step.
 .Sh RECOVERY
 A failure prints one line naming its error.
 A refusal leaves the owner files unchanged.
-A failure in steps 1 to 4 leaves root as it was, so root still logs in
+A failure in steps 1 to 5 leaves root as it was, so root still logs in
 on the console.
 It can leave the account and its group, the home and, after step 3, the
-mdo rule.
+mdo rule; after a failure in step 5 the host name, mac_do and the live
+rule may also be set, until the next boot or a retry, which sets them again.
 A retry refuses while the account or the rule exists.
 To clear them before a retry, as root on the console:
 .Bd -literal -offset indent
@@ -103,7 +137,7 @@ security.mac.do.rules="uid=1001>uid=0,gid=*,+gid=*"
 .Pa rc.conf
 needs no change: a retry rewrites those settings.
 .Pp
-A failure in step 5 or 6 leaves steps 1 to 4 done.
+A failure in step 6 or 7 leaves steps 1 to 5 done.
 If root's line in
 .Pa /private/etc/master.passwd
 begins with *LOCKED*, finish by hand instead of retrying:
@@ -115,13 +149,22 @@ echo name > /private/var/db/rmxos/owner
 Otherwise root was not locked and is as it was: clear as above and retry.
 For an installed root, prefix each of these paths with the
 .Fl -altroot
-directory.
+directory;
+.Xr pw 8
+then logs on the system it runs on unless given
+.Fl C
+and a file holding
+.Dq logfile = no .
 .Sh EXIT STATUS
 0 when the owner is added, 1 after a usage error, refusal or failure.
 .Sh SEE ALSO
+.Xr hostname 1 ,
 .Xr mdo 1 ,
 .Xr mac_do 4 ,
+.Xr pw.conf 5 ,
+.Xr kldload 8 ,
 .Xr pw 8 ,
 .Xr pwd_mkdb 8 ,
 .Xr rmxos-install 8 ,
-.Xr rmxos-owner-seed 8
+.Xr rmxos-owner-seed 8 ,
+.Xr sysctl 8
