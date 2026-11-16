@@ -1,0 +1,59 @@
+.Dd November 16, 2026
+.Dt RMXOS-OWNER-SEED 8
+.Os
+.Sh NAME
+.Nm rmxos-owner-seed
+.Nd read the first owner's settings from a labelled FAT volume
+.Sh SYNOPSIS
+.Nm
+.Op Fl altRoot Ar directory
+.Sh DESCRIPTION
+The base launchd job
+.Pa /etc/launchd.d/org.rmxos.owner-seed.plist
+runs this program once when loaded at boot.
+It does nothing if an owner already exists, as defined by
+.Xr sysadminctl 8 ,
+or if
+.Pa /dev/msdosfs/RMXOWNER
+is absent.
+It does not run cloud-init or nuageinit.
+.Pp
+The FAT volume label is
+.Cm RMXOWNER .
+Its root must contain the plain regular files
+.Pa hostname ,
+.Pa user
+and
+.Pa authorized_keys .
+The first two contain one value, optionally followed by a line ending;
+the third contains one OpenSSH public key line.
+Each file is limited to 65536 bytes.
+The volume is mounted read-only at
+.Pa /private/var/run/rmxos-owner-seed .
+All files are read and validated before invoking
+.Xr sysadminctl 8
+with those values.
+The volume is then unmounted and the temporary mount directory removed.
+Missing or invalid input changes no owner files and produces one diagnostic
+line with its reason.
+Success and errors use os_log, subsystem
+.Cm org.rmxos.owner-seed ,
+category boot, and one console line for early boot visibility.
+Absent volumes and existing owners are silent.
+.Pp
+Alternatively, enter the
+.Xr sysadminctl 8
+command by hand at the console; no password is collected.
+The normal mount and owner checks also apply with
+.Fl altRoot .
+.Sh TESTING
+Host tests use the installer's RMXOS_SU_FIXTURE confinement.
+Label discovery is unchanged in that mode, but the labelled provider must
+be a file-backed md device below the fixture.
+RMXOS_OWNER_COMMAND selects the built sysadminctl below that fixture;
+the alternate root must also lie below it.
+This command override is ignored on the real system.
+.Sh SEE ALSO
+.Xr mount_msdosfs 8 ,
+.Xr rmxos-install 8 ,
+.Xr sysadminctl 8

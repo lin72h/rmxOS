@@ -5,6 +5,7 @@
 // UEFI only. Runs as root; RMXOS_SU_FIXTURE confines a host run to md disks
 // backed below that directory and rmxsu pools.
 const std = @import("std");
+const owner = @import("owner.zig");
 const engine = @import("engine");
 const sys = engine.sys;
 const catalog = engine.catalog;
@@ -12,8 +13,8 @@ const Ctx = sys.Ctx;
 const dirent = @cImport(@cInclude("dirent.h"));
 
 pub const usage =
-    \\usage: rmxos-install --disk DISK --catalog DIR|URL --hostname NAME --user NAME
-    \\                     --key FILE --console LIST [--pool NAME] [--altroot DIR]
+    \\usage: rmxos-install --disk DISK --catalog DIR|URL --console LIST
+    \\                     [--hostname NAME --user NAME --key FILE] [--pool NAME] [--altroot DIR]
     \\                     [--swap SIZE] [--zone NAME] [--erase]
     \\
 ;
@@ -76,7 +77,10 @@ pub fn parse(args: []const []const u8) !Options {
             else => o.swap = v,
         }
     }
-    for ([_][]const u8{ o.disk, o.catalog, o.hostname, o.user, o.key, o.console }) |v| if (v.len == 0) return error.Usage;
+    for ([_][]const u8{ o.disk, o.catalog, o.console }) |v| if (v.len == 0) return error.Usage;
+    if (seen[2] != seen[3] or seen[3] != seen[4]) return error.Usage;
+    if (seen[2] and (o.hostname.len == 0 or o.user.len == 0 or o.key.len == 0)) return error.Usage;
+    try owner.optionSet(o.hostname, o.user, o.key);
     return o;
 }
 fn eq(a: []const u8, b: []const u8) bool {
@@ -86,8 +90,11 @@ fn eq(a: []const u8, b: []const u8) bool {
 // Every check that needs no command and no write.
 pub fn validate(o: Options) !void {
     if (!wholeDisk(diskName(o.disk))) return error.InvalidDisk;
-    if (!hostname(o.hostname)) return error.InvalidHostname;
-    if (!userName(o.user)) return error.InvalidUser;
+    try owner.optionSet(o.hostname, o.user, o.key);
+    if (o.hostname.len != 0) {
+        if (!hostname(o.hostname)) return error.InvalidHostname;
+        if (!userName(o.user)) return error.InvalidUser;
+    }
     if (!consoleList(o.console)) return error.InvalidConsole;
     if (o.pool.len == 0 or o.pool.len > 64 or !std.ascii.isAlphabetic(o.pool[0])) return error.InvalidPool;
     for (o.pool) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '_' and ch != '-' and ch != '.') return error.InvalidPool;
@@ -111,20 +118,8 @@ fn wholeDisk(d: []const u8) bool {
     for (d[i..]) |ch| if (!std.ascii.isDigit(ch)) return false;
     return true;
 }
-pub fn hostname(h: []const u8) bool {
-    if (h.len == 0 or h.len > 253) return false;
-    var labels = std.mem.splitScalar(u8, h, '.');
-    while (labels.next()) |l| {
-        if (l.len == 0 or l.len > 63 or l[0] == '-' or l[l.len - 1] == '-') return false;
-        for (l) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '-') return false;
-    }
-    return true;
-}
-pub fn userName(u: []const u8) bool {
-    if (u.len == 0 or u.len > 32 or !(std.ascii.isLower(u[0]) or u[0] == '_')) return false;
-    for (u) |ch| if (!std.ascii.isLower(ch) and !std.ascii.isDigit(ch) and ch != '_' and ch != '-') return false;
-    return !eq(u, "root") and !eq(u, "toor");
-}
+pub const hostname = owner.hostname;
+pub const userName = owner.userName;
 fn consoleList(text: []const u8) bool {
     var parts = std.mem.splitScalar(u8, text, ',');
     while (parts.next()) |p| {
@@ -135,37 +130,15 @@ fn consoleList(text: []const u8) bool {
     return true;
 }
 // One OpenSSH public key line.
-pub fn publicKey(text: []const u8) ![]const u8 {
-    const line = std.mem.trim(u8, text, " \t\r\n");
-    if (line.len == 0 or std.mem.indexOfScalar(u8, line, '\n') != null) return error.InvalidKey;
-    for (line) |ch| if (ch < 0x20 or ch == 0x7f) return error.InvalidKey;
-    for ([_][]const u8{ "ssh-", "ecdsa-sha2-", "sk-" }) |p| if (std.mem.startsWith(u8, line, p) and std.mem.indexOfScalar(u8, line, ' ') != null) return line;
-    return error.InvalidKey;
-}
-
+pub const publicKey = owner.publicKey;
 // The ESP's loader.env: the machine's console lines and nothing else.
 pub fn loaderEnv(a: std.mem.Allocator, console: []const u8) ![]const u8 {
     const serial = std.mem.indexOf(u8, console, "comconsole") != null;
     return std.fmt.allocPrint(a, "console={s}\n{s}", .{ console, if (serial) "comconsole_speed=115200\n" else "" });
 }
 // rc.conf: the template's lines, ours replacing any of the same name.
-pub fn rcConf(a: std.mem.Allocator, template: []const u8, host: []const u8) ![]const u8 {
-    const keys = [_][]const u8{ "hostname", "ifconfig_DEFAULT", "sshd_enable", "kld_list" };
-    var out: std.ArrayList(u8) = .empty;
-    var lines = std.mem.splitScalar(u8, template, '\n');
-    while (lines.next()) |line| {
-        if (line.len == 0) continue;
-        var ours = false;
-        for (keys) |k| ours = ours or (std.mem.startsWith(u8, line, k) and line.len > k.len and line[k.len] == '=');
-        if (!ours) try out.print(a, "{s}\n", .{line});
-    }
-    // mac_do lets the first user become root with mdo(1); sysctl.conf holds its rule.
-    try out.print(a, "hostname=\"{s}\"\nifconfig_DEFAULT=\"DHCP\"\nsshd_enable=\"YES\"\nkld_list=\"mac_do\"\n", .{host});
-    return out.items;
-}
-pub fn macDoRule(a: std.mem.Allocator, uid: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(a, "security.mac.do.rules=\"uid={s}>uid=0,gid=*,+gid=*\"\n", .{uid});
-}
+pub const rcConf = owner.rcConf;
+pub const macDoRule = owner.macDoRule;
 
 const Run = struct {
     ctx: Ctx,
@@ -209,7 +182,7 @@ fn refuse(ctx: Ctx, comptime f: []const u8, args: anytype) u8 {
 
 fn install(ctx: Ctx, o: Options) !u8 {
     // Refusals before any write.
-    const key = publicKey(sys.read(ctx.a, try ctx.z(o.key)) catch return refuse(ctx, "{s}: unreadable; nothing written", .{o.key})) catch
+    const key = if (o.key.len == 0) "" else publicKey(sys.read(ctx.a, try ctx.z(o.key)) catch return refuse(ctx, "{s}: unreadable; nothing written", .{o.key})) catch
         return refuse(ctx, "{s}: not one OpenSSH public key line; nothing written", .{o.key});
     const loaded = catalog.load(ctx, o.catalog, false) catch |err| return refuse(ctx, "catalog {s}: {s}; nothing written", .{ o.catalog, @errorName(err) });
     const full = loaded.catalog.full orelse return refuse(ctx, "catalog {s} has no full stream; nothing written", .{o.catalog});
@@ -458,37 +431,12 @@ fn added(ctx: Ctx, out: []const u8) ![]const u8 {
 fn seeds(r: *Run, key: []const u8, label: []const u8, clone: []const u8) !void {
     const ctx = r.ctx;
     const o = r.o;
-    const etc = try r.at("/private/etc");
     const rc = try r.at("/private/etc/rc.conf");
-    try sys.replace(ctx.a, rc, try rcConf(ctx.a, sys.read(ctx.a, rc) catch "", o.hostname));
-
-    // The first user: a key, no password; root locked.
-    _ = try r.cmd(&.{ "/usr/sbin/pw", "-V", etc, "useradd", "-n", o.user, "-d", try ctx.fmt("/Users/{s}", .{o.user}), "-s", "/bin/sh", "-c", o.user, "-w", "no" });
-    const shown = sys.trim(try r.cmd(&.{ "/usr/sbin/pw", "-V", etc, "usershow", "-n", o.user }));
-    var fields = std.mem.splitScalar(u8, shown, ':');
-    _ = fields.next();
-    _ = fields.next();
-    const uid = fields.next() orelse return error.UserShow;
-    const gid = fields.next() orelse return error.UserShow;
-    _ = try r.cmd(&.{ "/usr/sbin/pw", "-V", etc, "lock", "root" });
-    _ = try r.cmd(&.{ "/usr/sbin/pwd_mkdb", "-d", etc, "-p", try r.at("/private/etc/master.passwd") });
-    try r.did("user {s} (uid {s}), root locked", .{ o.user, uid });
-
-    const u = try std.fmt.parseInt(u32, uid, 10);
-    const g = try std.fmt.parseInt(u32, gid, 10);
-    const home = try r.at(try ctx.fmt("/Users/{s}", .{o.user}));
-    const ssh = try ctx.z(try ctx.fmt("{s}/.ssh", .{home}));
-    const keys = try ctx.z(try ctx.fmt("{s}/.ssh/authorized_keys", .{home}));
-    for ([_]struct { p: [:0]const u8, mode: sys.c.mode_t }{ .{ .p = home, .mode = 0o755 }, .{ .p = ssh, .mode = 0o700 } }) |d| {
-        if (sys.c.mkdir(d.p, d.mode) != 0 and !sys.exists(d.p)) return error.Home;
-        if (sys.c.chown(d.p, u, g) != 0 or sys.c.chmod(d.p, d.mode) != 0) return error.Home;
+    try sys.replace(ctx.a, rc, try owner.machineRcConf(ctx.a, sys.read(ctx.a, rc) catch ""));
+    if (o.hostname.len != 0) {
+        try owner.apply(ctx, o.altroot, .{ .hostname = o.hostname, .user = o.user, .key = key });
+        try r.did("user {s}, root locked", .{o.user});
     }
-    try sys.replace(ctx.a, keys, try ctx.fmt("{s}\n", .{key}));
-    if (sys.c.chown(keys, u, g) != 0 or sys.c.chmod(keys, 0o600) != 0) return error.Home;
-
-    // mdo(1) as root for the first user: mac_do (rc.conf kld_list) and its rule.
-    const sysctl = try r.at("/private/etc/sysctl.conf");
-    try sys.replace(ctx.a, sysctl, try ctx.fmt("{s}{s}", .{ sys.read(ctx.a, sysctl) catch "", try macDoRule(ctx.a, uid) }));
 
     const zone = sys.read(ctx.a, try r.at(try ctx.fmt("/usr/share/zoneinfo/{s}", .{o.zone}))) catch return error.UnknownZone;
     const localtime = try r.at("/private/etc/localtime");

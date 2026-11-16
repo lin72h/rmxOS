@@ -2,6 +2,33 @@
 const std = @import("std");
 const ri = @import("../rmxos-install.zig");
 const t = std.testing;
+const owner = @import("../owner.zig");
+const admin = @import("../sysadminctl.zig");
+
+test "owner options are all supplied or all absent" {
+    const bare = [_][]const u8{ "--disk", "md5", "--catalog", "/c", "--console", "efi" };
+    try ri.validate(try ri.parse(&bare));
+    for ([_][]const u8{ "--hostname", "--user", "--key" }) |name| {
+        const partial = bare ++ [_][]const u8{ name, "x" };
+        try t.expectError(error.Usage, ri.parse(&partial));
+    }
+    try t.expectError(error.Usage, ri.parse(&(bare ++ [_][]const u8{ "--hostname", "", "--user", "", "--key", "" })));
+    try t.expectError(error.Usage, admin.parse(&.{ "-addUser", "lin" }));
+    try t.expectError(error.InvalidHostname, admin.parse(&.{ "-addUser", "lin", "-hostName", "-bad", "-sshPublicKey", "/key" }));
+    try t.expectError(error.InvalidUser, admin.parse(&.{ "-addUser", "root", "-hostName", "host", "-sshPublicKey", "/key" }));
+    const o = try admin.parse(&.{ "-addUser", "lin", "-hostName", "host", "-sshPublicKey", "/key", "-altRoot", "/new" });
+    try t.expectEqualStrings("/new", o.root);
+}
+
+test "machine state contains no owner and owner formatting preserves installed bytes" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const template = "zfs_enable=\"YES\"\nhostname=\"template\"\nkld_list=\"old\"\n";
+    const machine = try owner.machineRcConf(a, template);
+    try t.expectEqualStrings("zfs_enable=\"YES\"\nifconfig_DEFAULT=\"DHCP\"\nsshd_enable=\"YES\"\n", machine);
+    try t.expectEqualStrings(try ri.rcConf(a, template, "host"), try owner.rcConf(a, machine, "host"));
+}
 
 const args = [_][]const u8{ "--disk", "md5", "--catalog", "/c", "--hostname", "host-1.example", "--user", "lin", "--key", "/k.pub", "--console", "comconsole,efi" };
 

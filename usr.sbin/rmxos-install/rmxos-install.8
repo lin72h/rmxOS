@@ -1,4 +1,4 @@
-.Dd November 15, 2026
+.Dd November 16, 2026
 .Dt RMXOS-INSTALL 8
 .Os
 .Sh NAME
@@ -8,9 +8,11 @@
 .Nm
 .Fl -disk Ar disk
 .Fl -catalog Ar DIR | URL
+.Oo
 .Fl -hostname Ar name
 .Fl -user Ar name
 .Fl -key Ar file
+.Oc
 .Fl -console Ar list
 .Op Fl -pool Ar name
 .Op Fl -altroot Ar dir
@@ -68,13 +70,22 @@ with
 populated from the base's template by
 .Pa /usr/libexec/rmxos-datasync .
 .It
-The seeds on Data:
+The machine's seeds on Data:
 .Pa rc.conf
-with the hostname, DHCP on the default interface,
+with DHCP on the default interface and
 .Cm sshd_enable
-and
-.Xr mac_do 4 ;
-the first user, home
+enabled;
+.Pa localtime
+from
+.Ar zone
+(default
+.Cm UTC ) ;
+and the first
+.Cm installed
+line of the update history.
+If all three owner options are supplied, the shared
+.Xr sysadminctl 8
+writer also sets the hostname, adds the first user and home
 .Pa /Users/ Ns Ar name ,
 whose only login is the public key in
 .Ar file ,
@@ -84,15 +95,12 @@ by a
 .Va security.mac.do.rules
 line in
 .Pa sysctl.conf ;
-root's password locked;
-.Pa localtime
-from
-.Ar zone
-(default
-.Cm UTC ) ;
-and the first
-.Cm installed
-line of the update history.
+and locks root's password.
+With all three options omitted the template's users and empty root
+password are retained, and no owner or mac_do rule is written.
+Root then works only on the console: the base sshd configuration refuses
+root logins and empty passwords.
+A partial owner option set refuses before any write.
 .It
 The environment's
 .Pa /boot/loader.efi
