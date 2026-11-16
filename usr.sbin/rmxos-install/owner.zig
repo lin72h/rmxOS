@@ -110,8 +110,8 @@ pub fn apply(ctx: sys.Ctx, root: []const u8, v: Values) !void {
     _ = fields.next();
     const uid = fields.next() orelse return error.UserShow;
     const gid = fields.next() orelse return error.UserShow;
-    _ = try sys.capture(ctx, &.{ "/usr/sbin/pw", "-V", etc, "lock", "root" });
-    _ = try sys.capture(ctx, &.{ "/usr/sbin/pwd_mkdb", "-d", etc, "-p", try at(ctx, root, "/private/etc/master.passwd") });
+    // The user's way in comes first: a failure before the lock leaves root
+    // as it was, on the console. rmxos-owner(8) lists what each step leaves.
     const u = try std.fmt.parseInt(u32, uid, 10);
     const g = try std.fmt.parseInt(u32, gid, 10);
     const home = try at(ctx, root, try ctx.fmt("/Users/{s}", .{v.user}));
@@ -126,5 +126,8 @@ pub fn apply(ctx: sys.Ctx, root: []const u8, v: Values) !void {
     const settings = try at(ctx, root, "/private/etc/sysctl.conf");
     try sys.replace(ctx.a, settings, try ctx.fmt("{s}{s}", .{ sys.read(ctx.a, settings) catch "", try macDoRule(ctx.a, uid) }));
     try sys.replace(ctx.a, rc, rc_text);
+    // Root last, then the databases; the marker records completion.
+    _ = try sys.capture(ctx, &.{ "/usr/sbin/pw", "-V", etc, "lock", "root" });
+    _ = try sys.capture(ctx, &.{ "/usr/sbin/pwd_mkdb", "-d", etc, "-p", try at(ctx, root, "/private/etc/master.passwd") });
     try sys.replace(ctx.a, try at(ctx, root, "/private/var/db/rmxos/owner"), try ctx.fmt("{s}\n", .{v.user}));
 }

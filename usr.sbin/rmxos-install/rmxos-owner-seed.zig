@@ -18,7 +18,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     const args = init.args.toSlice(ctx.a) catch return 1;
     var root: []const u8 = "/";
     if (args.len != 1) {
-        if (args.len != 3 or !std.mem.eql(u8, args[1], "-altRoot") or args[2].len == 0 or args[2][0] != '/' or std.mem.indexOf(u8, args[2], "..") != null) {
+        if (args.len != 3 or !std.mem.eql(u8, args[1], "--altroot") or args[2].len == 0 or args[2][0] != '/' or std.mem.indexOf(u8, args[2], "..") != null) {
             report(ctx, "owner-seed: Usage");
             return 1;
         }
@@ -35,7 +35,7 @@ fn run(ctx: sys.Ctx, root: []const u8) !void {
     if (try owner.present(ctx, root)) return;
     const device: []const u8 = "/dev/msdosfs/" ++ label;
     if (!sys.exists(try ctx.z(device))) return;
-    var command: []const u8 = "/usr/sbin/sysadminctl";
+    var command: []const u8 = "/usr/sbin/rmxos-owner";
     if (ctx.fixture) {
         // Exercise real label discovery, but never use a host disk in a fixture.
         const labels = try sys.capture(ctx, &.{ "/sbin/glabel", "status", "-s" });
@@ -75,7 +75,7 @@ fn run(ctx: sys.Ctx, root: []const u8) !void {
     const key = read(ctx, mountpoint, "authorized_keys") catch return error.MissingAuthorizedKeys;
     try owner.validate(.{ .hostname = std.mem.trim(u8, host, "\r\n"), .user = std.mem.trim(u8, user, "\r\n"), .key = key });
     const keyfile = try ctx.fmt("{s}/authorized_keys", .{mountpoint});
-    _ = try sys.capture(ctx, &.{ command, "-hostName", std.mem.trim(u8, host, "\r\n"), "-addUser", std.mem.trim(u8, user, "\r\n"), "-sshPublicKey", keyfile, "-altRoot", root });
+    _ = try sys.capture(ctx, &.{ command, "--hostname", std.mem.trim(u8, host, "\r\n"), "--user", std.mem.trim(u8, user, "\r\n"), "--key", keyfile, "--altroot", root });
     _ = try sys.capture(ctx, &.{ "/sbin/umount", mountpoint });
     mounted = false;
     report(ctx, "owner-seed: owner applied; root locked");

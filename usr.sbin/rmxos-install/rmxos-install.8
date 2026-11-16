@@ -84,7 +84,7 @@ and the first
 .Cm installed
 line of the update history.
 If all three owner options are supplied, the shared
-.Xr sysadminctl 8
+.Xr rmxos-owner 8
 writer also sets the hostname, adds the first user and home
 .Pa /Users/ Ns Ar name ,
 whose only login is the public key in
@@ -101,6 +101,10 @@ password are retained, and no owner or mac_do rule is written.
 Root then works only on the console: the base sshd configuration refuses
 root logins and empty passwords.
 A partial owner option set refuses before any write.
+An owner can be added later with
+.Xr rmxos-owner 8 ,
+which takes the same three options, or at boot by
+.Xr rmxos-owner-seed 8 .
 .It
 The environment's
 .Pa /boot/loader.efi
@@ -154,5 +158,7 @@ usage error.
 .Sh SEE ALSO
 .Xr mdo 1 ,
 .Xr mac_do 4 ,
+.Xr rmxos-owner 8 ,
+.Xr rmxos-owner-seed 8 ,
 .Xr softwareupdate 8 ,
 .Xr zpool 8

@@ -1,0 +1,127 @@
+.Dd November 16, 2026
+.Dt RMXOS-OWNER 8
+.Os
+.Sh NAME
+.Nm rmxos-owner
+.Nd establish the first owner of an rmxOS installation
+.Sh SYNOPSIS
+.Nm
+.Fl -hostname Ar name
+.Fl -user Ar name
+.Fl -key Ar file
+.Op Fl -altroot Ar directory
+.Sh DESCRIPTION
+.Nm
+runs as root, once, on an installation made without an owner.
+It uses the same writer as
+.Xr rmxos-install 8 ,
+and its options have the installer's names and meanings:
+an installation made with the installer's three owner options and one made
+without them followed by
+.Nm
+with the same values hold the same owner files.
+The default root is the running system;
+.Fl -altroot
+names an installed root with its Data datasets mounted, as the
+installer's option of that name does.
+All three values are required and use the installer's hostname,
+lowercase user name (excluding root and toor), and single OpenSSH
+public-key-line validators.
+They are checked before any write.
+It does not ask for or set a user password.
+Before an owner is added, the template's empty root password permits
+console access only; sshd refuses root and empty-password logins.
+.Pp
+An owner exists when
+.Pa /private/var/db/rmxos/owner
+exists, when
+.Pa /private/etc/sysctl.conf
+has a security.mac.do.rules setting, or when root's password begins with
+*LOCKED*, including installations made by the earlier installer.
+Such roots are refused without changing any files.
+An existing account with the requested name is also refused.
+The existing etc directory is locked to serialize owner writers without
+creating a lock file during a refusal.
+This command does not replace or remove owners.
+.Pp
+The steps run in this order, with paths below the root:
+.Bl -enum
+.It
+.Xr pw 8
+adds the user with no password, home
+.Pa /Users/ Ns Ar name
+and shell
+.Pa /bin/sh .
+.It
+The home (mode 0755),
+.Pa .ssh
+(0700) and
+.Pa .ssh/authorized_keys
+(0600) holding the key are created, owned by that user's uid and gid.
+.It
+The user's
+.Xr mdo 1
+rule is added to
+.Pa /private/etc/sysctl.conf .
+.It
+.Pa /private/etc/rc.conf
+gets the hostname, DHCP, sshd and
+.Xr mac_do 4
+settings.
+.It
+Root's password is locked and the password databases are rebuilt with
+.Xr pwd_mkdb 8 .
+.It
+The user name is written to
+.Pa /private/var/db/rmxos/owner .
+.El
+.Pp
+No file is left half written: each is written aside and renamed into place.
+The hostname, the mac_do module and the mdo rule take effect at the next
+boot.
+.Sh RECOVERY
+A failure prints one line naming its error.
+A refusal leaves the owner files unchanged.
+A failure in steps 1 to 4 leaves root as it was, so root still logs in
+on the console.
+It can leave the account and its group, the home and, after step 3, the
+mdo rule.
+A retry refuses while the account or the rule exists.
+To clear them before a retry, as root on the console:
+.Bd -literal -offset indent
+pw -V /private/etc userdel -n name
+rm -r /Users/name
+.Ed
+.Pp
+and delete the line it added to
+.Pa /private/etc/sysctl.conf ,
+which names the user's uid (here 1001):
+.Bd -literal -offset indent
+security.mac.do.rules="uid=1001>uid=0,gid=*,+gid=*"
+.Ed
+.Pp
+.Pa rc.conf
+needs no change: a retry rewrites those settings.
+.Pp
+A failure in step 5 or 6 leaves steps 1 to 4 done.
+If root's line in
+.Pa /private/etc/master.passwd
+begins with *LOCKED*, finish by hand instead of retrying:
+.Bd -literal -offset indent
+pwd_mkdb -d /private/etc -p /private/etc/master.passwd
+echo name > /private/var/db/rmxos/owner
+.Ed
+.Pp
+Otherwise root was not locked and is as it was: clear as above and retry.
+For an installed root, prefix each of these paths with the
+.Fl -altroot
+directory.
+.Sh EXIT STATUS
+0 when the owner is added, 1 after a usage error, refusal or failure.
+.Sh SEE ALSO
+.Xr mdo 1 ,
+.Xr mac_do 4 ,
+.Xr pw 8 ,
+.Xr pwd_mkdb 8 ,
+.Xr rmxos-install 8 ,
+.Xr rmxos-owner-seed 8

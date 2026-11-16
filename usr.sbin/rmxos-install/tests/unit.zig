@@ -3,7 +3,7 @@ const std = @import("std");
 const ri = @import("../rmxos-install.zig");
 const t = std.testing;
 const owner = @import("../owner.zig");
-const admin = @import("../sysadminctl.zig");
+const admin = @import("../rmxos-owner.zig");
 
 test "owner options are all supplied or all absent" {
     const bare = [_][]const u8{ "--disk", "md5", "--catalog", "/c", "--console", "efi" };
@@ -13,11 +13,17 @@ test "owner options are all supplied or all absent" {
         try t.expectError(error.Usage, ri.parse(&partial));
     }
     try t.expectError(error.Usage, ri.parse(&(bare ++ [_][]const u8{ "--hostname", "", "--user", "", "--key", "" })));
-    try t.expectError(error.Usage, admin.parse(&.{ "-addUser", "lin" }));
-    try t.expectError(error.InvalidHostname, admin.parse(&.{ "-addUser", "lin", "-hostName", "-bad", "-sshPublicKey", "/key" }));
-    try t.expectError(error.InvalidUser, admin.parse(&.{ "-addUser", "root", "-hostName", "host", "-sshPublicKey", "/key" }));
-    const o = try admin.parse(&.{ "-addUser", "lin", "-hostName", "host", "-sshPublicKey", "/key", "-altRoot", "/new" });
-    try t.expectEqualStrings("/new", o.root);
+    try t.expectError(error.Usage, admin.parse(&.{ "--user", "lin" }));
+    try t.expectError(error.InvalidHostname, admin.parse(&.{ "--user", "lin", "--hostname", "-bad", "--key", "/key" }));
+    try t.expectError(error.InvalidUser, admin.parse(&.{ "--user", "root", "--hostname", "host", "--key", "/key" }));
+    try t.expectError(error.InvalidAltroot, admin.parse(&.{ "--user", "lin", "--hostname", "host", "--key", "/key", "--altroot", "new" }));
+    // macOS-style switches are not rmxos-owner options.
+    try t.expectError(error.Usage, admin.parse(&.{ "-addUser", "lin", "-hostName", "host", "-sshPublicKey", "/key" }));
+    try t.expectEqualStrings("/", (try admin.parse(&.{ "--hostname", "host", "--user", "lin", "--key", "/key" })).altroot);
+    // The installer's owner options, in its order, mean the same here.
+    const o = try admin.parse(&.{ "--hostname", "host-1.example", "--user", "lin", "--key", "/k.pub", "--altroot", "/new" });
+    const i = try ri.parse(&.{ "--disk", "md5", "--catalog", "/c", "--console", "efi", "--hostname", "host-1.example", "--user", "lin", "--key", "/k.pub", "--altroot", "/new" });
+    for ([_][2][]const u8{ .{ o.hostname, i.hostname }, .{ o.user, i.user }, .{ o.key, i.key }, .{ o.altroot, i.altroot } }) |pair| try t.expectEqualStrings(pair[1], pair[0]);
 }
 
 test "machine state contains no owner and owner formatting preserves installed bytes" {
