@@ -536,15 +536,17 @@ fn undoInstall(ctx: Ctx, env: Env, received: []const u8, clone: []const u8, prev
 }
 
 // The ESP's loaders are refreshed before bootfs moves; a failed refresh
-// (error.EspRefresh, the reason in sys.failure) leaves both as they were.
+// (the reason for error.EspRefresh in sys.failure) leaves both as they were.
 fn confirmRunning(ctx: Ctx, env: Env, r: Record) !u8 {
     var e = try Esp.open(ctx, env.pool);
     defer e.close(ctx);
     const refreshed = try e.refresh(ctx);
-    _ = sys.capture(ctx, &.{ "/sbin/zpool", "set", try ctx.fmt("bootfs={s}", .{env.running}), env.pool }) catch |err| {
-        if (refreshed) e.restore(ctx);
-        return err;
-    };
+    {
+        // Cover argument preparation as well as command failure, including
+        // OutOfMemory. After bootfs moves, later errors must not undo ESP.
+        errdefer if (refreshed) e.restore(ctx);
+        _ = try sys.capture(ctx, &.{ "/sbin/zpool", "set", try ctx.fmt("bootfs={s}", .{env.running}), env.pool });
+    }
     // The loader consumed the one-boot setting; clear any remainder.
     _ = sys.run(ctx.a, &.{ "/sbin/bectl", "-r", env.root, "activate", "-T" }, null) catch {};
     var n = r;

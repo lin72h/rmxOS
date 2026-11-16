@@ -34,6 +34,9 @@ pub fn populate(ctx: Ctx, dir: []const u8, loader: []const u8, env: []const u8) 
 pub const Written = struct {
     rel: []const u8,
     dest: [:0]const u8,
+    tmp: [:0]const u8,
+    prev: [:0]const u8,
+    prev_tmp: [:0]const u8,
     old: []const u8,
     old_prev: ?[]const u8,
 };
@@ -92,10 +95,20 @@ pub const Esp = struct {
     // over it. A failure puts back what this refresh wrote. False when
     // nothing changed.
     pub fn refresh(self: *Esp, ctx: Ctx) !bool {
+        self.written = &.{};
+        self.detail = "";
         const dir = self.dir orelse {
             ctx.out("ESP: {s}; loader not refreshed\n", .{self.skip});
             return false;
         };
+        // Every error, including an allocation between loaders or while
+        // assembling the detail, unwinds all completed writes. Each entry
+        // already owns every name and old byte its restore needs.
+        errdefer {
+            self.restore(ctx);
+            self.written = &.{};
+            self.detail = "";
+        }
         const new = sys.read(ctx.a, try ctx.path("/boot/loader.efi")) catch return fail(ctx, "/boot/loader.efi unreadable", .{});
         const want = digest(new);
         var done: std.ArrayList(Written) = .empty;
@@ -106,17 +119,13 @@ pub const Esp = struct {
             const dest = try ctx.a.dupeZ(u8, try ctx.fmt("{s}/{s}", .{ dir, rel }));
             if (!sys.exists(dest)) continue;
             present += 1;
-            const changed = refreshOne(ctx, rel, dest, new, want) catch |err| {
-                self.written = done.items;
-                self.restore(ctx);
-                self.written = &.{};
-                return err;
-            };
+            const changed = try refreshOne(ctx, rel, dest, new, want);
             const w = changed orelse {
                 try lines.append(ctx.a, try ctx.fmt("ESP: {s} is current (sha256 {s})\n", .{ rel, want }));
                 continue;
             };
             done.appendAssumeCapacity(w);
+            self.written = done.items;
         }
         if (present == 0) return fail(ctx, "{s} has no {s} or {s}", .{ dir, loaders[0], loaders[1] });
         self.written = done.items;
@@ -126,18 +135,20 @@ pub const Esp = struct {
             try details.append(ctx.a, d);
             try lines.append(ctx.a, try ctx.fmt("ESP: refreshed {s}\n", .{d}));
         }
-        for (lines.items) |l| ctx.out("{s}", .{l});
         self.detail = try std.mem.join(ctx.a, "; ", details.items);
+        // The lines are already formatted. Emitting them needs no further
+        // allocation after the last fallible preparation step.
+        for (lines.items) |l| sys.writeAll(1, l) catch {};
         return done.items.len > 0;
     }
 
     // Undo a refresh when the confirm fails after it: every loader it wrote,
     // and each one's .prev, as they were.
-    pub fn restore(self: Esp, ctx: Ctx) void {
+    pub fn restore(self: Esp, _: Ctx) void {
         var i = self.written.len;
         while (i > 0) {
             i -= 1;
-            restoreOne(ctx, self.written[i]);
+            restoreOne(self.written[i]);
         }
     }
 };
@@ -153,6 +164,9 @@ fn refreshOne(ctx: Ctx, rel: []const u8, dest: [:0]const u8, new: []const u8, wa
     const w = Written{
         .rel = rel,
         .dest = dest,
+        .tmp = tmp,
+        .prev = prev,
+        .prev_tmp = prev_tmp,
         .old = old,
         .old_prev = if (sys.exists(prev)) sys.read(ctx.a, prev) catch return fail(ctx, "{s}.prev unreadable", .{rel}) else null,
     };
@@ -166,32 +180,86 @@ fn refreshOne(ctx: Ctx, rel: []const u8, dest: [:0]const u8, new: []const u8, wa
     }
     if (sys.c.rename(tmp, dest) != 0) {
         const why = sys.lastError(ctx.a);
-        putPrev(ctx, w);
+        putPrev(w);
         return fail(ctx, "rename {s}: {s}", .{ rel, why });
     }
     syncDir(dest);
     const got = sys.sha256File(dest) catch @as([64]u8, @splat('0'));
     if (!std.mem.eql(u8, &got, &want)) {
-        restoreOne(ctx, w);
+        restoreOne(w);
         return fail(ctx, "{s} sha256 {s} after the rename, not {s}", .{ rel, got, want });
     }
     return w;
 }
 
-fn restoreOne(ctx: Ctx, w: Written) void {
-    replaceChecked(ctx, w.dest, w.old) catch {
-        ctx.out("ESP: restoring {s} failed: {s}\n", .{ w.dest, sys.failure });
-        return;
-    };
-    putPrev(ctx, w);
+fn restoreOne(w: Written) void {
+    if (!restoreFile(w.dest, w.tmp, w.old)) return;
+    putPrev(w);
 }
 
 // <loader>.prev as it was before the refresh.
-fn putPrev(ctx: Ctx, w: Written) void {
-    const prev = sibling(ctx, w.dest, ".prev") catch return;
+fn putPrev(w: Written) void {
     if (w.old_prev) |bytes| {
-        replaceChecked(ctx, prev, bytes) catch ctx.out("ESP: restoring {s} failed: {s}\n", .{ prev, sys.failure });
-    } else _ = sys.c.unlink(prev);
+        _ = restoreFile(w.prev, w.prev_tmp, bytes);
+    } else _ = sys.c.unlink(w.prev);
+}
+
+// Rollback must work after the arena is exhausted. Names and old bytes are
+// prepared before this loader's first write; hashing, I/O and diagnostics
+// below use only fixed storage and libc, never the context allocator.
+fn restoreFile(p: [:0]const u8, tmp: [:0]const u8, bytes: []const u8) bool {
+    _ = sys.c.unlink(tmp);
+    var renamed = false;
+    defer if (!renamed) {
+        _ = sys.c.unlink(tmp);
+    };
+    const fd = sys.c.open(tmp, sys.c.O_WRONLY | sys.c.O_CREAT | sys.c.O_EXCL | sys.c.O_NOFOLLOW | sys.c.O_CLOEXEC, @as(c_uint, 0o644));
+    if (fd < 0) {
+        restoreReport(p, "create: {s}", .{restoreErrno()});
+        return false;
+    }
+    {
+        defer _ = sys.c.close(fd);
+        sys.writeAll(fd, bytes) catch {
+            restoreReport(p, "write: {s}", .{restoreErrno()});
+            return false;
+        };
+        if (sys.c.fsync(fd) != 0) {
+            restoreReport(p, "fsync: {s}", .{restoreErrno()});
+            return false;
+        }
+    }
+    const got = sys.sha256File(tmp) catch {
+        restoreReport(p, "read back: {s}", .{restoreErrno()});
+        return false;
+    };
+    const want = digest(bytes);
+    if (!std.mem.eql(u8, &got, &want)) {
+        restoreReport(p, "sha256 {s}, not {s}", .{ got, want });
+        return false;
+    }
+    if (sys.c.rename(tmp, p) != 0) {
+        restoreReport(p, "rename {s}: {s}", .{ p, restoreErrno() });
+        return false;
+    }
+    renamed = true;
+    syncDir(p);
+    return true;
+}
+
+fn restoreErrno() []const u8 {
+    return std.mem.span(sys.c.strerror(sys.c.__error().*));
+}
+
+var restore_failure: [2 * std.fs.max_path_bytes + 256]u8 = undefined;
+
+fn restoreReport(p: []const u8, comptime format: []const u8, args: anytype) void {
+    // Keep sys.failure's existing error-reporting contract, with storage
+    // that outlives this call even when no arena allocation can succeed.
+    sys.failure = std.fmt.bufPrint(&restore_failure, format, args) catch return;
+    var buf: [2 * std.fs.max_path_bytes + 256]u8 = undefined;
+    const line = std.fmt.bufPrint(&buf, "ESP: restoring {s} failed: {s}\n", .{ p, sys.failure }) catch return;
+    sys.writeAll(1, line) catch {};
 }
 
 fn sibling(ctx: Ctx, dest: []const u8, suffix: []const u8) ![:0]const u8 {

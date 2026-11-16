@@ -408,6 +408,95 @@ test "a failed bootfs move restores every loader and .prev" {
     try t.expectEqualStrings(owner_env, read(a, f.dir, esp.loader_env));
 }
 
+fn oomFixture(a: std.mem.Allocator, top: []const u8) !Fixture {
+    const f = try fixture(a, top, .{ "old removable\n", "old freebsd\n" });
+    try sys.replace(a, try at(a, f.dir, "efi/freebsd/loader.efi.prev"), "older freebsd\n");
+    return f;
+}
+
+fn unchangedEsp(a: std.mem.Allocator, f: Fixture) !bool {
+    var same = std.mem.eql(u8, read(a, f.dir, esp.loader_env), owner_env);
+    for (esp.loaders, [_][]const u8{ "old removable\n", "old freebsd\n" }, 0..) |rel, old, i| {
+        same = same and std.mem.eql(u8, read(a, f.dir, rel), old);
+        const prev = try std.fmt.allocPrint(a, "{s}.prev", .{rel});
+        same = same and if (i == 0) !sys.exists(try at(a, f.dir, prev)) else std.mem.eql(u8, read(a, f.dir, prev), "older freebsd\n");
+        for ([_][]const u8{ ".new", ".prev.new" }) |suffix|
+            same = same and !sys.exists(try at(a, f.dir, try std.fmt.allocPrint(a, "{s}{s}", .{ rel, suffix })));
+    }
+    return same;
+}
+
+test "ESP allocation failures leave both loaders and prior states unchanged; restore allocates nothing" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const top = try scratch(a);
+    defer clear(a, top);
+    var f = try oomFixture(a, top);
+    var count_alloc = t.FailingAllocator.init(a, .{});
+    f.ctx.a = count_alloc.allocator();
+    var e = esp.Esp{ .dir = f.dir };
+    try t.expect(try refreshed(f, &e));
+    const count = count_alloc.alloc_index;
+    std.debug.print("ESP_OOM passing_allocations={d}\n", .{count});
+
+    var failures: usize = 0;
+    for (0..count + 1) |n| {
+        var trial = std.heap.ArenaAllocator.init(t.allocator);
+        defer trial.deinit();
+        const alloc = trial.allocator();
+        const dir = try scratch(alloc);
+        defer clear(alloc, dir);
+        var fx = try oomFixture(alloc, dir);
+        var failing = t.FailingAllocator.init(alloc, .{ .fail_index = n });
+        fx.ctx.a = failing.allocator();
+        var current = esp.Esp{ .dir = fx.dir };
+        const result = refreshed(fx, &current);
+        if (n < count) {
+            const errored = if (result) |_| false else |_| true;
+            const same = try unchangedEsp(alloc, fx);
+            std.debug.print("ESP_OOM N={d} error={s} unchanged={any}\n", .{ n, if (result) |_| "none" else |err| @errorName(err), same });
+            if (!errored or !same) {
+                failures += 1;
+                if (failing.has_induced_failure) {
+                    const trace = failing.getStackTrace();
+                    std.debug.dumpStackTrace(&trace);
+                }
+            }
+        } else {
+            try t.expect(try result);
+            try t.expect(!failing.has_induced_failure);
+            for (esp.loaders, [_][]const u8{ "old removable\n", "old freebsd\n" }) |rel, old| {
+                try t.expectEqualStrings(new_loader, read(alloc, fx.dir, rel));
+                try t.expectEqualStrings(old, read(alloc, fx.dir, try std.fmt.allocPrint(alloc, "{s}.prev", .{rel})));
+                for ([_][]const u8{ ".new", ".prev.new" }) |suffix|
+                    try t.expect(!sys.exists(try at(alloc, fx.dir, try std.fmt.allocPrint(alloc, "{s}{s}", .{ rel, suffix }))));
+            }
+            try t.expectEqualStrings(owner_env, read(alloc, fx.dir, esp.loader_env));
+            std.debug.print("ESP_OOM N={d} refreshed=true\n", .{n});
+            var exhausted = t.FailingAllocator.init(alloc, .{ .fail_index = 0 });
+            fx.ctx.a = exhausted.allocator();
+            current.restore(fx.ctx);
+            const same = try unchangedEsp(alloc, fx);
+            const no_allocations = !exhausted.has_induced_failure and exhausted.alloc_index == 0;
+            std.debug.print("ESP_OOM restore fail_index=0 unchanged={any} no_allocations={any}\n", .{ same, no_allocations });
+            if (!same or !no_allocations) failures += 1;
+        }
+    }
+    std.debug.print("ESP_OOM failures={d}\n", .{failures});
+    try t.expectEqual(@as(usize, 0), failures);
+}
+
+test "GEOM parser refuses a level jump" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    try t.expectError(error.GeomOutput, esp.Disks.parse(arena.allocator(), "", "0 DISK md0 4096 512\n2 PART md0p1 4096 512\n"));
+}
+
+test "gpart parser refuses a partition without a table header" {
+    try t.expectError(error.GpartOutput, esp.Disks.parse(t.allocator, "40 81920 md0p1 efi (40M)\n", ""));
+}
+
 test "a failure at the second loader puts back the first" {
     var arena = std.heap.ArenaAllocator.init(t.allocator);
     defer arena.deinit();
