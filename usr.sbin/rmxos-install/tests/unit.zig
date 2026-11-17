@@ -369,3 +369,20 @@ test "owner seed: a mount directory left by an earlier run is reused; anything e
     try t.expectError(error.MountDirectory, seed.mountDirectory(link));
     try t.expectEqual(@as(sys.c.mode_t, sys.c.S_IFLNK), (try mode(link)) & sys.c.S_IFMT);
 }
+
+// PID 1 starts launchd with no open descriptors, so launchd opens /dev/null
+// for its own stdio (sbin/launchd/launchd.c testfd_or_openfd) and a job
+// without StandardErrorPath inherits it. The reader's one diagnostic line is
+// its stderr: the job sends stderr to the console, once, at load.
+test "owner seed job: stderr is the console; one run at load" {
+    const plist = @embedFile("../org.rmxos.owner-seed.plist");
+    for ([_][]const u8{
+        "<key>Label</key><string>org.rmxos.owner-seed</string>",
+        "<array><string>/usr/sbin/rmxos-owner-seed</string></array>",
+        "<key>StandardErrorPath</key><string>/dev/console</string>",
+        "<key>RunAtLoad</key><true/>",
+        "<key>KeepAlive</key><false/>",
+        "<key>LaunchOnlyOnce</key><true/>",
+    }) |line| try t.expect(std.mem.indexOf(u8, plist, line) != null);
+    try t.expect(std.mem.indexOf(u8, plist, "StandardOutPath") == null);
+}

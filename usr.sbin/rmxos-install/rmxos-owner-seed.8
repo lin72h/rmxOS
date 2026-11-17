@@ -1,4 +1,4 @@
-.Dd November 16, 2026
+.Dd November 17, 2026
 .Dt RMXOS-OWNER-SEED 8
 .Os
 .Sh NAME
@@ -43,7 +43,8 @@ Missing or invalid input changes no owner files and produces one diagnostic
 line with its reason.
 Success and errors use os_log, subsystem
 .Cm org.rmxos.owner-seed ,
-category boot, and one console line for early boot visibility.
+category boot, and one line on the standard error, which the job sends to
+the console for early boot visibility.
 Absent volumes and existing owners are silent.
 .Pp
 Alternatively, enter the

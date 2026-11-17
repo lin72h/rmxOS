@@ -5,6 +5,7 @@
 	<key>Label</key><string>org.rmxos.owner-seed</string>
 	<key>ProgramArguments</key>
 	<array><string>/usr/sbin/rmxos-owner-seed</string></array>
+	<key>StandardErrorPath</key><string>/dev/console</string>
 	<key>RunAtLoad</key><true/>
 	<key>KeepAlive</key><false/>
 	<key>LaunchOnlyOnce</key><true/>
