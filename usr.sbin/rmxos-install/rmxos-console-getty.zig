@@ -35,6 +35,6 @@ pub fn main() u8 {
         sys.writeAll(2, message) catch {};
     };
     const argv = [_:null]?[*:0]const u8{ "/usr/libexec/getty", "3wire.115200", "console" };
-    _ = sys.c.execv(argv[0].?, &argv);
+    _ = sys.c.execv(argv[0].?, @ptrCast(&argv));
     return 127;
 }
