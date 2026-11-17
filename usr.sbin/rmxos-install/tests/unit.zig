@@ -386,3 +386,19 @@ test "owner seed job: stderr is the console; one run at load" {
     }) |line| try t.expect(std.mem.indexOf(u8, plist, line) != null);
     try t.expect(std.mem.indexOf(u8, plist, "StandardOutPath") == null);
 }
+
+test "console waits for this boot's reader, with a 60 second fallback" {
+    const gate = @import("../rmxos-console-getty.zig");
+    const completion = @import("../seed-completion.zig");
+    try t.expect(!completion.matches("100:1\n", "99:1\n"));
+    try t.expect(!completion.matches("100:1\n", "100:"));
+    try t.expect(!completion.matches("100:1\n", "100:1\nextra"));
+    try t.expect(completion.matches("100:1\n", "100:1\n"));
+    // Missing/stale/partial completion cannot release the console early.
+    for ([_]i64{ 0, 1, 30_000, 59_999 }) |ms| try t.expectEqual(gate.Decision.wait, gate.decide(false, ms));
+    try t.expectEqual(gate.Decision.timeout, gate.decide(false, 60_000));
+    try t.expectEqual(gate.Decision.timeout, gate.decide(false, 60_100));
+    for ([_]i64{ 0, 1, 59_999, 60_000 }) |ms| try t.expectEqual(gate.Decision.ready, gate.decide(true, ms));
+    var boot: [80]u8 = undefined;
+    try t.expect((try completion.boot(&boot)).len > 0);
+}

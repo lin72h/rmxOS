@@ -6,10 +6,10 @@
 	<string>com.rmxos.console-getty</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/usr/libexec/getty</string>
-		<string>3wire.115200</string>
-		<string>console</string>
+		<string>/usr/sbin/rmxos-console-getty</string>
 	</array>
+	<key>StandardErrorPath</key>
+	<string>/dev/console</string>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>

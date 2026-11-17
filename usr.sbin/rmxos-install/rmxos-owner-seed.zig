@@ -24,6 +24,9 @@ pub fn main(init: std.process.Init.Minimal) u8 {
         }
         root = args[2];
     }
+    // Only the live boot signals the console; altroot/fixture runs cannot
+    // release a login prompt on the host. Defer covers every run outcome.
+    defer if (!ctx.fixture and std.mem.eql(u8, root, "/")) @import("seed-completion.zig").finish();
     run(ctx, root) catch |err| {
         report(ctx, ctx.fmt("owner-seed: {s}", .{@errorName(err)}) catch "owner-seed: error");
         return 1;
