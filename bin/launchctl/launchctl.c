@@ -76,6 +76,9 @@ static bool bootstrap_scan_has_plist_peer(struct dirent **files, int nfiles,
 
 static int cmd_start_stop(int argc, char * const argv[]);
 static int cmd_bootstrap(int argc, char * const argv[]);
+static int cmd_managername(int argc, char * const argv[]);
+static int cmd_print(int argc, char * const argv[]);
+static int cmd_bootout(int argc, char * const argv[]);
 static int cmd_load(int argc, char * const argv[]);
 static int cmd_unload(int argc, char * const argv[]);
 static int cmd_remove(int argc, char * const argv[]);
@@ -98,6 +101,9 @@ static const struct {
 	{ "unload",	cmd_unload,	"Unload a plist" },
 	{ "remove",	cmd_remove, 	"Remove specified job" },
 	{ "bootstrap",	cmd_bootstrap,	"Bootstrap launchd" },
+	{ "managername", cmd_managername, "Print the current manager name" },
+	{ "print", cmd_print, "Inspect system/<label>" },
+	{ "bootout", cmd_bootout, "Stop and remove system/<label>" },
 	{ "list",	cmd_list,	"List jobs and information about jobs" },
 	{ "service-state", cmd_service_state, "Inspect a named Mach service" },
 	{ "dump",	cmd_dump,       "Dumps job(s) plist(s)"},
@@ -971,12 +977,149 @@ bootstrap_config(void)
 }
 
 static int
+cmd_managername(int argc, char * const argv[])
+{
+	const char *name = NULL;
+
+	(void)argv;
+
+	if (argc != 1)
+		errx(EX_USAGE, "Usage: launchctl managername");
+	if (vproc_swap_string(NULL, VPROC_GSK_MGR_NAME, NULL, &name) != NULL ||
+	    name == NULL)
+		errx(EX_OSERR, "Cannot get manager name");
+	puts(name);
+	free(__DECONST(char *, name));
+	return (0);
+}
+
+/* Domain commands must never silently act on a per-user manager. */
+static void
+require_system_manager(void)
+{
+	const char *name = NULL;
+
+	if (vproc_swap_string(NULL, VPROC_GSK_MGR_NAME, NULL, &name) != NULL ||
+	    name == NULL)
+		errx(EX_OSERR, "Cannot get manager name");
+	if (strcmp(name, "System") != 0)
+		errx(EX_UNAVAILABLE, "System domain unavailable from manager %s", name);
+	free(__DECONST(char *, name));
+}
+
+static const char *
+system_label(int argc, char * const argv[])
+{
+	if (argc != 2)
+		errx(EX_USAGE, "Usage: launchctl %s system/<label>", argv[0]);
+	if (strncmp(argv[1], "system/", 7) != 0 || argv[1][7] == '\0' ||
+	    strchr(argv[1] + 7, '/') != NULL)
+		errx(EX_USAGE, "Unsupported service target: %s (use system/<label>)", argv[1]);
+	require_system_manager();
+	return (argv[1] + 7);
+}
+
+/* GetJob distinguishes an absent job from transport and permission errors. */
+static launch_data_t
+system_job(const char *label)
+{
+	launch_data_t msg, result;
+	int error;
+
+	msg = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
+	launch_data_dict_insert(msg, launch_data_new_string(label), LAUNCH_KEY_GETJOB);
+	result = launch_msg(msg);
+	launch_data_free(msg);
+	if (result == NULL)
+		err(EX_OSERR, "Cannot inspect %s", label);
+	if (launch_data_get_type(result) == LAUNCH_DATA_ERRNO) {
+		error = launch_data_get_errno(result);
+		errx(error == ESRCH ? 113 : EX_OSERR, "%s: %s", label,
+		    strerror(error != 0 ? error : EPROTO));
+	}
+	if (launch_data_get_type(result) != LAUNCH_DATA_DICTIONARY)
+		errx(EX_OSERR, "%s: invalid job reply", label);
+	/* The reply is MIG-owned, as in launch_msg_errno_command(). */
+	return (result);
+}
+
+static int
+cmd_print(int argc, char * const argv[])
+{
+	const char *label;
+	launch_data_t job, pid;
+
+	label = system_label(argc, argv);
+	job = system_job(label);
+	pid = launch_data_dict_lookup(job, LAUNCH_JOBKEY_PID);
+	if (pid != NULL && launch_data_get_type(pid) == LAUNCH_DATA_INTEGER)
+		printf("%s: pid = %lld\n", label, launch_data_get_integer(pid));
+	else
+		printf("%s: state = waiting\n", label);
+	return (0);
+}
+
+static int
+cmd_bootout(int argc, char * const argv[])
+{
+	const char *label;
+
+	label = system_label(argc, argv);
+	(void)system_job(label);
+	/* Wait for removal, including process exit and Mach service cleanup. */
+	if (_vproc_send_signal_by_label(label, VPROC_MAGIC_UNLOAD_SIGNAL) != NULL)
+		errx(EX_OSERR, "%s: cannot complete job removal", label);
+	return (0);
+}
+
+static int
+bootstrap_system(int argc, char * const argv[])
+{
+	launch_data_t job, types, item, disabled;
+	size_t i;
+	bool matched = false;
+
+	if (argc != 3 || strcmp(argv[1], "system") != 0)
+		errx(EX_USAGE, "Unsupported domain or arguments (use bootstrap system <plist>)");
+	require_system_manager();
+	job = read_job_file(argv[2], false);
+	if (job == NULL)
+		err(EX_OSERR, "Cannot read %s", argv[2]);
+	if (launch_data_get_type(job) != LAUNCH_DATA_DICTIONARY)
+		errx(EX_DATAERR, "%s: job is not a dictionary", argv[2]);
+	types = launch_data_dict_lookup(job, LAUNCH_JOBKEY_LIMITLOADTOSESSIONTYPE);
+	if (types != NULL && launch_data_get_type(types) == LAUNCH_DATA_ARRAY) {
+		for (i = 0; i < launch_data_array_get_count(types); i++) {
+			item = launch_data_array_get_index(types, i);
+			if (launch_data_get_type(item) != LAUNCH_DATA_STRING)
+				errx(EX_DATAERR, "%s: session type array contains a non-string", argv[2]);
+			if (strcmp(launch_data_get_string(item), "System") == 0)
+				matched = true;
+		}
+		if (!matched)
+			errx(EX_DATAERR, "%s: session type array does not include current manager System", argv[2]);
+		launch_data_dict_insert(job, launch_data_new_string("System"),
+		    LAUNCH_JOBKEY_LIMITLOADTOSESSIONTYPE);
+	}
+	disabled = launch_data_dict_lookup(job, LAUNCH_JOBKEY_DISABLED);
+	if (disabled != NULL && launch_data_get_type(disabled) == LAUNCH_DATA_BOOL &&
+	    launch_data_get_bool(disabled))
+		errx(EX_UNAVAILABLE, "%s: job is Disabled", argv[2]);
+	materialize_job_sockets(job);
+	if (submit_job(job) != 0)
+		err(EX_OSERR, "Cannot bootstrap %s", argv[2]);
+	return (0);
+}
+
+static int
 cmd_bootstrap(int argc, char * const argv[])
 {
 	char *session = NULL;
 	bool sflag = false;
 	int ch;
 	
+	if (argc > 1 && argv[1][0] != '-')
+		return (bootstrap_system(argc, argv));
 
 	while ((ch = getopt(argc, __DECONST(char **, argv), "sS:")) != -1) {
 		switch (ch) {

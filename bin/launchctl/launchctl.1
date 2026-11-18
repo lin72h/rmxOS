@@ -264,3 +264,14 @@ The list command accepts an optional job label and prints its configuration.
 The service-state command accepts a Mach service name and reports whether it
 is registered and whether launchd currently holds its receive right.
 It inspects launchd's own port type without checking in or transferring rights.
+.Sh CONTAINER SERVICE COMMANDS
+The managername command prints the current launchd manager name.
+The bootstrap system <plist> command loads one job in the System manager.
+A LimitLoadToSessionType array must contain System; it is converted to the
+string System before submission. Other domains are unsupported.
+This form does not alter bootstrap -S <session-type>, used during boot.
+The print system/<label> command prints the label and its PID or waiting state.
+It exits 113 if the label is absent, and 0 if it is loaded.
+The bootout system/<label> command stops and removes the job, waiting for removal.
+It exits 0 on completion and 113 if the initial lookup finds no such label.
+Other failures produce a diagnostic on standard error and a nonzero exit.

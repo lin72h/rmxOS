@@ -52,4 +52,10 @@ launchctl_plist.o: ${SRCTOP}/bin/launchctl/plist_to_launch_data.c
 unload_completion_unit: ${.CURDIR}/unload_completion.zig launchctl_unload_adapter.o launchctl_plist.o
 	${ZIG} test ${.CURDIR}/unload_completion.zig launchctl_unload_adapter.o launchctl_plist.o ${SYSROOT}/usr/lib/liblaunch.so.5 ${SYSROOT}/usr/lib/libjansson.so.4 ${SYSROOT}/usr/lib/libbsdxml.a --test-no-exec --gc-sections -rdynamic -lc --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/lib/liblaunch -I${SRCTOP}/lib/libxpc -I${SRCTOP}/include/apple -I${SRCTOP}/include -I${SRCTOP}/sys -femit-bin=${.TARGET}
 
+SCRIPTS+= container_verbs_test container_dash_s.so
+container_verbs_test: ${.CURDIR}/container_verbs.zig
+	${ZIG} build-exe ${.ALLSRC} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}
+container_dash_s.so: ${.CURDIR}/container_dash_s.zig
+	${ZIG} build-lib ${.ALLSRC} -dynamic -lc --sysroot ${ZIG_SYSROOT} -femit-bin=${.TARGET}
+
 .include <bsd.test.mk>
