@@ -387,18 +387,96 @@ test "owner seed job: stderr is the console; one run at load" {
     try t.expect(std.mem.indexOf(u8, plist, "StandardOutPath") == null);
 }
 
+const this_boot = "0123456789abcdef0123456789abcdef\n";
+
 test "console waits for this boot's reader, with a 60 second fallback" {
     const gate = @import("../rmxos-console-getty.zig");
-    const completion = @import("../seed-completion.zig");
-    try t.expect(!completion.matches("100:1\n", "99:1\n"));
-    try t.expect(!completion.matches("100:1\n", "100:"));
-    try t.expect(!completion.matches("100:1\n", "100:1\nextra"));
-    try t.expect(completion.matches("100:1\n", "100:1\n"));
-    // Missing/stale/partial completion cannot release the console early.
-    for ([_]i64{ 0, 1, 30_000, 59_999 }) |ms| try t.expectEqual(gate.Decision.wait, gate.decide(false, ms));
-    try t.expectEqual(gate.Decision.timeout, gate.decide(false, 60_000));
-    try t.expectEqual(gate.Decision.timeout, gate.decide(false, 60_100));
-    for ([_]i64{ 0, 1, 59_999, 60_000 }) |ms| try t.expectEqual(gate.Decision.ready, gate.decide(true, ms));
-    var boot: [80]u8 = undefined;
-    try t.expect((try completion.boot(&boot)).len > 0);
+    // kern.boot_id not readable yet (ENXIO before random(4) is seeded):
+    // wait before 60 s, whatever the record says; the fallback at 60 s.
+    for ([_]?[]const u8{ null, this_boot }) |rec| {
+        for ([_]i64{ 0, 100, 30_000, 59_900 }) |ms| try t.expectEqual(gate.Decision.wait, gate.decide(null, rec, ms));
+        for ([_]i64{ 60_000, 60_100 }) |ms| try t.expectEqual(gate.Decision.timeout, gate.decide(null, rec, ms));
+    }
+    // A missing, stale (another boot's key, op-660's kern.boottime form) or
+    // partial or longer record never releases the console.
+    for ([_]?[]const u8{ null, "", "fedcba9876543210fedcba9876543210\n", "1763371086:466771\n", this_boot[0..32], this_boot[0..1], this_boot ++ "x" }) |rec| {
+        for ([_]i64{ 0, 59_900 }) |ms| try t.expectEqual(gate.Decision.wait, gate.decide(this_boot, rec, ms));
+        try t.expectEqual(gate.Decision.timeout, gate.decide(this_boot, rec, 60_000));
+    }
+    // This boot's record releases it at any time; no wall clock is read.
+    for ([_]i64{ 0, 59_900, 60_000 }) |ms| try t.expectEqual(gate.Decision.ready, gate.decide(this_boot, this_boot, ms));
+    // The live key is 32 hex digits and a line end, the same on every read.
+    var first: completion.Id = undefined;
+    var again: completion.Id = undefined;
+    const key = try completion.boot(&first);
+    try t.expectEqual(@as(usize, 33), key.len);
+    for (key[0..32]) |ch| try t.expect(std.ascii.isDigit(ch) or (ch >= 'a' and ch <= 'f'));
+    try t.expectEqualStrings(key, try completion.boot(&again));
+}
+
+const completion = @import("../seed-completion.zig");
+const Key = struct {
+    fails: usize,
+    calls: usize = 0,
+    sleeps: usize = 0,
+    pub fn id(self: *Key, buf: *completion.Id) ![]const u8 {
+        self.calls += 1;
+        if (self.calls <= self.fails) return error.BootId;
+        buf.* = this_boot.*;
+        return buf;
+    }
+    pub fn sleep(self: *Key) void {
+        self.sleeps += 1;
+    }
+};
+
+test "owner reader writes this boot's record once the key reads, within 60 s" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const top = try scratch(a);
+    defer clear(a, top);
+    try t.expectEqual(@as(c_int, 0), sys.c.mkdir(try file(a, top, "/db"), 0o755));
+    const dir = try file(a, top, "/db/rmxos");
+    const rec = try file(a, top, "/db/rmxos/owner-seed.done");
+    var bytes: [@sizeOf(completion.Id) + 1]u8 = undefined;
+    // Three failed reads, then the key: the directory is made, the record
+    // is the key, and no temporary file is left.
+    var k = Key{ .fails = 3 };
+    try t.expect(completion.finishAt(&k, dir, rec));
+    try t.expectEqual(@as(usize, 3), k.sleeps);
+    try t.expectEqualStrings(this_boot, completion.record(rec, &bytes).?);
+    try t.expect(!sys.exists(try file(a, top, "/db/rmxos/owner-seed.done.new")));
+    // A stale record is replaced whole.
+    try sys.replace(a, rec, "1763371086:466771\n");
+    k = Key{ .fails = 0 };
+    try t.expect(completion.finishAt(&k, dir, rec));
+    try t.expectEqualStrings(this_boot, completion.record(rec, &bytes).?);
+    // A key that never reads: 600 polls of 100 ms, then nothing written.
+    try t.expectEqual(@as(c_int, 0), sys.c.unlink(rec));
+    k = Key{ .fails = std.math.maxInt(usize) };
+    try t.expect(!completion.finishAt(&k, dir, rec));
+    try t.expectEqual(@as(usize, 600), k.sleeps);
+    try t.expectEqual(@as(usize, 601), k.calls);
+    try t.expect(completion.record(rec, &bytes) == null);
+    // No parent for the directory: refused, nothing written.
+    k = Key{ .fails = 0 };
+    try t.expect(!completion.finishAt(&k, try file(a, top, "/none/rmxos"), try file(a, top, "/none/rmxos/owner-seed.done")));
+}
+
+test "owner reader: no RMXOWNER volume is silent on a root without /private" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const top = try scratch(a);
+    defer clear(a, top);
+    const root = try file(a, top, "/root");
+    try t.expectEqual(@as(c_int, 0), sys.c.mkdir(root, 0o755));
+    const ctx = sys.Ctx{ .a = a, .root = top, .fixture = true };
+    try t.expect(!try seed.wanted(ctx, root, try file(a, top, "/no-volume")));
+    // With a volume the owner check follows; on such a root it cannot read
+    // /private/etc, which the reader once hit first on every boot.
+    const volume = try file(a, top, "/volume");
+    try sys.replace(a, volume, "");
+    try t.expectError(error.Open, seed.wanted(ctx, root, volume));
 }

@@ -33,11 +33,16 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     };
     return 0;
 }
+// No volume, no work, checked first: the owner check reads the sealed
+// layout's /private, which a file-based root does not have.
+pub fn wanted(ctx: sys.Ctx, root: []const u8, device: [:0]const u8) !bool {
+    if (!sys.exists(device)) return false;
+    return !try owner.present(ctx, root);
+}
 fn run(ctx: sys.Ctx, root: []const u8) !void {
     if (ctx.fixture and !std.mem.startsWith(u8, root, try ctx.fmt("{s}/", .{ctx.root}))) return error.FixtureRoot;
-    if (try owner.present(ctx, root)) return;
     const device: []const u8 = "/dev/msdosfs/" ++ label;
-    if (!sys.exists(try ctx.z(device))) return;
+    if (!try wanted(ctx, root, try ctx.z(device))) return;
     var command: []const u8 = "/usr/sbin/rmxos-owner";
     if (ctx.fixture) {
         // Exercise real label discovery, but never use a host disk in a fixture.

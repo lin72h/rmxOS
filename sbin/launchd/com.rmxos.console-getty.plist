@@ -6,7 +6,7 @@
 	<string>com.rmxos.console-getty</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/usr/sbin/rmxos-console-getty</string>
+		<string>/usr/libexec/rmxos-console-getty</string>
 	</array>
 	<key>StandardErrorPath</key>
 	<string>/dev/console</string>

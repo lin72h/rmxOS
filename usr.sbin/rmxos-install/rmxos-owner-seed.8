@@ -1,4 +1,4 @@
-.Dd November 17, 2026
+.Dd November 18, 2026
 .Dt RMXOS-OWNER-SEED 8
 .Os
 .Sh NAME
@@ -46,6 +46,25 @@ Success and errors use os_log, subsystem
 category boot, and one line on the standard error, which the job sends to
 the console for early boot visibility.
 Absent volumes and existing owners are silent.
+.Pp
+Every run at boot, whatever its outcome, ends by writing the boot's
+.Va kern.boot_id
+to
+.Pa /var/db/rmxos/owner-seed.done ,
+making the directory if it is absent; until random(4) is seeded and
+.Va kern.boot_id
+can be read, it retries for up to 60 seconds.
+The console job
+.Pa /etc/launchd.d/com.rmxos.console-getty.plist
+runs
+.Pa /usr/libexec/rmxos-console-getty ,
+which starts
+.Xr getty 8
+once that record names the current boot, or after 60 seconds with one line
+on the console saying why.
+A clock step does not change
+.Va kern.boot_id ,
+so later console logins in the same boot start at once.
 .Pp
 Alternatively, enter the
 .Xr rmxos-owner 8

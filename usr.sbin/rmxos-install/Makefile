@@ -3,11 +3,13 @@
 PACKAGE= utilities
 SCRIPTS= rmxos-install rmxos-owner rmxos-owner-seed rmxos-console-getty
 SCRIPTSDIR= ${BINDIR}
+# Only launchd runs the console job's program, as getty beside it.
+SCRIPTSDIR_rmxos-console-getty= /usr/libexec
 SCRIPTSMODE= 0555
 MAN= rmxos-install.8 rmxos-owner.8 rmxos-owner-seed.8
 FILESGROUPS+= LAUNCHD
 LAUNCHD= org.rmxos.owner-seed.plist
-LAUNCHDDIR= /System/Library/LaunchDaemons
+LAUNCHDDIR= /etc/launchd.d
 LAUNCHDMODE= 0644
 ZIG?= zig
 ZIG_SYSROOT?= ${WORLDTMP:U${SYSROOT}}
