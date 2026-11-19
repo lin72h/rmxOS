@@ -54,8 +54,7 @@ mach_init(void)
 		if (pid != 1 && root_bootstrap == false) {
 			kr = task_get_special_port(mach_task_self_, TASK_BOOTSTRAP_PORT, &bootstrap_port);
 			if (kr != KERN_SUCCESS) {
-				syslog(LOG_EMERG, "get_special_port failed - mach_task_self_: %d", mach_task_self_);
-			  return;
+				bootstrap_port = MACH_PORT_NULL;
 			}
 		}
 		if (root_bootstrap == true) {

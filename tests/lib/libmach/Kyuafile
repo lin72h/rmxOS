@@ -6,3 +6,4 @@ atf_test_program{name="ool_kernel_memory_test"}
 atf_test_program{name="ool_errors_test"}
 atf_test_program{name="port_set_status_shortage_test"}
 atf_test_program{name="space_info_test"}
+atf_test_program{name="mach_init_test"}

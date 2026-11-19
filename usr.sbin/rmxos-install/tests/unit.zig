@@ -389,6 +389,25 @@ test "owner seed job: stderr is the console; one run at load" {
 
 const this_boot = "0123456789abcdef0123456789abcdef\n";
 
+test "console getty job: keep alive, five second throttle and console stderr" {
+    const plist = @embedFile("console-getty.plist");
+    // Ignore layout whitespace, as the source plist is indented XML.
+    var compact: [plist.len]u8 = undefined;
+    var len: usize = 0;
+    for (plist) |ch| {
+        if (!std.ascii.isWhitespace(ch)) {
+            compact[len] = ch;
+            len += 1;
+        }
+    }
+    for ([_][]const u8{
+        "<key>KeepAlive</key><true/>",
+        "<key>ThrottleInterval</key><integer>5</integer>",
+        "<key>StandardErrorPath</key><string>/dev/console</string>",
+        "<key>ProgramArguments</key><array><string>/usr/libexec/rmxos-console-getty</string></array>",
+    }) |field| try t.expect(std.mem.indexOf(u8, compact[0..len], field) != null);
+}
+
 test "console waits for this boot's reader, with a 60 second fallback" {
     const gate = @import("../rmxos-console-getty.zig");
     // kern.boot_id not readable yet (ENXIO before random(4) is seeded):
