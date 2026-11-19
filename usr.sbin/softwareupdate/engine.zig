@@ -1,5 +1,5 @@
 // The update lifecycle on the sealed layout: an update is a zfs send -i delta
-// received into pool/base/main as it is, cloned to pool/ROOT/<snapshot>,
+// received into pool/Update/main as it is, cloned to pool/System/<snapshot>,
 // activated for one boot and confirmed by the boot check. No promotion ever.
 // An install is the same receive, clone and select on a named target: a pool
 // imported under an alternate root, as the image builder leaves its pool.
@@ -60,7 +60,7 @@ fn named(ctx: Ctx, pool: []const u8, altroot: []const u8) !Env {
         sys.failure = try ctx.fmt("pool {s} is imported under {s}, not {s}", .{ pool, actual, want });
         return error.NotUnderAltroot;
     }
-    return .{ .pool = pool, .root = try ctx.fmt("{s}/ROOT", .{pool}), .base = "", .lineage = "", .running = "", .target = .{ .pool = .{ .name = pool, .altroot = want } } };
+    return .{ .pool = pool, .root = try ctx.fmt("{s}/System", .{pool}), .base = "", .lineage = "", .running = "", .target = .{ .pool = .{ .name = pool, .altroot = want } } };
 }
 
 pub fn discover(ctx: Ctx) !Env {
@@ -69,11 +69,20 @@ pub fn discover(ctx: Ctx) !Env {
     const pool = running[0..slash];
     // A host fixture never acts on the host's own pool.
     if (ctx.fixture and !std.mem.startsWith(u8, pool, "rmxsu")) return error.FixturePool;
-    const root = try ctx.fmt("{s}/ROOT", .{pool});
-    if (!std.mem.startsWith(u8, running, try ctx.fmt("{s}/", .{root}))) return error.NotSealedRoot;
     const origin = try get(ctx, "origin", running);
+    return discovered(ctx, running, origin);
+}
+
+// The loader and libbe take the boot-environment parent from the running
+// dataset. Sealing is established by the origin, not that parent's name.
+pub fn discovered(ctx: Ctx, running: []const u8, origin: []const u8) !Env {
+    const slash = std.mem.indexOfScalar(u8, running, '/') orelse return error.NotSealedRoot;
+    const parent = std.mem.lastIndexOfScalar(u8, running, '/') orelse return error.NotSealedRoot;
+    if (slash == 0 or parent + 1 == running.len) return error.NotSealedRoot;
+    const pool = running[0..slash];
+    const root = running[0..parent];
     const at = std.mem.lastIndexOfScalar(u8, origin, '@') orelse return error.NotSealedRoot;
-    const prefix = try ctx.fmt("{s}/base/", .{pool});
+    const prefix = try ctx.fmt("{s}/Update/", .{pool});
     if (!std.mem.startsWith(u8, origin[0..at], prefix)) return error.NotSealedRoot;
     const suffix = origin[prefix.len..at];
     const lineage = suffix[0 .. std.mem.indexOfScalar(u8, suffix, '/') orelse suffix.len];
@@ -95,7 +104,7 @@ fn bootfs(ctx: Ctx, env: Env) ![]const u8 {
 }
 
 pub const Snapshot = struct { name: []const u8, guid: []const u8 };
-// The chain head: pool/base/main's newest snapshot.
+// The chain head: pool/Update/main's newest snapshot.
 pub fn head(ctx: Ctx, env: Env) !Snapshot {
     const text = try zfs(ctx, &.{ "list", "-H", "-p", "-t", "snapshot", "-o", "name,guid", "-s", "createtxg", "-d", "1", env.base });
     var last: ?Snapshot = null;
@@ -195,7 +204,7 @@ pub fn installChoice(ctx: Ctx, running_env: Env, u: catalog.Update, source: []co
         return ctx.refuse("{s}: update starts from GUID {s}, installed base {s} is GUID {s}; nothing received", .{ u.label, u.origin_guid, h.name, h.guid });
     const v = (try verifiedStream(ctx, u, source, h.guid)) orelse return 1;
     if (full) {
-        const canonical = try ctx.fmt("{s}/base/{s}", .{ env.pool, lineage });
+        const canonical = try ctx.fmt("{s}/Update/{s}", .{ env.pool, lineage });
         const all = try zfs(ctx, &.{ "list", "-H", "-o", "name", "-r", env.pool });
         const present = hasWord(all, canonical);
         env.base = if (present) try ctx.fmt("{s}/{s}", .{ canonical, u.snapshot }) else canonical;
@@ -269,8 +278,8 @@ fn select(ctx: Ctx, env: Env, clone: []const u8) !void {
 pub const head_tag = "rmxos-head";
 const Made = struct { base_parent: bool = false, root: bool = false, received: bool = false, clone: bool = false, hold: bool = false };
 
-// Install the catalog's full stream on a named target: <pool>/base/<lineage>
-// received, its newest snapshot cloned to <pool>/ROOT/<snapshot> and held as
+// Install the catalog's full stream on a named target: <pool>/Update/<lineage>
+// received, its newest snapshot cloned to <pool>/System/<snapshot> and held as
 // rmxos-head, then bootfs. No fallback record or history: those are the
 // running system's, and the target's Data does not exist yet.
 pub fn installTarget(ctx: Ctx, target_env: Env, u: catalog.Update, source: []const u8, lineage: []const u8) !u8 {
@@ -279,7 +288,7 @@ pub fn installTarget(ctx: Ctx, target_env: Env, u: catalog.Update, source: []con
     if (!std.mem.eql(u8, u.origin_guid, "0"))
         return ctx.refuse("{s}: {s} takes a full stream; nothing received", .{ u.label, env.pool });
     env.lineage = lineage;
-    env.base = try ctx.fmt("{s}/base/{s}", .{ env.pool, lineage });
+    env.base = try ctx.fmt("{s}/Update/{s}", .{ env.pool, lineage });
     const clone = try ctx.fmt("{s}/{s}", .{ env.root, u.snapshot });
     const all = try zfs(ctx, &.{ "list", "-H", "-t", "all", "-o", "name", "-r", env.pool });
     for ([_][]const u8{ env.base, clone }) |existing| if (hasWord(all, existing))
@@ -298,8 +307,8 @@ pub fn installTarget(ctx: Ctx, target_env: Env, u: catalog.Update, source: []con
 }
 
 fn installSteps(ctx: Ctx, env: Env, u: catalog.Update, path: [:0]const u8, snapshot: []const u8, clone: []const u8, all: []const u8, made: *Made) !void {
-    // The image builder's parents: base unmountable, ROOT without a mountpoint.
-    const parent = try ctx.fmt("{s}/base", .{env.pool});
+    // The image builder's parents: Update unmountable, System without a mountpoint.
+    const parent = try ctx.fmt("{s}/Update", .{env.pool});
     if (!hasWord(all, parent)) {
         _ = try zfs(ctx, &.{ "create", "-o", "canmount=off", parent });
         made.base_parent = true;
@@ -343,7 +352,7 @@ fn undoTarget(ctx: Ctx, env: Env, snapshot: []const u8, clone: []const u8, made:
     if (made.root) _ = zfs(ctx, &.{ "destroy", env.root }) catch {
         failed = true;
     };
-    if (made.base_parent) _ = zfs(ctx, &.{ "destroy", try ctx.fmt("{s}/base", .{env.pool}) }) catch {
+    if (made.base_parent) _ = zfs(ctx, &.{ "destroy", try ctx.fmt("{s}/Update", .{env.pool}) }) catch {
         failed = true;
     };
     if (failed) return error.InstallCleanup;
@@ -367,7 +376,7 @@ const Leftover = union(enum) { none, ambiguous, one: []const u8 };
 // neither the running nor the fallback environment. (Without a clone of that
 // name; a clone is retryExisting's.)
 fn leftover(ctx: Ctx, env: Env, u: catalog.Update, lineage: []const u8) !Leftover {
-    const text = try zfs(ctx, &.{ "list", "-H", "-p", "-t", "snapshot", "-o", "name,guid", "-r", try ctx.fmt("{s}/base", .{env.pool}) });
+    const text = try zfs(ctx, &.{ "list", "-H", "-p", "-t", "snapshot", "-o", "name,guid", "-r", try ctx.fmt("{s}/Update", .{env.pool}) });
     const running_origin = try get(ctx, "origin", env.running);
     const fallback = if (readRecord(ctx)) |r| r.environment else "";
     const fallback_origin = if (fallback.len > 0) get(ctx, "origin", fallback) catch "" else "";
@@ -413,7 +422,7 @@ fn resumeReceived(ctx: Ctx, env: Env, u: catalog.Update, manual: bool, lineage: 
 }
 
 fn inLineage(ctx: Ctx, env: Env, snapshot: []const u8, lineage: []const u8) !bool {
-    const prefix = try ctx.fmt("{s}/base/{s}", .{ env.pool, lineage });
+    const prefix = try ctx.fmt("{s}/Update/{s}", .{ env.pool, lineage });
     return std.mem.startsWith(u8, snapshot, prefix) and snapshot.len > prefix.len and
         (snapshot[prefix.len] == '/' or snapshot[prefix.len] == '@');
 }
@@ -447,7 +456,7 @@ fn retryExisting(ctx: Ctx, env: Env, u: catalog.Update, manual: bool, lineage: [
     }
     // A failed candidate's clone may have been changed. Remove only that
     // candidate and its receive, never a running/fallback origin or -r/-R.
-    const snapshots = try zfs(ctx, &.{ "list", "-H", "-t", "snapshot", "-o", "name", "-r", try ctx.fmt("{s}/base", .{env.pool}) });
+    const snapshots = try zfs(ctx, &.{ "list", "-H", "-t", "snapshot", "-o", "name", "-r", try ctx.fmt("{s}/Update", .{env.pool}) });
     const running_origin = try get(ctx, "origin", env.running);
     const fallback_origin = if (fallback.len > 0) try get(ctx, "origin", fallback) else "";
     var received: ?[]const u8 = null;
@@ -607,7 +616,7 @@ pub fn awaitConfirm(ctx: Ctx) !?u8 {
 fn health(ctx: Ctx, env: Env) !?[]const u8 {
     var failed: std.ArrayList(u8) = .empty;
     for (data_sets) |d| {
-        const mounted = get(ctx, "mounted", try ctx.fmt("{s}/data/{s}", .{ env.pool, d })) catch "missing";
+        const mounted = get(ctx, "mounted", try ctx.fmt("{s}/Data/{s}", .{ env.pool, d })) catch "missing";
         if (!std.mem.eql(u8, mounted, "yes"))
             try failed.appendSlice(ctx.a, try ctx.fmt("; Data {s} {s}", .{ d, if (std.mem.eql(u8, mounted, "missing")) "missing" else "not mounted" }));
     }
@@ -682,7 +691,7 @@ pub fn cancel(ctx: Ctx, env: Env) !u8 {
         return ctx.refuse("{s}: sealed base {s} changed (written={s}); nothing canceled", .{ r.label, env.base, written });
     // Undo the receive too, so the same update installs again from this base.
     const received = if (r.snapshot.len > 0) r.snapshot else try ctx.fmt("{s}@{s}", .{ env.base, env.name(r.staged) });
-    if (!std.mem.startsWith(u8, received, try ctx.fmt("{s}/base/", .{env.pool}))) return error.NotSealedRoot;
+    if (!std.mem.startsWith(u8, received, try ctx.fmt("{s}/Update/", .{env.pool}))) return error.NotSealedRoot;
     const received_at = std.mem.lastIndexOfScalar(u8, received, '@') orelse return error.NotSealedRoot;
     const received_base = received[0..received_at];
     if (!std.mem.eql(u8, received_base, env.base)) {
@@ -800,7 +809,7 @@ pub fn status(ctx: Ctx, env: Env) !u8 {
         if (std.mem.eql(u8, r.state, "boot-check-failed")) ctx.out("Boot check: failed for {s}: {s}\n", .{ r.label, r.reason });
     } else ctx.out("Fallback: none\n", .{});
     for (data_sets) |d| {
-        const ds = try ctx.fmt("{s}/data/{s}", .{ env.pool, d });
+        const ds = try ctx.fmt("{s}/Data/{s}", .{ env.pool, d });
         const mounted = get(ctx, "mounted", ds) catch "missing";
         ctx.out("Data {s}: {s}\n", .{ d, if (std.mem.eql(u8, mounted, "yes")) "mounted" else if (std.mem.eql(u8, mounted, "missing")) "missing" else "not mounted" });
     }

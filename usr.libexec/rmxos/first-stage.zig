@@ -138,7 +138,7 @@ export fn rmxos_start(stack: [*]const usize) callconv(.c) noreturn {
         const paths = [_][:0]const u8{ "/private", "/Users", "/Library", "/usr/local" };
         for (names, paths, 0..) |name, path, i| {
             var buf: [1100]u8 = undefined;
-            const from = std.fmt.bufPrintZ(&buf, "{s}/data/{s}", .{ pool, name }) catch stop("rmxos: dataset name too long\n");
+            const from = std.fmt.bufPrintZ(&buf, "{s}/Data/{s}", .{ pool, name }) catch stop("rmxos: dataset name too long\n");
             const rc = mount("zfs", from, path);
             if (rc != 0) {
                 if (i == 0 and dataMode(kind, rc) == .volatile_data) {

@@ -106,7 +106,7 @@ test "table presence includes an empty GPT and matches the whole disk" {
 test "options: required, each once, defaults" {
     const o = try ri.parse(&args);
     try t.expectEqualStrings("md5", o.disk);
-    try t.expectEqualStrings("rmxroot", o.pool);
+    try t.expectEqualStrings("Pool", o.pool);
     try t.expectEqualStrings("/mnt", o.altroot);
     try t.expectEqualStrings("UTC", o.zone);
     try t.expect(o.swap == null and !o.erase);
@@ -498,4 +498,57 @@ test "owner reader: no RMXOWNER volume is silent on a root without /private" {
     const volume = try file(a, top, "/volume");
     try sys.replace(a, volume, "");
     try t.expectError(error.Open, seed.wanted(ctx, root, volume));
+}
+
+fn refusedPool(name: []const u8) !void {
+    var o = try ri.parse(&args);
+    o.pool = name;
+    try t.expectError(error.InvalidPool, ri.validate(o));
+}
+fn acceptedPool(name: []const u8) !void {
+    var o = try ri.parse(&args);
+    o.pool = name;
+    try ri.validate(o);
+}
+fn swapSize(size: []const u8, refused: bool) !void {
+    var o = try ri.parse(&args);
+    o.swap = size;
+    if (refused) try t.expectError(error.InvalidSwap, ri.validate(o)) else try ri.validate(o);
+}
+test "reserved pool mirror refuses before writes" {
+    try refusedPool("mirror");
+}
+test "reserved pool mirrorless refuses before writes" {
+    try refusedPool("mirrorless");
+}
+test "reserved pool raidz1 refuses before writes" {
+    try refusedPool("raidz1");
+}
+test "reserved pool draidx refuses before writes" {
+    try refusedPool("draidx");
+}
+test "reserved pool spare refuses before writes" {
+    try refusedPool("spare");
+}
+test "reserved pool log refuses before writes" {
+    try refusedPool("log");
+}
+test "zero swap 0m refuses before writes" {
+    try swapSize("0m", true);
+    try swapSize("0000m", true);
+}
+test "zero swap 0g refuses before writes" {
+    try swapSize("0g", true);
+}
+test "pool logs is allowed" {
+    try acceptedPool("logs");
+}
+test "pool Mirror is allowed (case sensitive reservation)" {
+    try acceptedPool("Mirror");
+}
+test "pool Pool is allowed" {
+    try acceptedPool("Pool");
+}
+test "swap 1m is allowed" {
+    try swapSize("1m", false);
 }

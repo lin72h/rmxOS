@@ -26,7 +26,7 @@ pub const Options = struct {
     user: []const u8 = "",
     key: []const u8 = "",
     console: []const u8 = "",
-    pool: []const u8 = "rmxroot",
+    pool: []const u8 = "Pool",
     altroot: []const u8 = "/mnt",
     swap: ?[]const u8 = null,
     zone: []const u8 = "UTC",
@@ -98,6 +98,9 @@ pub fn validate(o: Options) !void {
     if (!consoleList(o.console)) return error.InvalidConsole;
     if (o.pool.len == 0 or o.pool.len > 64 or !std.ascii.isAlphabetic(o.pool[0])) return error.InvalidPool;
     for (o.pool) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '_' and ch != '-' and ch != '.') return error.InvalidPool;
+    for ([_][]const u8{ "mirror", "raidz", "draid", "spare" }) |reserved|
+        if (std.mem.startsWith(u8, o.pool, reserved)) return error.InvalidPool;
+    if (eq(o.pool, "log")) return error.InvalidPool;
     if (o.altroot.len < 2 or o.altroot[0] != '/' or std.mem.trimEnd(u8, o.altroot, "/").len == 0 or std.mem.indexOf(u8, o.altroot, "..") != null) return error.InvalidAltroot;
     if (o.zone.len == 0 or o.zone[0] == '/' or std.mem.indexOf(u8, o.zone, "..") != null) return error.InvalidZone;
     for (o.zone) |ch| if (!std.ascii.isAlphanumeric(ch) and std.mem.indexOfScalar(u8, "/_+-", ch) == null) return error.InvalidZone;
@@ -105,6 +108,7 @@ pub fn validate(o: Options) !void {
         if (s.len < 2) return error.InvalidSwap;
         for (s[0 .. s.len - 1]) |ch| if (!std.ascii.isDigit(ch)) return error.InvalidSwap;
         if (std.mem.indexOfScalar(u8, "kmgKMG", s[s.len - 1]) == null) return error.InvalidSwap;
+        if (std.mem.trim(u8, s[0 .. s.len - 1], "0").len == 0) return error.InvalidSwap;
     }
 }
 pub fn diskName(d: []const u8) []const u8 {
@@ -198,7 +202,7 @@ fn install(ctx: Ctx, o: Options) !u8 {
     for ([_][]const u8{ o.altroot, try espDir(ctx, o) }) |d| if (!emptyOrAbsent(try ctx.z(d))) return refuse(ctx, "{s} is not an empty directory; nothing written", .{d});
 
     var r = Run{ .ctx = ctx, .o = o, .disk = disk, .has_table = checked.has_table };
-    const clone = try ctx.fmt("{s}/ROOT/{s}", .{ o.pool, full.snapshot });
+    const clone = try ctx.fmt("{s}/System/{s}", .{ o.pool, full.snapshot });
     steps(&r, key, loaded.source, loaded.catalog.lineage, full, clone) catch |err| {
         const cause = sys.failure;
         settle(&r);
@@ -395,9 +399,9 @@ fn steps(r: *Run, key: []const u8, source: []const u8, lineage: []const u8, full
 
     // Data as the image builder makes it, populated from the base's template.
     _ = try r.cmd(&.{ "/sbin/zfs", "mount", clone });
-    _ = try r.cmd(&.{ "/sbin/zfs", "create", "-o", "mountpoint=none", "-o", "canmount=off", try ctx.fmt("{s}/data", .{o.pool}) });
+    _ = try r.cmd(&.{ "/sbin/zfs", "create", "-o", "mountpoint=none", "-o", "canmount=off", try ctx.fmt("{s}/Data", .{o.pool}) });
     for (data_sets) |d| {
-        const ds = try ctx.fmt("{s}/data/{s}", .{ o.pool, d.name });
+        const ds = try ctx.fmt("{s}/Data/{s}", .{ o.pool, d.name });
         const mp = try ctx.fmt("mountpoint={s}", .{d.mountpoint});
         if (d.insensitive)
             _ = try r.cmd(&.{ "/sbin/zfs", "create", "-o", "canmount=noauto", "-o", mp, "-o", "casesensitivity=insensitive", ds })
@@ -405,7 +409,7 @@ fn steps(r: *Run, key: []const u8, source: []const u8, lineage: []const u8, full
             _ = try r.cmd(&.{ "/sbin/zfs", "create", "-o", "canmount=noauto", "-o", mp, ds });
         _ = try r.cmd(&.{ "/sbin/zfs", "mount", ds });
     }
-    try r.did("Data {s}/data", .{o.pool});
+    try r.did("Data {s}/Data", .{o.pool});
     _ = try r.cmd(&.{ try r.at("/usr/libexec/rmxos-datasync"), "--template", try r.at("/System/Library/Templates/Data"), "--data", std.mem.trimEnd(u8, o.altroot, "/") });
     try r.did("Data populated", .{});
 

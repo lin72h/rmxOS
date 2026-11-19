@@ -36,7 +36,7 @@ There is no BIOS boot partition.
 The pool
 .Ar name
 (default
-.Cm rmxroot )
+.Cm Pool )
 created under the alternate root
 .Ar dir
 (default
@@ -48,16 +48,16 @@ with
 and no cache file.
 .It
 The catalog's full stream received by softwareupdate's engine onto
-.Ar pool Ns /base/ Ns Ar lineage ,
+.Ar pool Ns /Update/ Ns Ar lineage ,
 its snapshot cloned to
-.Ar pool Ns /ROOT/ Ns Ar snapshot ,
+.Ar pool Ns /System/ Ns Ar snapshot ,
 held as
 .Cm rmxos-head
 and set as the pool's
 .Cm bootfs .
 .It
 Data:
-.Ar pool Ns /data
+.Ar pool Ns /Data
 and its
 .Cm private ,
 .Cm Users
@@ -142,6 +142,19 @@ With
 an existing partition table is destroyed before erasing the disk's ends;
 a failed table destruction stops the install.
 A failure part-way names what was made, unmounts and exports the pool.
+.Sh DATASET NAMES AND EARLY VALIDATION
+Build snapshots use
+.Cm Tag-
+followed by seven lowercase hexadecimal commit digits.
+Reserved pool names
+.Cm mirror ,
+.Cm raidz ,
+.Cm draid ,
+.Cm spare
+and names beginning with those strings, and the exact name
+.Cm log ,
+are refused before any write; the match is case-sensitive.
+A zero swap size is also refused before any write.
 .Sh ENVIRONMENT
 .Bl -tag -width RMXOS_SU_FIXTURE
 .It Ev RMXOS_SU_FIXTURE

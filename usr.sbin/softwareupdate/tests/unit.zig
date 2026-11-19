@@ -549,3 +549,29 @@ test "named target refusals come before any pool command" {
     };
     for (cases) |x| try t.expectError(x.err, engine.open(ctx, .{ .pool = .{ .name = x.pool, .altroot = x.altroot } }));
 }
+
+test "discover: System boot environment and Update origin" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const ctx = sys.Ctx{ .a = arena.allocator(), .root = "", .fixture = false };
+    const env = try engine.discovered(ctx, "Pool/System/Tag-0123456", "Pool/Update/main@Tag-0123456");
+    try t.expectEqualStrings("Pool", env.pool);
+    try t.expectEqualStrings("Pool/System", env.root);
+    try t.expectEqualStrings("Pool/Update/main", env.base);
+    try t.expectEqualStrings("main", env.lineage);
+    try t.expectEqualStrings("Pool/System/Tag-0123456", env.running);
+    const nested = try engine.discovered(ctx, "Pool/Other/Nested/Tag-0123456", "Pool/Update/main@Tag-0123456");
+    try t.expectEqualStrings("Pool/Other/Nested", nested.root);
+}
+test "discover: origin outside Update is not sealed" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const ctx = sys.Ctx{ .a = arena.allocator(), .root = "", .fixture = false };
+    try t.expectError(error.NotSealedRoot, engine.discovered(ctx, "Pool/System/Tag-0123456", "Pool/Other/main@Tag-0123456"));
+}
+test "discover: old ROOT and base origin are not sealed" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const ctx = sys.Ctx{ .a = arena.allocator(), .root = "", .fixture = false };
+    try t.expectError(error.NotSealedRoot, engine.discovered(ctx, "Pool/ROOT/rmxos-0123456789ab", "Pool/base/main@rmxos-0123456789ab"));
+}

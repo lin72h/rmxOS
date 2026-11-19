@@ -35,24 +35,24 @@ Other tools:
 .Cm confirm | cancel
 .Sh DESCRIPTION
 The sealed base is the ZFS dataset
-.Ar pool Ns /base/ Ns Ar lineage
+.Ar pool Ns /Update/ Ns Ar lineage
 (default
 .Cm main ) .
 The running environment's origin identifies its current chain.
 Each boot environment
-.Ar pool Ns /ROOT/ Ns Ar snapshot
+.Ar pool Ns /System/ Ns Ar snapshot
 is a read-only clone of one of its snapshots.
 An update is a
 .Ql zfs send -i
 stream from the base's newest snapshot, received into
-.Ar pool Ns /base/ Ns Ar lineage
+.Ar pool Ns /Update/ Ns Ar lineage
 as it is; no dataset is ever promoted.
 When no incremental starts at the chain head, the catalog's
 .Cm full
 stream is received into a new chain, preserving the running and fallback
 environments and their origin snapshots.
 An existing lineage gets a generation below
-.Ar pool Ns /base/ Ns Ar lineage Ns / Ns Ar snapshot ;
+.Ar pool Ns /Update/ Ns Ar lineage Ns / Ns Ar snapshot ;
 a new lineage uses its canonical dataset directly.
 .Pp
 .Fl -install
