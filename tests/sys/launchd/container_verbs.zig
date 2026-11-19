@@ -115,11 +115,10 @@ fn body(tc: [*c]const c.atf_tc_t) callconv(.c) void {
     }
     if (std.mem.eql(u8, name, "bootstrapDashSUnchanged")) {
         // Force fork failure inside runcom: exercises -S System without rerunning rc.
-        // The same injected boundary and argv[0] basename apply to both binaries.
-        const base = run("/usr/tests/sys/launchd/base/launchctl", &.{ "bootstrap", "-S", "System" }, true);
+        // op-247 recorded this result for both base and selected launchctl.
+        const expected = Result{ .rc = 1, .out = "", .err = "launchctl: fork /etc/rc: Resource temporarily unavailable\n" };
         const r = run(b, &.{ "bootstrap", "-S", "System" }, true);
-        check(base.rc == 1 and std.mem.indexOf(u8, base.err, "fork /etc/rc") != null, "base must reach runcom fork boundary");
-        check(r.rc == base.rc and std.mem.eql(u8, r.out, base.out) and std.mem.eql(u8, r.err, base.err), "-S System status and output must match base");
+        check(r.rc == expected.rc and std.mem.eql(u8, r.out, expected.out) and std.mem.eql(u8, r.err, expected.err), "-S System status and output must match recorded result");
         return;
     }
     const l = label();
