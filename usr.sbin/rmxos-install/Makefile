@@ -19,7 +19,7 @@ ZIG_SYSROOT_FLAGS= --sysroot ${ZIG_SYSROOT}
 ZIG_TARGET?= x86_64-freebsd
 LIBC_SO?= ${ZIG_SYSROOT}/lib/libc.so.7
 UPDATE= ${.CURDIR}/../softwareupdate
-SRCS_ZIG= rmxos-install.zig owner.zig profile.zig profiles/disk.conf profiles/live.conf profiles/vm.conf ../softwareupdate/engine.zig ../softwareupdate/sys.zig ../softwareupdate/catalog.zig ../softwareupdate/esp.zig
+SRCS_ZIG= rmxos-install.zig owner.zig profile.zig profiles/disk.conf profiles/live.conf profiles/vm.conf profiles/plan.conf ../softwareupdate/engine.zig ../softwareupdate/sys.zig ../softwareupdate/catalog.zig ../softwareupdate/esp.zig
 all: rmxos-install rmxos-owner rmxos-owner-seed rmxos-console-getty
 rmxos-console-getty: ${.CURDIR}/rmxos-console-getty.zig ${.CURDIR}/seed-completion.zig ${SRCS_ZIG:S/^/${.CURDIR}\//}
 	${ZIG} build-exe -O ReleaseSafe -lc ${ZIG_SYSROOT_FLAGS} --dep engine \

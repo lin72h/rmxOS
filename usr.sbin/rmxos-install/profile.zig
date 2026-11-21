@@ -6,11 +6,13 @@ pub const Profile = struct {
     console: []const u8 = "",
     swap: ?[]const u8 = null,
     owner_now: bool = false,
+    requires_sealed: bool = false,
 
     pub fn parse(text: []const u8) !Profile {
         if (std.mem.indexOfScalar(u8, text, 0) != null) return error.InvalidProfile;
         var p = Profile{ .text = text };
         var seen: u4 = 0;
+        var sealed_seen = false;
         var lines = std.mem.splitScalar(u8, text, '\n');
         while (lines.next()) |raw| {
             const line = std.mem.trim(u8, raw, " \t\r");
@@ -29,6 +31,10 @@ pub const Profile = struct {
             } else if (eq(k, "owner")) {
                 if (!eq(v, "now") and !eq(v, "later")) return error.InvalidProfile;
                 p.owner_now = eq(v, "now");
+            } else if (eq(k, "sealed")) {
+                if (sealed_seen or (!eq(v, "yes") and !eq(v, "no"))) return error.InvalidProfile;
+                sealed_seen = true;
+                p.requires_sealed = eq(v, "yes");
             } else if (eq(k, "rc") or eq(k, "loader")) {
                 if (std.mem.indexOfScalar(u8, v, '=') == null) return error.InvalidProfile;
             } else if (eq(k, "data")) {
@@ -44,6 +50,7 @@ pub const Profile = struct {
         if (eq(name, "disk")) return parse(@embedFile("profiles/disk.conf"));
         if (eq(name, "live")) return parse(@embedFile("profiles/live.conf"));
         if (eq(name, "vm")) return parse(@embedFile("profiles/vm.conf"));
+        if (eq(name, "plan")) return parse(@embedFile("profiles/plan.conf"));
         return error.InvalidProfile;
     }
     pub fn extras(self: Profile, a: std.mem.Allocator, key: []const u8) ![]const u8 {

@@ -13,7 +13,7 @@
 .Fl -user Ar name
 .Fl -key Ar file
 .Oc
-.Op Fl -profile Ar disk|live|vm
+.Op Fl -profile Ar disk|live|vm|plan
 .Op Fl -profile-file Ar file
 .Op Fl -console Ar list
 .Op Fl -owner Ar now|later
@@ -180,7 +180,7 @@ usage error.
 .Xr zpool 8
 .Sh IMAGE PROFILES
 The
-.Fl profile Ar disk|live|vm
+.Fl profile Ar disk|live|vm|plan
 option selects an embedded plain key=value profile from
 .Pa usr.sbin/rmxos-install/profiles
 in the source tree; disk is the default.
@@ -199,3 +199,13 @@ Disk and VM use Pool; live uses Install-rmxOS. All default to no swap and
 owner provisioning later. Disk and live use comconsole,efi; VM uses comconsole.
 VM enables growfs once and creates /private/var/db/firstboot on Data.
 The console is optional when a profile supplies it. --swap none disables swap.
+.Pp
+The plan profile uses Pool, comconsole, no swap and owner provisioning later;
+sshd is disabled so the unprovisioned root console is local only.
+The optional sealed=yes profile key requires the received root to contain
+/System/Library/Templates/Data.build. VM and plan require this mark.
+This check runs after receiving and mounting the root, before Data creation;
+a refusal reports the already-created disk metadata in the normal partial-write
+report. A data= path already held by the received template is refused at the
+same boundary. Empty Data files are then created exclusively, so an existing
+seed cannot be truncated either.

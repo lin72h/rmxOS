@@ -577,3 +577,77 @@ test "image options override profile independent of argument order" {
 test "image profile unknown is refused before writes" {
     try t.expectError(error.InvalidProfile, ri.parse(&.{ "--disk", "md5", "--catalog", "/c", "--profile", "broken" }));
 }
+
+test "vm profile refuses a root without the sealed mark" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    const a = arena.allocator();
+    const root = try tmp.dir.realPathFileAlloc(std.Io.Threaded.global_single_threaded.io(), ".", a);
+    var o = try ri.parse(&.{ "--disk", "md5", "--catalog", "/c", "--profile", "vm" });
+    o.altroot = root;
+    try t.expectError(error.SealedImageRequired, ri.applyProfileData(.{ .a = a, .root = "", .fixture = false }, o));
+}
+
+test "profile data cannot blank a path held by the template" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    const a = arena.allocator();
+    const root = try tmp.dir.realPathFileAlloc(std.Io.Threaded.global_single_threaded.io(), ".", a);
+    const ctx: @import("engine").sys.Ctx = .{ .a = a, .root = "", .fixture = false };
+    var o = try ri.parse(&.{ "--disk", "md5", "--catalog", "/c" });
+    o.altroot = root;
+    o.profile = try ri.Profile.parse("pool=Pool\nconsole=efi\nswap=none\nowner=later\ndata=/private/etc/kept\n");
+    const template = try ctx.z(try ctx.fmt("{s}/System/Library/Templates/Data/private/etc", .{root}));
+    try @import("engine").sys.mkdirs(a, template);
+    try @import("engine").sys.replace(a, try ctx.z(try ctx.fmt("{s}/kept", .{template})), "template bytes\n");
+    try @import("engine").sys.mkdirs(a, try ctx.z(try ctx.fmt("{s}/private/etc", .{root})));
+    const data_path = try ctx.z(try ctx.fmt("{s}/private/etc/kept", .{root}));
+    try @import("engine").sys.replace(a, data_path, "installed bytes\n");
+    try t.expectError(error.TemplateDataPathExists, ri.applyProfileData(ctx, o));
+    try t.expectEqualStrings("installed bytes\n", try @import("engine").sys.read(a, data_path));
+}
+
+test "plan profile is sealed and ownerless" {
+    const o = try ri.parse(&.{ "--disk", "md5", "--catalog", "/c", "--profile", "plan" });
+    try t.expectEqualStrings("Pool", o.pool);
+    try t.expectEqualStrings("comconsole", o.console);
+    try t.expect(!o.owner_now and o.swap == null and o.profile.requires_sealed);
+}
+
+test "vm profile accepts the sealed mark and creates its marker" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    const a = arena.allocator();
+    const root = try tmp.dir.realPathFileAlloc(std.Io.Threaded.global_single_threaded.io(), ".", a);
+    const ctx: @import("engine").sys.Ctx = .{ .a = a, .root = "", .fixture = false };
+    var o = try ri.parse(&.{ "--disk", "md5", "--catalog", "/c", "--profile", "vm" });
+    o.altroot = root;
+    try @import("engine").sys.mkdirs(a, try ctx.z(try ctx.fmt("{s}/System/Library/Templates", .{root})));
+    try @import("engine").sys.replace(a, try ctx.z(try ctx.fmt("{s}/System/Library/Templates/Data.build", .{root})), "commit\n");
+    try ri.applyProfileData(ctx, o);
+    try t.expect(@import("engine").sys.exists(try ctx.z(try ctx.fmt("{s}/private/var/db/firstboot", .{root}))));
+}
+
+test "profile data exclusive creation preserves an existing seed" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    const a = arena.allocator();
+    const root = try tmp.dir.realPathFileAlloc(std.Io.Threaded.global_single_threaded.io(), ".", a);
+    const ctx: @import("engine").sys.Ctx = .{ .a = a, .root = "", .fixture = false };
+    var o = try ri.parse(&.{ "--disk", "md5", "--catalog", "/c" });
+    o.altroot = root;
+    o.profile = try ri.Profile.parse("pool=Pool\nconsole=efi\nswap=none\nowner=later\ndata=/private/seed\n");
+    try @import("engine").sys.mkdirs(a, try ctx.z(try ctx.fmt("{s}/private", .{root})));
+    const path = try ctx.z(try ctx.fmt("{s}/private/seed", .{root}));
+    try @import("engine").sys.replace(a, path, "keep seed\n");
+    try t.expectError(error.ProfileDataPathExists, ri.applyProfileData(ctx, o));
+    try t.expectEqualStrings("keep seed\n", try @import("engine").sys.read(a, path));
+}

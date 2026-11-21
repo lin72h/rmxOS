@@ -14,7 +14,7 @@ const dirent = @cImport(@cInclude("dirent.h"));
 pub const Profile = @import("profile.zig").Profile;
 
 pub const usage =
-    \\usage: rmxos-install --disk DISK --catalog DIR|URL [--profile disk|live|vm]
+    \\usage: rmxos-install --disk DISK --catalog DIR|URL [--profile disk|live|vm|plan]
     \\                     [--profile-file FILE] [--console LIST] [--owner now|later]
     \\                     [--hostname NAME --user NAME --key FILE] [--pool NAME] [--altroot DIR]
     \\                     [--swap SIZE] [--zone NAME] [--erase]
@@ -432,6 +432,7 @@ fn steps(r: *Run, key: []const u8, source: []const u8, lineage: []const u8, full
 
     // Data as the image builder makes it, populated from the base's template.
     _ = try r.cmd(&.{ "/sbin/zfs", "mount", clone });
+    try checkProfileRoot(ctx, o);
     _ = try r.cmd(&.{ "/sbin/zfs", "create", "-o", "mountpoint=none", "-o", "canmount=off", try ctx.fmt("{s}/Data", .{o.pool}) });
     for (data_sets) |d| {
         const ds = try ctx.fmt("{s}/Data/{s}", .{ o.pool, d.name });
@@ -447,12 +448,7 @@ fn steps(r: *Run, key: []const u8, source: []const u8, lineage: []const u8, full
     try r.did("Data populated", .{});
 
     try seeds(r, key, full.label, clone);
-    var data = std.mem.tokenizeScalar(u8, try o.profile.extras(ctx.a, "data"), '\n');
-    while (data.next()) |path| {
-        const at = try r.at(path);
-        try sys.mkdirs(ctx.a, std.fs.path.dirname(at).?);
-        try sys.replace(ctx.a, at, "");
-    }
+    try applyProfileData(ctx, o);
     try r.did("seeds", .{});
     try espFiles(r);
     try r.did("ESP files", .{});
@@ -461,6 +457,31 @@ fn steps(r: *Run, key: []const u8, source: []const u8, lineage: []const u8, full
     _ = try r.cmd(&.{ "/sbin/zpool", "export", o.pool });
     r.pool_created = false;
     for ([_][]const u8{ o.altroot, try espDir(ctx, o) }) |d| _ = sys.c.rmdir(try ctx.z(d));
+}
+
+// Kept separate so the profile's Data effects can be checked without a disk.
+pub fn applyProfileData(ctx: Ctx, o: Options) !void {
+    try checkProfileRoot(ctx, o);
+    var data = std.mem.tokenizeScalar(u8, try o.profile.extras(ctx.a, "data"), '\n');
+    while (data.next()) |path| {
+        const at = try ctx.z(try ctx.fmt("{s}{s}", .{ std.mem.trimEnd(u8, o.altroot, "/"), path }));
+        try sys.mkdirs(ctx.a, std.fs.path.dirname(at).?);
+        const fd = sys.c.open(at, sys.c.O_WRONLY | sys.c.O_CREAT | sys.c.O_EXCL, @as(sys.c.mode_t, 0o600));
+        if (fd < 0) return if (sys.c.__error().* == sys.c.EEXIST) error.ProfileDataPathExists else error.CreateProfileData;
+        _ = sys.c.close(fd);
+    }
+}
+
+// The received clone is now mounted, but no Data or seed writes have begun.
+pub fn checkProfileRoot(ctx: Ctx, o: Options) !void {
+    const root = std.mem.trimEnd(u8, o.altroot, "/");
+    if (o.profile.requires_sealed and sys.c.access(try ctx.z(try ctx.fmt("{s}/System/Library/Templates/Data.build", .{root})), sys.c.F_OK) != 0)
+        return error.SealedImageRequired;
+    var data = std.mem.tokenizeScalar(u8, try o.profile.extras(ctx.a, "data"), '\n');
+    while (data.next()) |path| {
+        if (sys.exists(try ctx.z(try ctx.fmt("{s}/System/Library/Templates/Data{s}", .{ root, path }))))
+            return error.TemplateDataPathExists;
+    }
 }
 
 // gpart add prints "<provider> added".
