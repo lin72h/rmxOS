@@ -1,4 +1,4 @@
-.Dd November 16, 2026
+.Dd November 21, 2026
 .Dt RMXOS-INSTALL 8
 .Os
 .Sh NAME
@@ -13,7 +13,10 @@
 .Fl -user Ar name
 .Fl -key Ar file
 .Oc
-.Fl -console Ar list
+.Op Fl -profile Ar disk|live|vm
+.Op Fl -profile-file Ar file
+.Op Fl -console Ar list
+.Op Fl -owner Ar now|later
 .Op Fl -pool Ar name
 .Op Fl -altroot Ar dir
 .Op Fl -swap Ar size
