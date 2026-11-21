@@ -11,9 +11,11 @@ const sys = engine.sys;
 const catalog = engine.catalog;
 const Ctx = sys.Ctx;
 const dirent = @cImport(@cInclude("dirent.h"));
+pub const Profile = @import("profile.zig").Profile;
 
 pub const usage =
-    \\usage: rmxos-install --disk DISK --catalog DIR|URL --console LIST
+    \\usage: rmxos-install --disk DISK --catalog DIR|URL [--profile disk|live|vm]
+    \\                     [--profile-file FILE] [--console LIST] [--owner now|later]
     \\                     [--hostname NAME --user NAME --key FILE] [--pool NAME] [--altroot DIR]
     \\                     [--swap SIZE] [--zone NAME] [--erase]
     \\
@@ -31,6 +33,8 @@ pub const Options = struct {
     swap: ?[]const u8 = null,
     zone: []const u8 = "UTC",
     erase: bool = false,
+    profile: Profile = .{ .text = "" },
+    owner_now: bool = false,
 };
 
 const esp_size = "260m";
@@ -43,10 +47,28 @@ pub const data_sets = [_]struct { name: []const u8, mountpoint: []const u8, inse
 };
 const consoles = [_][]const u8{ "comconsole", "efi", "vidconsole", "nullconsole", "spinconsole" };
 
-const value_options = [_][]const u8{ "--disk", "--catalog", "--hostname", "--user", "--key", "--console", "--pool", "--altroot", "--zone", "--swap" };
+const value_options = [_][]const u8{ "--disk", "--catalog", "--hostname", "--user", "--key", "--console", "--pool", "--altroot", "--zone", "--swap", "--profile", "--profile-file", "--owner" };
 
 pub fn parse(args: []const []const u8) !Options {
-    var o = Options{};
+    return parseAlloc(std.heap.page_allocator, args);
+}
+pub fn parseAlloc(a: std.mem.Allocator, args: []const []const u8) !Options {
+    var p = try Profile.builtin("disk");
+    var selected = false;
+    var profile_at: usize = 0;
+    while (profile_at < args.len) : (profile_at += 1) {
+        if (eq(args[profile_at], "--erase")) continue;
+        if (profile_at + 1 == args.len) return error.Usage;
+        if (eq(args[profile_at], "--profile") or eq(args[profile_at], "--profile-file")) {
+            if (selected) return error.Usage;
+            selected = true;
+            p = if (eq(args[profile_at], "--profile")) try Profile.builtin(args[profile_at + 1]) else try Profile.parse(sys.read(a, try a.dupeZ(u8, args[profile_at + 1])) catch return error.InvalidProfile);
+        }
+        profile_at += 1;
+    }
+    // A profile with an unknown console is refused even if an option overrides it.
+    if (!consoleList(p.console)) return error.InvalidConsole;
+    var o = Options{ .pool = p.pool, .console = p.console, .swap = p.swap, .owner_now = p.owner_now, .profile = p };
     var seen = [_]bool{false} ** (value_options.len + 1);
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -74,13 +96,24 @@ pub fn parse(args: []const []const u8) !Options {
             6 => o.pool = v,
             7 => o.altroot = v,
             8 => o.zone = v,
-            else => o.swap = v,
+            9 => o.swap = if (eq(v, "none")) null else v,
+            10, 11 => {},
+            12 => {
+                if (!eq(v, "now") and !eq(v, "later")) return error.Usage;
+                o.owner_now = eq(v, "now");
+            },
+            else => unreachable,
         }
     }
-    for ([_][]const u8{ o.disk, o.catalog, o.console }) |v| if (v.len == 0) return error.Usage;
+    for ([_][]const u8{ o.disk, o.catalog }) |v| if (v.len == 0) return error.Usage;
     if (seen[2] != seen[3] or seen[3] != seen[4]) return error.Usage;
     if (seen[2] and (o.hostname.len == 0 or o.user.len == 0 or o.key.len == 0)) return error.Usage;
     try owner.optionSet(o.hostname, o.user, o.key);
+    if (seen[2]) {
+        if (seen[12] and !o.owner_now) return error.Usage;
+        o.owner_now = true;
+    }
+    if (o.owner_now and o.hostname.len == 0) return error.Usage;
     return o;
 }
 fn eq(a: []const u8, b: []const u8) bool {
@@ -171,9 +204,9 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     const a = arena.allocator();
     const ctx = Ctx.init(a);
     const argv = init.args.toSlice(a) catch return 1;
-    const o = parse(argv[1..]) catch {
+    const o = parseAlloc(a, argv[1..]) catch |err| {
         sys.writeAll(2, usage) catch {};
-        sys.writeAll(2, "rmxos-install: invalid arguments; nothing written\n") catch {};
+        sys.writeAll(2, std.fmt.allocPrint(a, "rmxos-install: {s}; nothing written\n", .{@errorName(err)}) catch return 1) catch {};
         return 2;
     };
     validate(o) catch |err| return refuse(ctx, "{s}; nothing written", .{@errorName(err)});
@@ -414,6 +447,12 @@ fn steps(r: *Run, key: []const u8, source: []const u8, lineage: []const u8, full
     try r.did("Data populated", .{});
 
     try seeds(r, key, full.label, clone);
+    var data = std.mem.tokenizeScalar(u8, try o.profile.extras(ctx.a, "data"), '\n');
+    while (data.next()) |path| {
+        const at = try r.at(path);
+        try sys.mkdirs(ctx.a, std.fs.path.dirname(at).?);
+        try sys.replace(ctx.a, at, "");
+    }
     try r.did("seeds", .{});
     try espFiles(r);
     try r.did("ESP files", .{});
@@ -436,7 +475,7 @@ fn seeds(r: *Run, key: []const u8, label: []const u8, clone: []const u8) !void {
     const ctx = r.ctx;
     const o = r.o;
     const rc = try r.at("/private/etc/rc.conf");
-    try sys.replace(ctx.a, rc, try owner.machineRcConf(ctx.a, sys.read(ctx.a, rc) catch ""));
+    try sys.replace(ctx.a, rc, try ctx.fmt("{s}{s}", .{ try owner.machineRcConf(ctx.a, sys.read(ctx.a, rc) catch ""), try o.profile.extras(ctx.a, "rc") }));
     if (o.hostname.len != 0) {
         try owner.apply(ctx, o.altroot, .{ .hostname = o.hostname, .user = o.user, .key = key });
         try r.did("user {s}, root locked", .{o.user});
@@ -460,7 +499,7 @@ fn espFiles(r: *Run) !void {
     r.esp_mounted = dir;
     // Every loader path an update refreshes, and loader.env: the engine's table.
     const loader = try sys.read(ctx.a, try r.at("/boot/loader.efi"));
-    try engine.esp.populate(ctx, dir, loader, try loaderEnv(ctx.a, r.o.console));
+    try engine.esp.populate(ctx, dir, loader, try ctx.fmt("{s}{s}", .{ try r.o.profile.extras(ctx.a, "loader"), try loaderEnv(ctx.a, r.o.console) }));
     _ = try r.cmd(&.{ "/sbin/umount", dir });
     r.esp_mounted = null;
 }

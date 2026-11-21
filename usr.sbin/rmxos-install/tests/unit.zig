@@ -111,7 +111,7 @@ test "options: required, each once, defaults" {
     try t.expectEqualStrings("UTC", o.zone);
     try t.expect(o.swap == null and !o.erase);
     try ri.validate(o);
-    try t.expectError(error.Usage, ri.parse(args[0 .. args.len - 2]));
+    try t.expectEqualStrings("comconsole,efi", (try ri.parse(args[0 .. args.len - 2])).console);
     try t.expectError(error.Usage, ri.parse(&(args ++ [_][]const u8{ "--disk", "md6" })));
     try t.expectError(error.Usage, ri.parse(&(args ++ [_][]const u8{ "--erase", "--erase" })));
     try t.expectError(error.Usage, ri.parse(&(args ++ [_][]const u8{"--pool"})));
@@ -551,4 +551,29 @@ test "pool Pool is allowed" {
 }
 test "swap 1m is allowed" {
     try swapSize("1m", false);
+}
+
+test "image profile disk is the default" {
+    const o = try ri.parse(&.{ "--disk", "md5", "--catalog", "/c" });
+    try t.expectEqualStrings("Pool", o.pool);
+    try t.expectEqualStrings("comconsole,efi", o.console);
+}
+test "image profile live has its own pool" {
+    const o = try ri.parse(&.{ "--disk", "md5", "--catalog", "/c", "--profile", "live" });
+    try t.expectEqualStrings("Install-rmxOS", o.pool);
+}
+test "image profile vm parses" {
+    const o = try ri.parse(&.{ "--disk", "md5", "--catalog", "/c", "--profile", "vm" });
+    try t.expectEqualStrings("Pool", o.pool);
+    try t.expectEqualStrings("comconsole", o.console);
+    try t.expect(o.swap == null);
+}
+test "image options override profile independent of argument order" {
+    const o = try ri.parse(&.{ "--disk", "md5", "--catalog", "/c", "--pool", "Custom", "--swap", "1m", "--console", "efi", "--profile", "live" });
+    try t.expectEqualStrings("Custom", o.pool);
+    try t.expectEqualStrings("efi", o.console);
+    try t.expectEqualStrings("1m", o.swap.?);
+}
+test "image profile unknown is refused before writes" {
+    try t.expectError(error.InvalidProfile, ri.parse(&.{ "--disk", "md5", "--catalog", "/c", "--profile", "broken" }));
 }

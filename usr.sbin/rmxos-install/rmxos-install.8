@@ -175,3 +175,24 @@ usage error.
 .Xr rmxos-owner-seed 8 ,
 .Xr softwareupdate 8 ,
 .Xr zpool 8
+.Sh IMAGE PROFILES
+The
+.Fl profile Ar disk|live|vm
+option selects an embedded plain key=value profile from
+.Pa usr.sbin/rmxos-install/profiles
+in the source tree; disk is the default.
+.Fl profile-file Ar file
+instead reads a local replacement in the same format, before any write.
+Required scalar keys are pool, console, swap (none or a size), and owner
+(now or later). Repeating rc and loader keys append configuration lines;
+repeating data keys create empty files at absolute paths on Data.
+Unknown keys, duplicate scalar keys, incomplete records, and unknown consoles
+are refused. Command-line pool, console, swap and owner options override
+profile values regardless of argument order. Supplying the complete owner
+option set requests owner creation now; explicit owner=later conflicts with it.
+An owner=now profile requires the complete owner option set.
+.Pp
+Disk and VM use Pool; live uses Install-rmxOS. All default to no swap and
+owner provisioning later. Disk and live use comconsole,efi; VM uses comconsole.
+VM enables growfs once and creates /private/var/db/firstboot on Data.
+The console is optional when a profile supplies it. --swap none disables swap.
