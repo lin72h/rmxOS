@@ -19,7 +19,7 @@ const c = @cImport({
     @cInclude("atf-c.h");
 });
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-const names = [_][*:0]const u8{ "managernameSystem", "bootstrapSessionArray", "bootstrapDashSUnchanged", "printExitStatus", "bootoutStopsJob" };
+const names = [_][*:0]const u8{ "managernameSystem", "bootstrapSessionArray", "bootstrapDashSUnchanged", "printExitStatus", "bootoutStopsJob", "listRunningJob", "listExitedJob" };
 var cases: [names.len]c.atf_tc_t = undefined;
 const Result = struct { rc: c_int, out: []const u8, err: []const u8 };
 fn z(s: []const u8) [:0]const u8 {
@@ -77,37 +77,108 @@ fn target(l: []const u8) []const u8 {
     return fmt("system/{s}", .{l});
 }
 fn plist(l: []const u8, system: bool) []const u8 {
-    const path = fmt("/tmp/container-verbs-{d}.plist", .{c.getpid()});
-    const text = fmt("<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>Label</key><string>{s}</string><key>LimitLoadToSessionType</key><array><string>Aqua</string><string>Background</string>{s}</array><key>RunAtLoad</key><true/><key>MachServices</key><dict><key>{s}.service</key><true/></dict><key>ProgramArguments</key><array><string>/bin/sleep</string><string>300</string></array></dict></plist>\n", .{ l, if (system) @as([]const u8, "<string>System</string>") else "", l });
+    return jobPlist(l, system, "<string>/bin/sleep</string><string>300</string>");
+}
+fn jobPlist(l: []const u8, system: bool, arguments: []const u8) []const u8 {
+    const directory = if (c.getenv("TMPDIR")) |p| std.mem.span(p) else "/tmp";
+    const path = fmt("{s}/container-verbs-{d}.plist", .{ directory, c.getpid() });
+    const text = fmt("<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>Label</key><string>{s}</string><key>LimitLoadToSessionType</key><array><string>Aqua</string><string>Background</string>{s}</array><key>RunAtLoad</key><true/><key>MachServices</key><dict><key>{s}.service</key><true/></dict><key>ProgramArguments</key><array>{s}</array></dict></plist>\n", .{ l, if (system) @as([]const u8, "<string>System</string>") else "", l, arguments });
     std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = text }) catch c.atf_tc_fail("write plist");
     return path;
 }
 fn cleanup(l: []const u8, path: []const u8) void {
     // Cleanup uses the established synchronous unload, including on the base.
     _ = l;
-    _ = run("/bin/launchctl", &.{ "unload", path }, false);
+    cleanupWith("/bin/launchctl", path);
+}
+fn cleanupWith(b: []const u8, path: []const u8) void {
+    _ = run(b, &.{ "unload", path }, false);
     std.Io.Dir.cwd().deleteFile(io, path) catch {};
 }
 fn load(b: []const u8, l: []const u8, path: []const u8) void {
     _ = l;
     check(run(b, &.{ "bootstrap", "system", path }, false).rc == 0, "bootstrap system must load session array");
 }
+fn printedPid(out: []const u8) ?c_int {
+    const at = std.mem.indexOf(u8, out, "pid = ") orelse return null;
+    const text = std.mem.trim(u8, out[at + 6 ..], " \r\n");
+    const pid = std.fmt.parseInt(c_int, text, 10) catch return null;
+    return if (pid > 0) pid else null;
+}
 fn pidFrom(b: []const u8, l: []const u8) c_int {
     for (0..100) |_| {
         const r = run(b, &.{ "print", target(l) }, false);
         check(r.rc == 0, "loaded job print must exit 0");
-        if (std.mem.indexOf(u8, r.out, "pid = ")) |at| {
-            const text = std.mem.trim(u8, r.out[at + 6 ..], " \r\n");
-            const pid = std.fmt.parseInt(c_int, text, 10) catch 0;
-            if (pid > 0) return pid;
-        }
+        if (printedPid(r.out)) |pid| return pid;
         _ = c.usleep(50000);
     }
     c.atf_tc_fail("job did not start");
 }
+const ListRow = struct { pid: []const u8, status: []const u8 };
+fn listedRow(out: []const u8, label_name: []const u8) !ListRow {
+    if (!std.mem.endsWith(u8, out, "\n")) return error.UnterminatedList;
+    var lines = std.mem.splitScalar(u8, out[0 .. out.len - 1], '\n');
+    if (!std.mem.eql(u8, lines.next() orelse "", "PID\tStatus\tLabel"))
+        return error.ListHeaderMismatch;
+    var found: ?ListRow = null;
+    var container_found = false;
+    while (lines.next()) |line| {
+        var fields = std.mem.splitScalar(u8, line, '\t');
+        const pid = fields.next() orelse return error.MissingPidField;
+        const status = fields.next() orelse return error.MissingStatusField;
+        const name = fields.next() orelse return error.MissingLabelField;
+        if (fields.next() != null or pid.len == 0 or status.len == 0 or name.len == 0)
+            return error.InvalidListRow;
+        if (std.mem.eql(u8, name, label_name)) {
+            if (found != null) return error.DuplicateLabel;
+            found = .{ .pid = pid, .status = status };
+        }
+
+        // ServiceManager splits lines on whitespace and takes the third word.
+        var words = std.mem.tokenizeAny(u8, line, " \t\r\n\x0b\x0c");
+        _ = words.next();
+        _ = words.next();
+        if (words.next()) |third|
+            container_found = container_found or std.mem.eql(u8, third, label_name);
+    }
+    if (!container_found) return error.ContainerLabelMissing;
+    return found orelse error.ManagedJobMissing;
+}
+fn listJob(b: []const u8, exits: bool) !void {
+    const l = fmt("com.apple.container.op703.{d}", .{c.getpid()});
+    const path = if (exits)
+        jobPlist(l, true, "<string>/bin/sh</string><string>-c</string><string>exit 3</string>")
+    else
+        plist(l, true);
+    defer cleanupWith(b, path);
+    if (run(b, &.{ "bootstrap", "system", path }, false).rc != 0)
+        return error.JobBootstrapFailed;
+    for (0..100) |_| {
+        const result = run(b, &.{"list"}, false);
+        if (result.rc != 0 or result.err.len != 0) return error.ListCommandFailed;
+        const row = try listedRow(result.out, l);
+        if (exits) {
+            if (std.mem.eql(u8, row.pid, "-") and std.mem.eql(u8, row.status, "3"))
+                return;
+        } else if (std.fmt.parseInt(c_int, row.pid, 10)) |pid| {
+            const printed = run(b, &.{ "print", target(l) }, false);
+            if (pid <= 0 or printed.rc != 0 or printedPid(printed.out) != pid or c.kill(pid, 0) != 0)
+                return error.ListPidMismatch;
+            if (!std.mem.eql(u8, row.status, "-")) return error.RunningStatusMismatch;
+            return;
+        } else |_| {}
+        _ = c.usleep(50000);
+    }
+    return error.ListJobStateTimeout;
+}
 fn body(tc: [*c]const c.atf_tc_t) callconv(.c) void {
     const name = std.mem.span(c.atf_tc_get_ident(tc));
     const b = selectedBinary(tc);
+    const exits = std.mem.eql(u8, name, "listExitedJob");
+    if (exits or std.mem.eql(u8, name, "listRunningJob")) {
+        listJob(b, exits) catch |e| c.atf_tc_fail("launchctl list fixture: %s", @errorName(e).ptr);
+        return;
+    }
     if (std.mem.eql(u8, name, "managernameSystem")) {
         const r = run(b, &.{"managername"}, false);
         check(r.rc == 0 and std.mem.eql(u8, r.out, "System\n") and r.err.len == 0, "managername must print System LF");

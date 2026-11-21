@@ -1224,8 +1224,9 @@ cmd_remove(int argc, char * const argv[])
 static int
 cmd_list(int argc, char * const argv[])
 {
-	json_t *msg, *result, *job;
-	const char *key;
+	json_t *msg, *result, *job, *pid, *status;
+	const char *key, *label;
+	int wstatus;
 
 	if (argc == 2)
 		return cmd_dump(argc, argv);
@@ -1237,8 +1238,31 @@ cmd_list(int argc, char * const argv[])
 	if (result == NULL)
 		err(EX_OSERR, "Error getting job list");
 
+	puts("PID\tStatus\tLabel");
 	json_object_foreach(result, key, job) {
-		printf("%s\n", key);
+		label = json_string_value(json_object_get(job, LAUNCH_JOBKEY_LABEL));
+		if (label == NULL)
+			label = key;
+		pid = json_object_get(job, LAUNCH_JOBKEY_PID);
+		status = json_object_get(job, LAUNCH_JOBKEY_LASTEXITSTATUS);
+		if (json_is_integer(pid)) {
+			printf("%lld\t-\t%s\n",
+			    (long long)json_integer_value(pid), label);
+			continue;
+		}
+		/* launchd exports the wait4 status word. */
+		if (json_is_integer(status)) {
+			wstatus = (int)json_integer_value(status);
+			if (WIFEXITED(wstatus)) {
+				printf("-\t%d\t%s\n", WEXITSTATUS(wstatus), label);
+				continue;
+			}
+			if (WIFSIGNALED(wstatus)) {
+				printf("-\t-%d\t%s\n", WTERMSIG(wstatus), label);
+				continue;
+			}
+		}
+		printf("-\t-\t%s\n", label);
 	}
 
 	return (0);
