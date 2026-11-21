@@ -451,3 +451,45 @@ void fixture_edges(struct codec_input *in, struct codec_sample *out) {
 out->format = EDGE_FMT; out->size = __builtin_os_log_format_buffer_size(EDGE_FMT, 42, 42u, 255, 3.25, 3, in->strings[0], in->strings[0], (void *)0);
 __builtin_os_log_format(out->bytes, EDGE_FMT, 42, 42u, 255, 3.25, 3, in->strings[0], in->strings[0], (void *)0);
 }
+
+/* Keep these compiler-lowered so layout changes are visible to the tests. */
+void
+fixture_op697(unsigned which, struct codec_sample *out)
+{
+#define SAMPLE(fmt, ...) do {                                           \
+	out->format = fmt;                                               \
+	out->size = __builtin_os_log_format_buffer_size(fmt, __VA_ARGS__); \
+	__builtin_os_log_format(out->bytes, fmt, __VA_ARGS__);             \
+} while (0)
+	switch (which) {
+	case 0:
+		SAMPLE("[%{public}-*s] [%{public}*s] [%{public}-8s] [%{public}8s] [%-6d] [%6d] [%{public}.2s]",
+		    16, "abc", 8, "de", "fg", "hi", 42, 42, "xyz");
+		break;
+	case 1:
+		SAMPLE("[%{public}8s] [%{public}-8s] [%{public}8s] [%{public}8s] [%{public}8s]",
+		    "\xc3\xa9", "\xc3\xa9", "e\xcc\x81", "\xe6\x97\xa5\xe6\x9c\xac", "abc");
+		break;
+	case 2:
+		SAMPLE("[%12s] [%-12s] [%{private}16s] [%{private}-16s] [%{private}*s] [%{public}12s]",
+		    "ab", "cd", "ef", "gh", 14, "ij", "kl");
+		break;
+	case 3:
+		SAMPLE("[%{public}*s] [%{public}8.2s]", -8, "abc", "xyz");
+		break;
+	case 4:
+		SAMPLE("%d [%{private,mask.hash}s] %{public}s", 42, "hidden", "visible");
+		break;
+	case 5:
+		SAMPLE("%d [%{private}.*s] %{public}s", 42, 2, "hidden", "visible");
+		break;
+	case 6:
+		SAMPLE("%d [%{public,mask.hash}*.*s] %{public}s",
+		    42, 8, 2, "hidden", "visible");
+		break;
+	case 7:
+		SAMPLE("[%{mask.hash}d] %{public}s", 42, "visible");
+		break;
+	}
+#undef SAMPLE
+}

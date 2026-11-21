@@ -2,6 +2,7 @@
 /* os_log user API. Only flattened public bytes reach the logging transport. */
 #include <sys/types.h>
 #include <sys/elf_common.h>
+#include <sys/ktrace.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
 
@@ -13,6 +14,7 @@
 #include <link.h>
 #include <os/log.h>
 #include <pthread.h>
+#include <pthread_np.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,6 +42,7 @@ static pthread_mutex_t object_lock = PTHREAD_MUTEX_INITIALIZER;
 /* Shared with syslog(3), which owns the transport's cached Mach rights. */
 extern __hidden pthread_mutex_t __libc_syslog_mutex;
 static _Atomic uint64_t sequence;
+static _Atomic uint64_t decode_refusals;
 
 /* libdispatch supplies the generic non-log object operations when linked.
  * Its own os_retain/os_release also recognize the immortal xref prefix. */
@@ -126,27 +129,67 @@ os_log_debug_enabled(os_log_t log)
 	return (os_log_type_enabled(log, 2));
 }
 
-/* A kernel copyin through an owned pipe validates every public byte without
- * installing signal handlers or dereferencing a possibly invalid argument.
- * Private strings never enter this reader. */
+struct capture {
+	int fds[2];
+	size_t page_size;
+};
+
+/* Copy at most one page per request. A terminator on this page must be
+ * found before touching the next page, which need not be mapped. Only
+ * the kernel dereferences the source. The bounded request fits in the
+ * empty pipe, and private strings never enter this reader. */
 static int
-read_byte(void *context, uintptr_t pointer, size_t offset, unsigned char *byte)
+read_range(void *context, uintptr_t pointer, size_t offset, unsigned char *out,
+    size_t max, size_t *copied)
 {
-	int *fds = context;
+	struct capture *capture = context;
+	uintptr_t address;
+	size_t page_left, remaining;
 	ssize_t n;
 
 	if (pointer > UINTPTR_MAX - offset)
 		return (EFAULT);
+	if (capture->fds[0] == -1) {
+		if (pipe2(capture->fds, O_CLOEXEC) != 0)
+			return (errno);
+		capture->page_size = getpagesize();
+	}
+	address = pointer + offset;
+	page_left = capture->page_size - address % capture->page_size;
+	if (max > page_left)
+		max = page_left;
 	do
-		n = syscall(SYS_write, fds[1], (const void *)(pointer + offset),
-		    (size_t)1);
+		n = syscall(SYS_write, capture->fds[1], (const void *)address,
+		    max);
 	while (n < 0 && errno == EINTR);
-	if (n != 1)
-		return (EFAULT);
-	do
-		n = read(fds[0], byte, 1);
-	while (n < 0 && errno == EINTR);
-	return (n == 1 ? 0 : EFAULT);
+	if (n <= 0)
+		return (n < 0 ? errno : EIO);
+	*copied = remaining = n;
+	while (remaining != 0) {
+		do
+			n = syscall(SYS_read, capture->fds[0], out, remaining);
+		while (n < 0 && errno == EINTR);
+		if (n <= 0)
+			return (n < 0 ? errno : EIO);
+		out += n;
+		remaining -= n;
+	}
+	return (0);
+}
+
+static void
+decode_refused(int error)
+{
+	char event[96];
+	uint64_t count;
+	int length;
+
+	count = atomic_fetch_add_explicit(&decode_refusals, 1,
+	    memory_order_relaxed) + 1;
+	length = snprintf(event, sizeof(event),
+	    "os_log decode refusal count=%" PRIu64 " error=%d", count, error);
+	if (length > 0 && (size_t)length < sizeof(event))
+		(void)utrace(event, length);
 }
 static void
 field(FILE *fp, const char *key, const char *value)
@@ -228,29 +271,38 @@ emit(os_log_t log, os_log_type_t type, const char *format,
 	    *record = NULL;
 	struct timeval now;
 	struct timespec uptime;
-	size_t length, used, record_size;
+	struct capture capture = { .fds = { -1, -1 } };
+	size_t length, used, record_size, format_length;
 	long tid = 0;
-	int fds[2], saved = errno;
+	int error, saved = errno;
+	pid_t pid;
 	FILE *fp;
 
-	if (!os_log_type_enabled(log, type) || format == NULL ||
-	    strnlen(format, 65537) > 65536)
+	if (!os_log_type_enabled(log, type))
 		goto done;
-	if (pipe2(fds, O_CLOEXEC) != 0)
+	if (format == NULL || (format_length = strnlen(format, 65537)) > 65536) {
+		decode_refused(EINVAL);
 		goto done;
-	int error = __oslog_codec_flatten(buffer, size, type, read_byte, fds,
-	    flat, sizeof(flat), &length);
-	close(fds[0]);
-	close(fds[1]);
-	if (error != 0 ||
-	    __oslog_codec_render(format, strlen(format), flat, length, message,
-		sizeof(message), &used) != 0)
+	}
+	error = __oslog_codec_flatten(format, format_length, buffer, size, type,
+	    read_range, &capture, flat, sizeof(flat), &length);
+	if (capture.fds[0] != -1) {
+		close(capture.fds[0]);
+		close(capture.fds[1]);
+	}
+	if (error == 0)
+		error = __oslog_codec_render(format, format_length, flat, length,
+		    message, sizeof(message), &used);
+	if (error != 0) {
+		decode_refused(error);
 		goto done;
+	}
 	gettimeofday(&now, NULL);
 	if (gethostname(host, sizeof(host)) != 0)
 		host[0] = 0;
 	host[sizeof(host) - 1] = 0;
-	base = __libc_asl_record(getprogname(), getpid(),
+	pid = getpid();
+	base = __libc_asl_record(getprogname(), pid,
 	    LOG_USER |
 		(type == 1	   ? LOG_INFO :
 			type == 16 ? LOG_ERR :
@@ -271,7 +323,9 @@ emit(os_log_t log, os_log_type_t type, const char *format,
 	field(fp, "subsystem", log->subsystem);
 	field(fp, "category", log->category);
 	field(fp, "formatString", format);
-	(void)syscall(SYS_thr_self, &tid);
+	tid = pthread_getthreadid_np();
+	if (tid == 0)
+		(void)syscall(SYS_thr_self, &tid);
 	snprintf(number, sizeof(number), "%ld", tid);
 	field(fp, "threadID", number);
 	clock_gettime(CLOCK_UPTIME_PRECISE, &uptime);
@@ -280,7 +334,7 @@ emit(os_log_t log, os_log_type_t type, const char *format,
 	field(fp, "machTimestamp", number);
 	image_fields(fp, pc);
 	snprintf(number, sizeof(number), "%" PRIu64,
-	    ((uint64_t)(uint32_t)getpid() << 32) ^
+	    ((uint64_t)(uint32_t)pid << 32) ^
 		(atomic_fetch_add_explicit(&sequence, 1, memory_order_relaxed) +
 		    1));
 	field(fp, "traceID", number);

@@ -83,3 +83,4 @@ const char *fixture_linked_literal(void);
 const char *fixture_wide_literal(void);
 const char *fixture_error_literal(void);
 void fixture_edges(struct codec_input *, struct codec_sample *);
+void fixture_op697(unsigned, struct codec_sample *);

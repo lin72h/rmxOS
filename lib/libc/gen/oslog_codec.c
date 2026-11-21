@@ -28,11 +28,19 @@
 #define COUNT	  1
 #define STRING	  2
 #define WIDE	  5
+#define MASK	  7
 #define MAX_FIELD 4096
 struct command {
 	const unsigned char *data;
 	unsigned char type, flags, size;
 };
+struct spec {
+	size_t begin, end;
+	char flags[8], length[3], conversion;
+	int width, precision;
+	bool width_arg, precision_arg, has_precision, secret;
+};
+static int specifier(const char *, size_t, size_t *, struct spec *);
 static uint16_t
 get16(const unsigned char *p)
 {
@@ -53,6 +61,12 @@ static bool
 scalar_size(unsigned n)
 {
 	return (n == 1 || n == 2 || n == 4 || n == 8 || n == 16);
+}
+static bool
+opaque_item(unsigned kind)
+{
+	return (kind != SCALAR && kind != COUNT && kind != STRING &&
+	    kind != WIDE);
 }
 static int
 commands(const unsigned char *p, size_t n, struct command *items, size_t *end,
@@ -95,13 +109,24 @@ commands(const unsigned char *p, size_t n, struct command *items, size_t *end,
 			if (cmd->size != (flattened ? 4 : sizeof(uintptr_t)))
 				return (EINVAL);
 			break;
+		case MASK:
+			if (!flattened && cmd->size != 8)
+				return (EINVAL);
+			/* FALLTHROUGH */
 		default:
-			return (ENOTSUP);
+			if (flattened &&
+			    (cmd->flags != PRIVATE || cmd->size != 4))
+				return (EINVAL);
+			break;
 		}
 	}
 	for (i = 0; i < p[1]; i++)
-		if (items[i].type == COUNT && items[i + 1].type != STRING &&
-		    items[i + 1].type != WIDE)
+		if (items[i].type == COUNT &&
+		    (items[i + 1].type == SCALAR ||
+		    items[i + 1].type == COUNT || items[i + 1].type == MASK))
+			return (EINVAL);
+		else if (!flattened && items[i].type == MASK &&
+		    (i + 1 == p[1] || items[i + 1].type == MASK))
 			return (EINVAL);
 	if (p[0] != summary || (!flattened && off != n))
 		return (EINVAL);
@@ -169,18 +194,63 @@ utf8_prefix(const unsigned char *s, size_t n)
 	}
 	return (i);
 }
+/*
+ * A mask prefixes a conversion, including its width and precision controls.
+ * Mark the operand before capture so even an explicitly public masked string
+ * is never read. The controls still occupy their normal wire positions.
+ */
+static int
+mask_operands(const char *format, size_t size, struct command *items,
+    unsigned count)
+{
+	struct spec s;
+	size_t p = 0;
+	unsigned index = 0;
+	int error;
+	bool masked;
+
+	if (format == NULL || size > 65536)
+		return (EINVAL);
+	while (p < size) {
+		if (format[p] != '%') {
+			p++;
+			continue;
+		}
+		if (p + 1 < size && format[p + 1] == '%') {
+			p += 2;
+			continue;
+		}
+		error = specifier(format, size, &p, &s);
+		if (error != 0)
+			return (error);
+		masked = index < count && items[index].type == MASK;
+		index += masked + s.width_arg + (s.precision_arg ||
+		    ((s.conversion == 's' || s.conversion == 'P') &&
+		    s.has_precision));
+		if (index >= count || items[index].type == MASK)
+			return (EINVAL);
+		if (masked)
+			items[index].flags = PRIVATE;
+		index++;
+	}
+	return (index == count ? 0 : EINVAL);
+}
+
 int
-__oslog_codec_flatten(const unsigned char *input, size_t n, unsigned type,
-    __oslog_byte_reader reader, void *context, unsigned char *out, size_t cap,
+__oslog_codec_flatten(const char *format, size_t format_size,
+    const unsigned char *input, size_t n, unsigned type,
+    __oslog_range_reader reader, void *context, unsigned char *out, size_t cap,
     size_t *used)
 {
 	struct command items[MAX_ITEMS];
 	unsigned char meta[__OSLOG_CODEC_FAULT_CAP],
 	    data[__OSLOG_CODEC_FAULT_CAP];
-	size_t end, m = 0, d = 0, limit, size, room, len, kept, i;
+	size_t end, m = 0, d = 0, limit, size, room, len, kept, i, max, copied;
 	unsigned count = 0, flags = 0, f;
 	int error, precision = -1;
 	uintptr_t pointer;
+	const unsigned char *nul;
+	static const unsigned char null_string[] = "(null)";
 	bool secret, truncated, terminated;
 
 	if (used == NULL)
@@ -194,12 +264,24 @@ __oslog_codec_flatten(const unsigned char *input, size_t n, unsigned type,
 		return (ENOSPC);
 	if ((error = commands(input, n, items, &end, false)) != 0)
 		return (error);
+	for (i = 0; i < input[1]; i++)
+		if (items[i].type == MASK) {
+			error = mask_operands(format, format_size, items, input[1]);
+			if (error != 0)
+				return (error);
+			break;
+		}
 	for (i = 0; i < input[1]; i++) {
 		struct command *cmd = &items[i];
 		f = cmd->flags;
+		if (opaque_item(cmd->type))
+			f = PRIVATE;
 		secret = (f & PRIVATE) != 0;
-		if (cmd->type == COUNT)
-			memcpy(&precision, cmd->data, sizeof(precision));
+		if (cmd->type == COUNT) {
+			precision = 0;
+			if (!secret)
+				memcpy(&precision, cmd->data, sizeof(precision));
+		}
 		if (cmd->type == STRING || cmd->type == WIDE) {
 			memcpy(&pointer, cmd->data, sizeof(pointer));
 			if (f == 0 && pointer != 0 &&
@@ -227,23 +309,30 @@ __oslog_codec_flatten(const unsigned char *input, size_t n, unsigned type,
 			}
 			len = 0;
 			truncated = false;
-			while (len < room) {
-				unsigned char ch;
-				if (precision >= 0 && len == (size_t)precision)
-					break;
-				if (pointer == 0)
-					ch = ((const unsigned char
-						*)"(null)")[len];
-				else {
+			max = room;
+			if (precision >= 0 && (size_t)precision < max)
+				max = precision;
+			while (len < max) {
+				if (pointer == 0) {
+					copied = max < sizeof(null_string) ?
+					    max : sizeof(null_string);
+					memcpy(data + d, null_string, copied);
+				} else {
 					if (reader == NULL)
 						return (EINVAL);
-					if ((error = reader(context, pointer,
-						 len, &ch)) != 0)
+					error = reader(context, pointer, len,
+					    data + d + len, max - len, &copied);
+					if (error != 0)
 						return (error);
+					if (copied == 0 || copied > max - len)
+						return (EINVAL);
 				}
-				if (ch == 0)
+				nul = memchr(data + d + len, 0, copied);
+				if (nul != NULL) {
+					len = nul - (data + d);
 					break;
-				data[d + len++] = ch;
+				}
+				len += copied;
 			}
 			if (len == room && precision != 0) {
 				len--;
@@ -287,12 +376,16 @@ append(struct output *o, const void *bytes, size_t n)
 	o->p[o->n] = 0;
 	return (0);
 }
-struct spec {
-	size_t begin, end;
-	char flags[8], length[3], conversion;
-	int width, precision;
-	bool width_arg, precision_arg, has_precision, secret;
-};
+static int
+spaces(struct output *o, size_t n)
+{
+	if (o->n >= o->cap || n >= o->cap - o->n)
+		return (ENOSPC);
+	memset(o->p + o->n, ' ', n);
+	o->n += n;
+	o->p[o->n] = 0;
+	return (0);
+}
 static int
 amount(const char *f, size_t n, size_t *p, int *value)
 {
@@ -349,7 +442,7 @@ specifier(const char *f, size_t n, size_t *position, struct spec *s)
 		    f[p] == s->length[0])
 			s->length[1] = f[p++];
 	}
-	if (p == n || strchr("diouxXpcfFeEgGaAs", f[p]) == NULL)
+	if (p == n || strchr("diouxXpcfFeEgGaAs@Pm", f[p]) == NULL)
 		return (EINVAL);
 	s->conversion = f[p++];
 	s->end = p;
@@ -468,10 +561,10 @@ __oslog_codec_render(const char *format, size_t size, const unsigned char *flat,
 	struct command items[MAX_ITEMS];
 	struct output out = { destination, cap, 0 };
 	struct spec s;
-	size_t end, i, p = 0, start, off, len;
+	size_t end, i, p = 0, start, off, len, width, pad;
 	unsigned index = 0;
 	int error, value, count_value;
-	bool terminated;
+	bool terminated, masked, left, truncated;
 	const struct command *cmd;
 	char mismatch[256];
 
@@ -522,6 +615,9 @@ __oslog_codec_render(const char *format, size_t size, const unsigned char *flat,
 		}
 		if ((error = specifier(format, size, &p, &s)) != 0)
 			return (error);
+		masked = index < flat[1] && items[index].type == MASK;
+		if (masked)
+			index++;
 		if (s.width_arg) {
 			error = argument_int(items, flat[1], &index, SCALAR,
 			    &value);
@@ -533,7 +629,8 @@ __oslog_codec_render(const char *format, size_t size, const unsigned char *flat,
 				return (EINVAL);
 			s.width = value;
 		}
-		if (s.conversion == 's' && s.has_precision) {
+		if ((s.conversion == 's' || s.conversion == 'P') &&
+		    s.has_precision) {
 			error = argument_int(items, flat[1], &index, COUNT,
 			    &value);
 			if (error != 0 && error != ENOENT)
@@ -561,10 +658,15 @@ __oslog_codec_render(const char *format, size_t size, const unsigned char *flat,
 			continue;
 		}
 		cmd = &items[index++];
-		if ((s.conversion == 's' && cmd->type != STRING) ||
-		    (s.conversion != 's' && cmd->type != SCALAR))
+		if (cmd->type == MASK || cmd->type == COUNT)
 			return (EINVAL);
-		if ((cmd->flags & PRIVATE) || s.secret) {
+		if (!opaque_item(cmd->type) &&
+		    ((s.conversion == 's' && cmd->type != STRING) ||
+		    (s.conversion != 's' && cmd->type != SCALAR) ||
+		    strchr("@Pm", s.conversion) != NULL))
+			return (EINVAL);
+		if ((cmd->flags & PRIVATE) || s.secret || masked ||
+		    opaque_item(cmd->type)) {
 			if ((error = append(&out, "<private>", 9)) != 0)
 				return (error);
 		} else if (s.conversion == 's') {
@@ -585,13 +687,23 @@ __oslog_codec_render(const char *format, size_t size, const unsigned char *flat,
 				    0)
 					return (error);
 			} else {
-				if ((error = append(&out, flat + end + off,
-					 len - terminated)) != 0)
+				len -= terminated;
+				truncated = (get16(cmd->data + 2) & 0x8000) != 0;
+				width = s.width < 0 ? -s.width : s.width;
+				left = s.width < 0 || strchr(s.flags, '-') != NULL;
+				pad = len + (truncated ? 5 : 0);
+				pad = pad < width ? width - pad : 0;
+				if (!left && (error = spaces(&out, pad)) != 0)
 					return (error);
-				if (get16(cmd->data + 2) & 0x8000)
+				if ((error = append(&out, flat + end + off,
+					 len)) != 0)
+					return (error);
+				if (truncated)
 					if ((error = append(&out,
 						 "<\xe2\x80\xa6>", 5)) != 0)
 						return (error);
+				if (left && (error = spaces(&out, pad)) != 0)
+					return (error);
 			}
 		} else if ((error = number(&out, &s, cmd)) != 0)
 			return (error);

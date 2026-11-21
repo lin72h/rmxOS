@@ -5,6 +5,9 @@ const c = @cImport({
     @cInclude("stdlib.h");
     @cInclude("pthread.h");
     @cInclude("dlfcn.h");
+    @cInclude("sys/mman.h");
+    @cInclude("sys/ktrace.h");
+    @cInclude("unistd.h");
 });
 pub export var __libc_syslog_mutex: c.pthread_mutex_t = null;
 pub export fn __sys_task_self_trap() u32 {
@@ -174,4 +177,89 @@ test "generic retain delegates to a runtime loaded after process startup" {
     try std.testing.expect(object.xrefs == 1);
     c.os_release(&object);
     try std.testing.expect(object.xrefs == 0);
+}
+
+fn publicString(text: [*]const u8) [12]u8 {
+    var buffer = [_]u8{ 2, 1, 0x22, 8, 0, 0, 0, 0, 0, 0, 0, 0 };
+    std.mem.writeInt(u64, buffer[4..12], @intFromPtr(text), .little);
+    return buffer;
+}
+
+fn logPublicString(text: [*]const u8) void {
+    const buffer = publicString(text);
+    c._os_log_impl(null, default, 0, "%{public}s", &buffer, buffer.len);
+}
+
+test "op697 guarded capture" {
+    defer clear();
+    const page: usize = @intCast(c.getpagesize());
+    const mapping = c.mmap(null, page * 2, c.PROT_READ | c.PROT_WRITE, c.MAP_ANON | c.MAP_PRIVATE, -1, 0);
+    try std.testing.expect(mapping != c.MAP_FAILED);
+    defer _ = c.munmap(mapping, page * 2);
+    const bytes: [*]u8 = @ptrCast(mapping.?);
+    try std.testing.expectEqual(@as(c_int, 0), c.mprotect(bytes + page, page, c.PROT_NONE));
+    @memcpy(bytes[page - 4 .. page], "abc\x00");
+    logPublicString(bytes + page - 4);
+    try std.testing.expectEqual(@as(usize, 1), records.items.len);
+    try std.testing.expectEqualStrings("abc", try field(records.items[0], "Message"));
+    bytes[page - 1] = 'd';
+    const pointer = bytes + page - 4;
+    var buffer = [_]u8{ 2, 2, 0x10, 4, 4, 0, 0, 0, 0x22, 8, 0, 0, 0, 0, 0, 0, 0, 0 };
+    std.mem.writeInt(u64, buffer[10..18], @intFromPtr(pointer), .little);
+    c._os_log_impl(null, default, 0, "%{public}.4s", &buffer, buffer.len);
+    try std.testing.expectEqual(@as(usize, 2), records.items.len);
+    try std.testing.expectEqualStrings("abcd", try field(records.items[1], "Message"));
+    logPublicString(pointer);
+    logPublicString(bytes + page);
+    try std.testing.expectEqual(@as(usize, 2), records.items.len);
+    try std.testing.expectEqual(@as(c_int, 0), c.mprotect(bytes + page, page, c.PROT_READ | c.PROT_WRITE));
+    @memcpy(bytes[page .. page + 4], "xyz\x00");
+    logPublicString(pointer);
+    try std.testing.expectEqual(@as(usize, 3), records.items.len);
+    try std.testing.expectEqualStrings("abcdxyz", try field(records.items[2], "Message"));
+}
+
+const page_sample: [200:0]u8 align(4096) = @splat('x');
+fn mark(comptime message: [:0]const u8) void {
+    _ = c.utrace(message.ptr, message.len);
+}
+
+test "op697 syscall trace" {
+    defer clear();
+    mark("op697 string begin");
+    logPublicString(&page_sample);
+    mark("op697 string end");
+    try std.testing.expectEqual(@as(usize, 1), records.items.len);
+    try std.testing.expectEqualStrings(&page_sample, try field(records.items[0], "Message"));
+
+    mark("op697 literal begin");
+    const buffer = [_]u8{ 0, 0 };
+    c._os_log_impl(null, default, 0, "literal", &buffer, buffer.len);
+    mark("op697 literal end");
+    try std.testing.expectEqual(@as(usize, 2), records.items.len);
+
+    mark("op697 refusals begin");
+    const malformed = [_]u8{ 0, 1, 0, 8, 1 };
+    c._os_log_impl(null, default, 0, "%d", &malformed, malformed.len);
+    logPublicString(@ptrFromInt(1));
+    mark("op697 refusals end");
+    try std.testing.expectEqual(@as(usize, 2), records.items.len);
+}
+
+fn expectRedactedMessage(which: c_uint) !void {
+    defer clear();
+    var sample: checks.c.struct_codec_sample = undefined;
+    checks.c.fixture_op697(which, &sample);
+    c._os_log_impl(null, default, 0, sample.format, &sample.bytes, @intCast(sample.size));
+    try std.testing.expectEqual(@as(usize, 1), records.items.len);
+    const message = try field(records.items[0], "Message");
+    defer allocator.free(message);
+    try std.testing.expectEqualStrings("42 [<private>] visible", message);
+}
+
+test "op697 mask keeps the API record" {
+    try expectRedactedMessage(4);
+}
+test "op697 private dynamic precision keeps the API record" {
+    try expectRedactedMessage(5);
 }

@@ -39,14 +39,16 @@ const Source = struct {
         self.count += 1;
         return @ptrCast(data.ptr);
     }
-    fn read(ptr: ?*anyopaque, address: usize, offset: usize, out: [*c]u8) callconv(.c) c_int {
+    fn read(ptr: ?*anyopaque, address: usize, offset: usize, out: [*c]u8, max: usize, taken: [*c]usize) callconv(.c) c_int {
         const self: *Source = @ptrCast(@alignCast(ptr.?));
         for (self.regions[0..self.count]) |region| {
             const begin = @intFromPtr(region.ptr);
             if (address < begin or address - begin >= region.len) continue;
             const delta = address - begin;
             if (offset >= region.len - delta) continue;
-            out[0] = region[delta + offset];
+            const from = delta + offset;
+            taken[0] = @min(max, region.len - from);
+            @memcpy(out[0..taken[0]], region[from..][0..taken[0]]);
             return 0;
         }
         return c.EFAULT;
@@ -161,7 +163,7 @@ pub fn oracle() !void {
         var flat_size: usize = 0;
         const kind: c_uint = if (eq(row.messageType, "Fault")) 17 else if (eq(row.messageType, "Error")) 16 else if (eq(row.messageType, "Info")) 1 else if (eq(row.messageType, "Debug")) 2 else 0;
         if (emit_hook) |hook| hook(sample.format, sample.bytes[0..sample.size], kind, row.op);
-        const flatten = c.__oslog_codec_flatten(&sample.bytes, sample.size, kind, Source.read, &source, &flat, flat.len, &flat_size);
+        const flatten = c.__oslog_codec_flatten(sample.format, std.mem.len(sample.format), &sample.bytes, sample.size, kind, Source.read, &source, &flat, flat.len, &flat_size);
         if (flatten != 0) {
             try print("oracle[{d}] flatten={d} format={s}\n", .{ index, flatten, format });
             return error.FlattenFailed;
@@ -181,16 +183,16 @@ pub fn malformed() !void {
     var length: usize = 123;
     const scalar = [_]u8{ 0, 1, 0, 4, 42, 0, 0, 0 };
     var source = Source{};
-    try expect(c.__oslog_codec_flatten(&scalar, scalar.len, 0, Source.read, &source, &flat, flat.len, &length) == 0);
+    try expect(c.__oslog_codec_flatten("%d", 2, &scalar, scalar.len, 0, Source.read, &source, &flat, flat.len, &length) == 0);
     var valid: [32]u8 = undefined;
     var valid_length: usize = 0;
     try expect(c.__oslog_codec_render("%d", 2, &flat, length, &valid, valid.len, &valid_length) == 0);
     try expect(eq(valid[0..valid_length], "42"));
-    try expect(c.__oslog_codec_flatten(&scalar, scalar.len, 0, Source.read, &source, &flat, 1, &length) == c.ENOSPC);
-    for (0..scalar.len) |n| try expect(c.__oslog_codec_flatten(&scalar, n, 0, Source.read, &source, &flat, flat.len, &length) != 0);
+    try expect(c.__oslog_codec_flatten("%d", 2, &scalar, scalar.len, 0, Source.read, &source, &flat, 1, &length) == c.ENOSPC);
+    for (0..scalar.len) |n| try expect(c.__oslog_codec_flatten("%d", 2, &scalar, n, 0, Source.read, &source, &flat, flat.len, &length) != 0);
     var output: [128]u8 = undefined;
     const bad_public = [_]u8{ 2, 1, 0x22, 8, 1, 0, 0, 0, 0, 0, 0, 0 };
-    try expect(c.__oslog_codec_flatten(&bad_public, bad_public.len, 0, Source.read, &source, &flat, flat.len, &length) == c.EFAULT);
+    try expect(c.__oslog_codec_flatten("%s", 2, &bad_public, bad_public.len, 0, Source.read, &source, &flat, flat.len, &length) == c.EFAULT);
     const bad_ranges = [_][10]u8{
         .{ 2, 1, 0x22, 4, 0xff, 0x7f, 2, 0, 'A', 0 },
         .{ 2, 1, 0x22, 4, 0, 0, 0xff, 0x7f, 'A', 0 },
@@ -209,7 +211,7 @@ pub fn malformed() !void {
     for (0..20000) |_| {
         random.random().bytes(&bytes);
         const n = random.random().uintLessThan(usize, bytes.len + 1);
-        _ = c.__oslog_codec_flatten(&bytes, n, 0, Source.read, &source, &flat, flat.len, &length);
+        _ = c.__oslog_codec_flatten("%s", 2, &bytes, n, 0, Source.read, &source, &flat, flat.len, &length);
         _ = c.__oslog_codec_render("%s", 2, &bytes, n, &output, output.len, &length);
     }
     try print("malformed clang_cuts={d} flat_cuts=10 bad_ranges=4 bad_pointer=1 forbidden_formats=6 fuzz_pairs=20000 PASS\n", .{scalar.len});
@@ -223,7 +225,7 @@ pub fn wire() !void {
     c.fixture_edges(&input, &sample);
     var flat: [2048]u8 = undefined;
     var length: usize = 0;
-    try expect(c.__oslog_codec_flatten(&sample.bytes, sample.size, 0, Source.read, &source, &flat, flat.len, &length) == 0);
+    try expect(c.__oslog_codec_flatten(sample.format, std.mem.len(sample.format), &sample.bytes, sample.size, 0, Source.read, &source, &flat, flat.len, &length) == 0);
     try expect(!contains(flat[0..length], "secret"));
     var output: [256]u8 = undefined;
     var n: usize = 0;
@@ -233,17 +235,17 @@ pub fn wire() !void {
     var buffer: [12]u8 = undefined;
     @memcpy(buffer[0..4], &string);
     std.mem.writeInt(u64, buffer[4..12], @intFromPtr(input.strings[0]), .little);
-    try expect(c.__oslog_codec_flatten(&buffer, buffer.len, 0, Source.read, &source, &flat, flat.len, &length) == 0);
+    try expect(c.__oslog_codec_flatten("%s", 2, &buffer, buffer.len, 0, Source.read, &source, &flat, flat.len, &length) == 0);
     try expect(eq(flat[0..length], &.{ 2, 1, 0x22, 4, 0, 0, 7, 0, 's', 'e', 'c', 'r', 'e', 't', 0 }));
     var bounded = [_]u8{ 2, 2, 0x12, 4, 3, 0, 0, 0, 0x22, 8, 0, 0, 0, 0, 0, 0, 0, 0 };
     std.mem.writeInt(u64, bounded[10..18], @intFromPtr(input.strings[0]), .little);
-    try expect(c.__oslog_codec_flatten(&bounded, bounded.len, 0, Source.read, &source, &flat, flat.len, &length) == 0);
+    try expect(c.__oslog_codec_flatten("%.3s", 4, &bounded, bounded.len, 0, Source.read, &source, &flat, flat.len, &length) == 0);
     try expect(eq(flat[0..length], &.{ 2, 2, 0x12, 4, 3, 0, 0, 0, 0x22, 4, 0, 0, 3, 0, 's', 'e', 'c' }));
     const bounded_format = "%{public}.3s";
     try expect(c.__oslog_codec_render(bounded_format, bounded_format.len, &flat, length, &output, output.len, &n) == 0);
     try expect(eq(output[0..n], "sec"));
     bounded[4] = 0;
-    try expect(c.__oslog_codec_flatten(&bounded, bounded.len, 0, Source.read, &source, &flat, flat.len, &length) == 0);
+    try expect(c.__oslog_codec_flatten("%.3s", 4, &bounded, bounded.len, 0, Source.read, &source, &flat, flat.len, &length) == 0);
     const empty_format = "%{public}.0s";
     try expect(c.__oslog_codec_render(empty_format, empty_format.len, &flat, length, &output, output.len, &n) == 0);
     try expect(n == 0);
@@ -259,7 +261,7 @@ pub fn wire() !void {
     }
     // Skip bounded's standalone header when embedding its two commands.
     std.mem.copyForwards(u8, full[at..], bounded[2..]);
-    try expect(c.__oslog_codec_flatten(&full, full.len, 0, Source.read, &source, &flat, flat.len, &length) == 0);
+    try expect(c.__oslog_codec_flatten("%s", 2, &full, full.len, 0, Source.read, &source, &flat, flat.len, &length) == 0);
     try expect(length == 1024 and flat[1] == 169 and std.mem.eql(u8, flat[1018..1024], &.{ 0x22, 4, 0, 0, 0, 0 }));
     try print("wire ranges/privacy/counts/scalars/percent PASS\n", .{});
 }
@@ -271,4 +273,71 @@ test "malformed and truncated buffers" {
 }
 test "wire encoding and safe formatted scalar edges" {
     try wire();
+}
+
+const op697_expected = [_][]const u8{
+    "[abc             ] [      de] [fg      ] [      hi] [42    ] [    42] [xy]",
+    "[      é] [é      ] [     é] [  日本] [     abc]",
+    "[          ab] [cd          ] [<private>] [<private>] [<private>] [          kl]",
+    "[abc     ] [      xy]",
+    "42 [<private>] visible",
+    "42 [<private>] visible",
+    "42 [<private>] visible",
+    "[<private>] visible",
+    "42 [<private>] visible",
+};
+
+pub fn op697(which: usize) !void {
+    var sample: c.struct_codec_sample = undefined;
+    c.fixture_op697(@intCast(if (which == 8) 5 else which), &sample);
+    const bytes = sample.bytes[0..sample.size];
+    try print("case {d} descriptors {x}\n", .{ which, bytes });
+    var source = Source{};
+    var offset: usize = 2;
+    while (offset < bytes.len) {
+        const tag = bytes[offset];
+        // An opaque operand after a precision count occupies the same field.
+        if (which == 8 and tag == 0x21) bytes[offset] = 0x81;
+        const size = bytes[offset + 1];
+        offset += 2;
+        if (tag == 0x20 or tag == 0x22) {
+            const address = std.mem.readInt(usize, bytes[offset..][0..@sizeOf(usize)], .little);
+            _ = source.literal(@ptrFromInt(address));
+        }
+        offset += size;
+    }
+    var flat: [c.__OSLOG_CODEC_STORAGE]u8 = undefined;
+    var flat_size: usize = 0;
+    const rc = c.__oslog_codec_flatten(sample.format, std.mem.len(sample.format), bytes.ptr, bytes.len, 0, Source.read, &source, &flat, flat.len, &flat_size);
+    if (rc != 0) {
+        try print("case {d} flatten rc={d}\n", .{ which, rc });
+        return error.FlattenFailed;
+    }
+    if (which >= 4) try expect(!contains(flat[0..flat_size], "hidden"));
+    var message: [256]u8 = undefined;
+    var length: usize = 0;
+    try expect(c.__oslog_codec_render(sample.format, std.mem.len(sample.format), &flat, flat_size, &message, message.len, &length) == 0);
+    try std.testing.expectEqualStrings(op697_expected[which], message[0..length]);
+}
+
+test "w1 widths and numeric controls" {
+    try op697(0);
+}
+test "w2 UTF-8 byte widths" {
+    try op697(1);
+}
+test "w3 literal and private widths" {
+    try op697(2);
+}
+test "negative width and precision" {
+    try op697(3);
+}
+test "mask.hash keeps surrounding fields" {
+    try op697(4);
+}
+test "private dynamic precision keeps surrounding fields" {
+    try op697(5);
+}
+test "opaque operands and mask controls keep surrounding fields" {
+    for (6..9) |i| try op697(i);
 }
