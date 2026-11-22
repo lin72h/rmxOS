@@ -564,15 +564,14 @@ buffer_copy(struct sc_chinfo *ch)
 			length -= offset;
 		}
 	} else {
-		/* Buffer position scaled down to a single channel. */
+		/* Snapshot the write position before synchronizing the buffer. */
 		pos = sndbuf_getfreeptr(ch->buffer) / channels;
-		/* Get DMA buffer write position. */
 		dma_pos = hdsp_read_2(sc, HDSP_STATUS_REG);
 		dma_pos &= HDSP_BUF_POSITION_MASK;
 		dma_pos %= buffer_size;
-		/* Copy what is newly available. */
 		length = (dma_pos + buffer_size) - pos;
 		length %= buffer_size;
+		bus_dmamap_sync(sc->dmat, sc->rmap, BUS_DMASYNC_POSTREAD);
 	}
 
 	/* Position and length in samples (4 bytes). */
@@ -607,6 +606,12 @@ buffer_copy(struct sc_chinfo *ch)
 		row = hdsp_slot_first_row(slots);
 	}
 
+	if (ch->dir == PCMDIR_PLAY && length > 0) {
+		bus_dmamap_sync(sc->dmat, sc->pmap, BUS_DMASYNC_PREWRITE);
+	} else if (ch->dir == PCMDIR_REC) {
+		bus_dmamap_sync(sc->dmat, sc->rmap, BUS_DMASYNC_PREREAD);
+	}
+
 	ch->position = ((pos + length) * 4) % buffer_size;
 }
 
@@ -626,6 +631,11 @@ clean(struct sc_chinfo *ch)
 	if (ch->dir == PCMDIR_PLAY)
 		buf = sc->pbuf;
 
+	if (ch->dir == PCMDIR_PLAY)
+		bus_dmamap_sync(sc->dmat, sc->pmap, BUS_DMASYNC_POSTWRITE);
+	else
+		bus_dmamap_sync(sc->dmat, sc->rmap, BUS_DMASYNC_POSTREAD);
+
 	/* Iterate through all of the channel's slots. */
 	slots = hdsp_port_slot_map(ch->ports, sc->speed);
 	slot = hdsp_slot_first(slots);
@@ -637,6 +647,12 @@ clean(struct sc_chinfo *ch)
 		slots &= ~slot;
 		slot = hdsp_slot_first(slots);
 	}
+
+	if (ch->dir == PCMDIR_PLAY)
+		bus_dmamap_sync(sc->dmat, sc->pmap, BUS_DMASYNC_PREWRITE);
+	else
+		bus_dmamap_sync(sc->dmat, sc->rmap,
+		    BUS_DMASYNC_PREWRITE | BUS_DMASYNC_PREREAD);
 
 	ch->position = 0;
 
@@ -676,10 +692,13 @@ hdspchan_init(kobj_t obj, void *devinfo, struct snd_dbuf *b,
 	struct sc_pcminfo *scp;
 	struct sc_chinfo *ch;
 	struct sc_info *sc;
+	struct pcmchan_caps *caps;
+	uint32_t *data;
 	int num;
 
 	scp = devinfo;
 	sc = scp->sc;
+	caps = malloc(sizeof(struct pcmchan_caps), M_HDSP, M_WAITOK);
 
 	mtx_lock(&sc->lock);
 	num = scp->chnum;
@@ -704,7 +723,7 @@ hdspchan_init(kobj_t obj, void *devinfo, struct snd_dbuf *b,
 	    SND_FORMAT(AFMT_S32_LE, hdsp_port_slot_count(ch->ports, 192000), 0);
 	ch->cap_fmts[3] = 0;
 
-	ch->caps = malloc(sizeof(struct pcmchan_caps), M_HDSP, M_NOWAIT);
+	ch->caps = caps;
 	*(ch->caps) = (struct pcmchan_caps) {32000, 192000, ch->cap_fmts, 0};
 
 	/* HDSP 9652 does not support quad speed sample rates. */
@@ -715,7 +734,6 @@ hdspchan_init(kobj_t obj, void *devinfo, struct snd_dbuf *b,
 
 	/* Allocate maximum buffer size. */
 	ch->size = HDSP_CHANBUF_SIZE * hdsp_port_slot_count_max(ch->ports);
-	ch->data = malloc(ch->size, M_HDSP, M_NOWAIT);
 	ch->position = 0;
 
 	ch->buffer = b;
@@ -724,6 +742,17 @@ hdspchan_init(kobj_t obj, void *devinfo, struct snd_dbuf *b,
 
 	ch->dir = dir;
 
+	mtx_unlock(&sc->lock);
+
+	/*
+	 * It is safe to access ch->size here without holding the lock, because
+	 * 1) as of now, ch->size is written only once, here, and 2) ch's
+	 * lifetime is equal to scp's lifetime so it cannot go away yet.
+	 */
+	data = malloc(ch->size, M_HDSP, M_WAITOK);
+
+	mtx_lock(&sc->lock);
+	ch->data = data;
 	mtx_unlock(&sc->lock);
 
 	if (sndbuf_setup(ch->buffer, ch->data, ch->size) != 0) {
@@ -762,8 +791,8 @@ hdspchan_trigger(kobj_t obj, void *data, int go)
 #if 0
 		device_printf(scp->dev, "hdspchan_trigger(): stop or abort\n");
 #endif
-		clean(ch);
 		hdspchan_enable(ch, 0);
+		clean(ch);
 		hdsp_stop_audio(sc);
 		break;
 
@@ -838,6 +867,8 @@ hdspchan_setspeed(kobj_t obj, void *data, uint32_t speed)
 	device_printf(scp->dev, "hdspchan_setspeed(%d)\n", speed);
 #endif
 
+	mtx_lock(&sc->lock);
+
 	if (hdsp_running(sc) == 1)
 		goto end;
 
@@ -877,8 +908,10 @@ hdspchan_setspeed(kobj_t obj, void *data, uint32_t speed)
 
 	sc->speed = hr->speed;
 end:
+	speed = sc->speed;
+	mtx_unlock(&sc->lock);
 
-	return (sc->speed);
+	return (speed);
 }
 
 static uint32_t
@@ -899,6 +932,8 @@ hdspchan_setblocksize(kobj_t obj, void *data, uint32_t blocksize)
 #if 0
 	device_printf(scp->dev, "hdspchan_setblocksize(%d)\n", blocksize);
 #endif
+
+	mtx_lock(&sc->lock);
 
 	if (hdsp_running(sc) == 1)
 		goto end;
@@ -930,25 +965,34 @@ hdspchan_setblocksize(kobj_t obj, void *data, uint32_t blocksize)
 		}
 	}
 
+	/* sndbuf_resize() may sleep. */
+	mtx_unlock(&sc->lock);
+	if (sndbuf_resize(ch->buffer, 2,
+	    (hl->period * AFMT_CHANNEL(ch->format) * sizeof(uint32_t))) != 0)
+		return (0);
+
 	mtx_lock(&sc->lock);
+	/* A channel may have started while the lock was dropped. */
+	if (hdsp_running(sc) == 1) {
+		mtx_unlock(&sc->lock);
+		return (0);
+	}
+
 	sc->ctrl_register &= ~HDSP_LAT_MASK;
 	sc->ctrl_register |= hdsp_encode_latency(hl->n);
 	hdsp_write_4(sc, HDSP_CONTROL_REG, sc->ctrl_register);
 	sc->period = hl->period;
-	mtx_unlock(&sc->lock);
 
 #if 0
 	device_printf(scp->dev, "New period=%d\n", sc->period);
 #endif
-
-	sndbuf_resize(ch->buffer, 2,
-	    (sc->period * AFMT_CHANNEL(ch->format) * sizeof(uint32_t)));
 
 	/* Reset pointer, rewrite frequency (same register) for 9632. */
 	hdsp_write_4(sc, HDSP_RESET_POINTER, 0);
 	if (sc->type == HDSP_9632)
 		hdsp_write_4(sc, HDSP_FREQ_REG, hdsp_freq_reg_value(sc->speed));
 end:
+	mtx_unlock(&sc->lock);
 
 	return (ch->buffer->blksz);
 }
@@ -1057,6 +1101,8 @@ hdsp_pcm_attach(device_t dev)
 
 	pcm_init(dev, scp);
 
+	mixer_init(dev, &hdspmixer_class, scp);
+
 	play = (hdsp_channel_play_ports(scp->hc)) ? 1 : 0;
 	rec = (hdsp_channel_rec_ports(scp->hc)) ? 1 : 0;
 
@@ -1080,8 +1126,6 @@ hdsp_pcm_attach(device_t dev)
 		device_printf(dev, "Can't register pcm.\n");
 		return (ENXIO);
 	}
-
-	mixer_init(dev, &hdspmixer_class, scp);
 
 	/* Register the PCM child for interrupt dispatch. */
 	mtx_lock(&sc->lock);

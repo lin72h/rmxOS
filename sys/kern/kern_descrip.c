@@ -1941,6 +1941,65 @@ filecaps_free(struct filecaps *fcaps)
 	bzero(fcaps, sizeof(*fcaps));
 }
 
+bool
+filecaps_full(const struct filecaps *fcaps)
+{
+	cap_rights_t allrights;
+
+	CAP_ALL(&allrights);
+	return (cap_rights_contains(&fcaps->fc_rights, &allrights) &&
+	    fcaps->fc_fcntls == CAP_FCNTL_ALL && fcaps->fc_nioctls == -1);
+}
+
+/*
+ * Find the intersection of two filecaps structures and store the result in the
+ * first structure.  This is a destructive operation on the src structure.
+ */
+void
+filecaps_intersect(struct filecaps *src, struct filecaps *dst)
+{
+
+	cap_rights_intersect(&dst->fc_rights, &src->fc_rights);
+	dst->fc_fcntls &= src->fc_fcntls;
+	if (dst->fc_nioctls == -1) {
+		dst->fc_ioctls = src->fc_ioctls;
+		dst->fc_nioctls = src->fc_nioctls;
+		src->fc_ioctls = NULL;
+	} else if (src->fc_nioctls != -1) {
+		int count;
+
+		/*
+		 * ioctl lists are usually short, so this dumb merge is fine.
+		 * We could alternately sort both lists and walk them in
+		 * parallel.
+		 */
+		count = 0;
+		for (int i = 0; i < dst->fc_nioctls; i++) {
+			bool found;
+
+			found = false;
+			for (int j = 0; j < src->fc_nioctls; j++) {
+				if (dst->fc_ioctls[i] == src->fc_ioctls[j]) {
+					count++;
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				if (i != dst->fc_nioctls - 1)
+					dst->fc_ioctls[i] =
+					    dst->fc_ioctls[dst->fc_nioctls - 1];
+				dst->fc_nioctls--;
+				i--;
+			}
+		}
+		dst->fc_nioctls = count;
+	}
+	if (dst->fc_nioctls == 0)
+		filecaps_free_ioctl(dst);
+	filecaps_free(src);
+}
+
 static u_long *
 filecaps_free_prep(struct filecaps *fcaps)
 {
@@ -2563,13 +2622,16 @@ fdcopy(struct filedesc *fdp, struct proc *p1)
 		if ((ops->fo_flags & DFLAG_FORK) != 0 &&
 		    (ofde->fde_flags & UF_FOCLOSE) == 0) {
 			if (ops->fo_fork(newfdp, ofde->fde_file, &fp, p1,
-			    curthread) != 0)
+			    curthread) != 0) {
+				if (newfdp->fd_freefile > i)
+					newfdp->fd_freefile = i;
 				continue;
+			}
 			fork_pass = true;
 		} else if ((ops->fo_flags & DFLAG_PASSABLE) == 0 ||
 		    (ofde->fde_flags & UF_FOCLOSE) != 0 ||
 		    !fhold(ofde->fde_file)) {
-			if (newfdp->fd_freefile == fdp->fd_freefile)
+			if (newfdp->fd_freefile > i)
 				newfdp->fd_freefile = i;
 			continue;
 		}
@@ -3151,6 +3213,7 @@ fget_remote(struct thread *td, struct proc *p, int fd, struct filecaps *fcaps,
 	struct file *fp;
 	int error;
 	bool copied __diagused;
+	bool drop_fp;
 
 	/*
 	 * Both fcaps and fd_flags must be either requested together,
@@ -3166,10 +3229,21 @@ fget_remote(struct thread *td, struct proc *p, int fd, struct filecaps *fcaps,
 	PROC_UNLOCK(p);
 	if (fdp == NULL)
 		return (ENOENT);
+	drop_fp = false;
 	FILEDESC_SLOCK(fdp);
 	if (refcount_load(&fdp->fd_refcnt) != 0) {
 		fp = fget_noref(fdp, fd);
-		if (fp != NULL && fhold(fp)) {
+		error = fp != NULL && fhold(fp) ? 0 : EBADF;
+	} else {
+		error = ENOENT;
+	}
+	if (error == 0) {
+		PROC_LOCK(p);
+		/* Guard against a race with rfork(RFCFDG). */
+		if (fdp != atomic_load_ptr(&p->p_fd))
+			error = EBADF;
+		PROC_UNLOCK(p);
+		if (error == 0) {
 			*fpp = fp;
 			if (fd_flags != NULL) {
 				*fd_flags = fde_to_fd_flags(fdp->fd_ofiles[fd].
@@ -3180,14 +3254,13 @@ fget_remote(struct thread *td, struct proc *p, int fd, struct filecaps *fcaps,
 				    &fdp->fd_ofiles[fd].fde_caps, fcaps, true);
 				MPASS(copied);
 			}
-			error = 0;
 		} else {
-			error = EBADF;
+			drop_fp = true;
 		}
-	} else {
-		error = ENOENT;
 	}
 	FILEDESC_SUNLOCK(fdp);
+	if (drop_fp)
+		fdrop(fp, td);
 	fddrop(fdp);
 	return (error);
 }
@@ -3290,10 +3363,7 @@ fgetvp_lookup_smr(struct nameidata *ndp, struct vnode **vpp, int *flagsp)
 	 *
 	 * Not yet supported by fast path.
 	 */
-	CAP_ALL(&rights);
-	if (!cap_rights_contains(&ndp->ni_filecaps.fc_rights, &rights) ||
-	    ndp->ni_filecaps.fc_fcntls != CAP_FCNTL_ALL ||
-	    ndp->ni_filecaps.fc_nioctls != -1) {
+	if (!filecaps_full(&ndp->ni_filecaps)) {
 #ifdef notyet
 		ndp->ni_lcf |= NI_LCF_STRICTREL;
 #else
@@ -3395,10 +3465,7 @@ fgetvp_lookup(struct nameidata *ndp, struct vnode **vpp)
 	 * all lookups relative to it must also be
 	 * strictly relative.
 	 */
-	CAP_ALL(&rights);
-	if (!cap_rights_contains(&ndp->ni_filecaps.fc_rights, &rights) ||
-	    ndp->ni_filecaps.fc_fcntls != CAP_FCNTL_ALL ||
-	    ndp->ni_filecaps.fc_nioctls != -1) {
+	if (!filecaps_full(&ndp->ni_filecaps)) {
 		ndp->ni_lcf |= NI_LCF_STRICTREL;
 		ndp->ni_resflags |= NIRES_STRICTREL;
 	}

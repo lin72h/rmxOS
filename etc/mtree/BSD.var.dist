@@ -37,6 +37,8 @@
     ..
 /set mode=0755
     db
+        backlight       tags=package=rc
+        ..
         logd            mode=0755
         ..
         logd.archive    mode=0755

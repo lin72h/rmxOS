@@ -864,7 +864,7 @@ static int
 check_acpi_spcr(void)
 {
 	ACPI_TABLE_SPCR *spcr;
-	int br, db, io, rs, rw, sb, xo, pv, pd;
+	int br, db, io, rs, rw, xo, pv, pd;
 	uintmax_t mm;
 	const char *dt, *pa;
 	char *val = NULL;
@@ -900,7 +900,6 @@ check_acpi_spcr(void)
 
 	/* Uart settings */
 	pa = acpi_uart_parity(spcr->Parity);
-	sb = spcr->StopBits;
 	db = 8;
 
 	/*
@@ -1210,7 +1209,7 @@ main(int argc, CHAR16 *argv[])
 	EFI_DEVICE_PATH *imgpath;
 	CHAR16 *text;
 	EFI_STATUS rv;
-	size_t sz, bosz = 0, bisz = 0;
+	size_t sz, bisz = 0;
 	UINT16 boot_order[100];
 	char boot_info[4096];
 	char buf[32];
@@ -1269,8 +1268,6 @@ main(int argc, CHAR16 *argv[])
 		    "failures\n", i);
 	}
 
-	devinit();
-
 	/*
 	 * Detect console settings two different ways: one via the command
 	 * args (eg -h) or via the UEFI ConOut variable.
@@ -1280,6 +1277,12 @@ main(int argc, CHAR16 *argv[])
 	if (!has_kbd && (howto & RB_PROBE))
 		howto |= RB_SERIAL | RB_MULTIPLE;
 	howto &= ~RB_PROBE;
+
+	/*
+	 * We want to initialize after giving loader args a chance to elect a
+	 * different console than what we autodetect.
+	 */
+	devinit();
 
 	/*
 	 * Read additional environment variables from the boot device's
@@ -1409,14 +1412,12 @@ main(int argc, CHAR16 *argv[])
 				    boot_order[i] == boot_current ? "[*]" : "");
 			printf("\n");
 			is_last = boot_order[(sz / sizeof(boot_order[0])) - 1] == boot_current;
-			bosz = sz;
 		} else if (uefi_boot_mgr) {
 			/*
 			 * u-boot doesn't set BootOrder, but otherwise participates in the
 			 * boot manager protocol. So we fake it here and don't consider it
 			 * a failure.
 			 */
-			bosz = sizeof(boot_order[0]);
 			boot_order[0] = boot_current;
 			is_last = true;
 		}

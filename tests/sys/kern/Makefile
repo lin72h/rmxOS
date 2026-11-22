@@ -45,6 +45,12 @@ ATF_TESTS_C+=	resolve_beneath_test
 ATF_TESTS_C+=	sched_affinity
 ATF_TESTS_C+=	shutdown_dgram
 ATF_TESTS_C+=	sigaltstack
+.if ${MACHINE_ARCH:Mpowerpc64*} != ""
+ATF_TESTS_C+=	sigreturn_fpregs
+SRCS.sigreturn_fpregs=	sigreturn_fpregs.c sigreturn_fpregs_ppc64.S
+LIBADD.sigreturn_fpregs+=	pthread
+TEST_METADATA.sigreturn_fpregs+=	is_exclusive="true"
+.endif
 ATF_TESTS_C+=	sigwait
 ATF_TESTS_C+=	socket_accept
 ATF_TESTS_C+=	socket_accf
@@ -129,8 +135,7 @@ NETBSD_ATF_TESTS_C+=	sysv_test
 
 CFLAGS.mqueue_test+=	-I${SRCTOP}/tests
 LIBADD.mqueue_test+=	rt
-
-LIBADD.tty_pts+=	atf_c util
+LIBADD.tty_pts+=	util
 
 ATF_TESTS_C+=	libkern_crc32
 SRCS.libkern_crc32+=	libkern_crc32.c

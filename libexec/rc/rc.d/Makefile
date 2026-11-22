@@ -11,6 +11,7 @@ CONFS=	DAEMON \
 	NETWORKING \
 	SERVERS \
 	adjkerntz \
+	backlight \
 	logd_ready \
 	syslogd \
 	bgfsck \

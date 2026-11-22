@@ -63,6 +63,7 @@ SUBDIR=	${SUBDIR_BOOTSTRAP} \
 	libfetch \
 	libgcc_eh \
 	libgcc_s \
+	libgcc_s_asneeded \
 	libgeom \
 	libifconfig \
 	libipsec \

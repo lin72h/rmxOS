@@ -428,10 +428,6 @@ fuse_vnop_access(struct vop_access_args *ap)
 {
 	struct vnode *vp = ap->a_vp;
 	int accmode = ap->a_accmode;
-	struct ucred *cred = ap->a_cred;
-
-	struct fuse_data *data = fuse_get_mpdata(vnode_mount(vp));
-
 	int err;
 
 	if (fuse_isdeadfs(vp)) {
@@ -440,16 +436,6 @@ fuse_vnop_access(struct vop_access_args *ap)
 		}
 		return (EXTERROR(ENXIO, "This FUSE session is about "
 		    "to be closed"));
-	}
-	if (!(data->dataflags & FSESS_INITED)) {
-		if (vnode_isvroot(vp)) {
-			if (priv_check_cred(cred, PRIV_VFS_ADMIN) ||
-			    (fuse_match_cred(data->daemoncred, cred) == 0)) {
-				return 0;
-			}
-		}
-		return (EXTERROR(EBADF, "Access denied until FUSE session "
-		    "is initialized"));
 	}
 	if (vnode_islnk(vp)) {
 		return 0;
@@ -800,8 +786,10 @@ fuse_vnop_close(struct vop_close_args *ap)
 	int fflag = ap->a_fflag;
 	struct thread *td;
 	struct fuse_vnode_data *fvdat = VTOFUD(vp);
+	struct timespec va_atime;
 	pid_t pid;
 	int err = 0;
+	bool atime_change, size_change;
 
 	/* NB: a_td will be NULL from some async kernel contexts */
 	td = ap->a_td ? ap->a_td : curthread;
@@ -818,8 +806,14 @@ fuse_vnop_close(struct vop_close_args *ap)
 		cred = td->td_ucred;
 
 	err = fuse_flush(vp, cred, pid, fflag);
-	ASSERT_CACHED_ATTRS_LOCKED(vp);	/* For fvdat->flag */
-	if (err == 0 && (fvdat->flag & FN_ATIMECHANGE) && !vfs_isrdonly(mp)) {
+
+	CACHED_ATTR_LOCK(vp);
+	atime_change = fvdat->flag & FN_ATIMECHANGE;
+	size_change = fvdat->flag & FN_SIZECHANGE;
+	va_atime = fvdat->cached_attrs.va_atime;
+	CACHED_ATTR_UNLOCK(vp);
+
+	if (err == 0 && atime_change && !vfs_isrdonly(mp)) {
 		struct vattr vap;
 		struct fuse_data *data;
 		int dataflags;
@@ -836,19 +830,28 @@ fuse_vnop_close(struct vop_close_args *ap)
 		}
 		if (access_e == 0) {
 			VATTR_NULL(&vap);
-			ASSERT_CACHED_ATTRS_LOCKED(vp);
-			vap.va_atime = fvdat->cached_attrs.va_atime;
+			vap.va_atime = va_atime;
 			/*
 			 * Ignore errors setting when setting atime.  That
 			 * should not cause close(2) to fail.
 			 */
+			CACHED_ATTR_LOCK(vp);
 			fuse_internal_setattr(vp, &vap, td, NULL);
+			CACHED_ATTR_UNLOCK(vp);
 		}
 	}
 	/* TODO: close the file handle, if we're sure it's no longer used */
-	if ((fvdat->flag & FN_SIZECHANGE) != 0) {
+	if (size_change != 0) {
+		/* 
+		 * NB: this may panic if MNTK_SHARED_WRITES is ever enabled.
+		 * For now it cannot, because it is illegal to use fexecve to
+		 * execute a file descriptor open for writing, there's no way
+		 * to dirty a file's size without writing to it, and we don't
+		 * set MNTK_SHARED_WRITES.
+		 */
 		fuse_vnode_savesize(vp, cred, pid);
 	}
+
 	return err;
 }
 

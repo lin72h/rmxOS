@@ -267,7 +267,7 @@ init_secondary(void)
 	}
 
 	if (!fred) {
-		/* The DB# stack, used for for IDT, runs on IST4. */
+		/* The DB# stack, used for IDT, runs on IST4. */
 		np = ((struct nmi_pcpu *)&dbg_stack[DBG_STACK_SIZE]) - 1;
 		np->np_pcpu = (register_t)pc;
 		pc->pc_common_tss.tss_ist4 = (long)np;
@@ -295,6 +295,8 @@ init_secondary(void)
 		amd64_cpu_init_fred();
 	else
 		lidt(&r_idt);
+
+	amd64_cpu_init_msr_memctl();
 
 	gsel_tss = GSEL(GPROC0_SEL, SEL_KPL);
 	ltr(gsel_tss);

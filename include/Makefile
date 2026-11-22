@@ -197,6 +197,11 @@ NVMFDIR=	${INCLUDEDIR}/dev/nvmf
 PCI=		pcireg.h
 PCIDIR=		${INCLUDEDIR}/dev/pci
 
+.PATH: ${SRCTOP}/sys/dev/ufshci
+UFSHCI=		ufshci.h \
+		ufshci_ioctl.h
+UFSHCIDIR=	${INCLUDEDIR}/dev/ufshci
+
 .PATH: ${SRCTOP}/sys/dev/veriexec
 VERIEXEC=	veriexec_ioctl.h
 VERIEXECDIR=	${INCLUDEDIR}/dev/veriexec
@@ -288,6 +293,7 @@ INCSGROUPS=	INCS \
 		RPC \
 		SECAUDIT \
 		TEKEN \
+		UFSHCI \
 		VERIEXEC \
 		WG
 

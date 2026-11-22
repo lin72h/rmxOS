@@ -73,11 +73,12 @@ static vop_readdir_t	fdesc_readdir;
 static vop_readlink_t	fdesc_readlink;
 static vop_reclaim_t	fdesc_reclaim;
 static vop_setattr_t	fdesc_setattr;
+static vop_access_t	fdesc_access;
 
 static struct vop_vector fdesc_vnodeops = {
 	.vop_default =		&default_vnodeops,
 
-	.vop_access =		VOP_NULL,
+	.vop_access =		fdesc_access,
 	.vop_getattr =		fdesc_getattr,
 	.vop_lookup =		fdesc_lookup,
 	.vop_open =		fdesc_open,
@@ -287,11 +288,13 @@ fdesc_lookup(struct vop_lookup_args *ap)
 	char *pname = cnp->cn_nameptr;
 	struct thread *td = curthread;
 	struct file *fp;
+	struct filecaps fcaps;
 	struct fdesc_get_ino_args arg;
+	struct vnode *fvp;
 	int nlen = cnp->cn_namelen;
 	u_int fd, fd1;
 	int error;
-	struct vnode *fvp;
+	uint8_t fflags;
 
 	if ((cnp->cn_flags & ISLASTCN) &&
 	    (cnp->cn_nameiop == DELETE || cnp->cn_nameiop == RENAME)) {
@@ -332,7 +335,8 @@ fdesc_lookup(struct vop_lookup_args *ap)
 	/*
 	 * No rights to check since 'fp' isn't actually used.
 	 */
-	if ((error = fget(td, fd, &cap_no_rights, &fp)) != 0)
+	if ((error = fget_cap(td, fd, &cap_no_rights, &fflags, &fp,
+	    &fcaps)) != 0)
 		goto bad;
 
 	/*
@@ -366,6 +370,36 @@ fdesc_lookup(struct vop_lookup_args *ap)
 		if (error == 0 && VN_IS_DOOMED(dvp))
 			error = ENOENT;
 	}
+
+	/*
+	 * Make sure that a nodup mount can't be used to launder away monotonic
+	 * file descriptor metadata, namely UF_RESOLVE_BENEATH and capability
+	 * rights.
+	 */
+	if (error == 0 && fvp->v_mount != dvp->v_mount &&
+	    ((fflags & UF_RESOLVE_BENEATH) != 0 || !filecaps_full(&fcaps))) {
+		struct nameidata *ndp;
+
+		ndp = vfs_lookup_nameidata(cnp);
+		if (ndp == NULL) {
+			vput(fvp);
+			error = ENOTCAPABLE;
+		} else {
+			if ((fflags & UF_RESOLVE_BENEATH) != 0)
+				ndp->ni_resflags |= NIRES_BENEATH;
+			if (!filecaps_full(&fcaps)) {
+				if (cap_rights_is_valid(
+				    &ndp->ni_filecaps.fc_rights))
+					filecaps_intersect(&fcaps,
+					    &ndp->ni_filecaps);
+				else
+					filecaps_move(&fcaps,
+					    &ndp->ni_filecaps);
+				ndp->ni_resflags |= NIRES_STRICTREL;
+			}
+		}
+	}
+	filecaps_free(&fcaps);
 
 	if (error)
 		goto bad;
@@ -491,19 +525,24 @@ fdesc_setattr(struct vop_setattr_args *ap)
 		return (EACCES);
 
 	fd = VTOFDESC(ap->a_vp)->fd_fd;
+	cap_rights_init(&rights, CAP_FUTIMES, CAP_FCHMOD, CAP_FCHOWN,
+	    CAP_FCHFLAGS);
 
 	/*
 	 * Allow setattr where there is an underlying vnode.
 	 * For O_PATH descriptors, disallow truncate.
 	 */
 	if (vap->va_size != VNOVAL) {
-		error = getvnode(td, fd,
-		    cap_rights_init_one(&rights, CAP_EXTATTR_SET), &fp);
+		cap_rights_set(&rights, CAP_FTRUNCATE);
+		error = getvnode(td, fd, &rights, &fp);
+		if (error == 0 && (fp->f_flag & FWRITE) == 0) {
+			error = EACCES;
+			goto out;
+		}
 	} else {
-		error = getvnode_path(td, fd,
-		    cap_rights_init_one(&rights, CAP_EXTATTR_SET), NULL, &fp);
+		error = getvnode_path(td, fd, &rights, NULL, &fp);
 	}
-	if (error) {
+	if (error != 0) {
 		/*
 		 * getvnode() returns EINVAL if the file descriptor is not
 		 * backed by a vnode.  Silently drop all changes except
@@ -524,7 +563,10 @@ fdesc_setattr(struct vop_setattr_args *ap)
 		VOP_UNLOCK(vp);
 		vn_finished_write(mp);
 	}
+out:
+	VOP_UNLOCK(ap->a_vp);
 	fdrop(fp, td);
+	vn_lock(ap->a_vp, LK_EXCLUSIVE | LK_RETRY);
 	return (error);
 }
 
@@ -669,5 +711,36 @@ fdesc_readlink(struct vop_readlink_args *va)
 
 out:
 	vn_lock(vn, lockflags | LK_RETRY);
+	return (error);
+}
+
+static int
+fdesc_access(struct vop_access_args *va)
+{
+	struct vnode *vp;
+	struct fdescnode *fd;
+	struct file *fp;
+	int error, flags, locked;
+
+	vp = va->a_vp;
+	fd = VTOFDESC(vp);
+	if (fd->fd_type == Froot)
+		return (0);
+	error = fget(va->a_td, fd->fd_fd, &cap_no_rights, &fp);
+	if (error != 0)
+		return (error);
+	flags = 0;
+	if ((va->a_accmode & VREAD) != 0)
+		flags |= FREAD;
+	if ((va->a_accmode & (VWRITE | VAPPEND)) != 0)
+		flags |= FWRITE;
+	if ((va->a_accmode & VEXEC) != 0)
+		flags |= FEXEC;
+	if ((flags & fp->f_flag) != flags)
+		error = EACCES;
+	locked = VOP_ISLOCKED(vp);
+	VOP_UNLOCK(vp);
+	fdrop(fp, va->a_td);
+	vn_lock(vp, locked | LK_RETRY);
 	return (error);
 }
