@@ -396,8 +396,8 @@ plist_to_launch_data_file(const char *path, char *error, size_t error_size)
 		nread = fread(buf, 1, sizeof(buf), f);
 		done = feof(f);
 		if (XML_Parse(p.parser, buf, (int)nread, done) == XML_STATUS_ERROR) {
-			set_error(&p, "%s: XML parse error at line %lu: %s", path,
-			    XML_GetCurrentLineNumber(p.parser),
+			set_error(&p, "%s: XML parse error at line %ju: %s", path,
+			    (uintmax_t)XML_GetCurrentLineNumber64(p.parser),
 			    XML_ErrorString(XML_GetErrorCode(p.parser)));
 			break;
 		}
