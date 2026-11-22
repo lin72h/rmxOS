@@ -59,4 +59,15 @@ container_verbs_test: ${.CURDIR}/container_verbs.zig
 container_dash_s.so: ${.CURDIR}/container_dash_s.zig
 	${ZIG} build-lib ${.ALLSRC} -dynamic -lc --sysroot ${ZIG_SYSROOT} -femit-bin=${.TARGET}
 
+SCRIPTS+= stop_fallback_test
+stop_fallback_test: ${.CURDIR}/stop_fallback.zig ${.CURDIR}/job_fixture.zig ${.CURDIR}/log_store_scope.zig ${.CURDIR}/first_ready_proof.zig ${.CURDIR}/logging_budget.zig ${.CURDIR}/logging_budget.json
+	${ZIG} build-exe ${.ALLSRC:[1]} ${OBJTOP}/lib/liblogstore/liblogstore.a \
+	    ${SYSROOT}/usr/lib/libdispatch.so.5 ${SYSROOT}/usr/lib/liblaunch.so.5 \
+	    ${SYSROOT}/usr/lib/libnotify.so.5 ${SYSROOT}/usr/lib/libBlocksRuntime.so.0 \
+	    ${SYSROOT}/lib/libutil.so.10 ${SYSROOT}/lib/libthr.so.3 ${SYSROOT}/lib/libc.so.7 \
+	    ${SYSROOT}/lib/libsys.so.7 ${SYSROOT}/usr/lib/libmach.so.5 ${ATF_C_ARCHIVE} \
+	    -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf \
+	    -I${SRCTOP}/lib/liblogstore -I${SRCTOP}/lib/liblaunch -I${SRCTOP}/lib/libxpc \
+	    -I${SRCTOP}/include/apple -I${SRCTOP}/include -I${SRCTOP}/sys -femit-bin=${.TARGET}
+
 .include <bsd.test.mk>

@@ -82,6 +82,7 @@ proc_terminate(int pid)
 	if ((err = p_cansignal(curthread, p, SIGKILL)) == 0) {
 		/* p_cansignal returns 0 if you can, or an error if you can't. */
 		kern_psignal(p, SIGTERM);
+		curthread->td_retval[0] = SIGTERM;
 	}
 	PROC_UNLOCK(p);
 	return (err);
