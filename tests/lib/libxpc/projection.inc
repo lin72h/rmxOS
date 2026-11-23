@@ -12,3 +12,5 @@ unsigned op502_interrupted(struct xpc_connection *c) { return c->xc_interrupted;
 void op502_peer(struct xpc_connection *c) { c->xc_parent=c; }
 int op507_proc_pid(struct xpc_connection *c) { int p; pthread_mutex_lock(&c->xc_remote_lock); p=c->xc_proc_pid; pthread_mutex_unlock(&c->xc_remote_lock); return p; }
 int op507_remote_pid(struct xpc_connection *c) { int p; pthread_mutex_lock(&c->xc_remote_lock); p=c->xc_remote_pid; pthread_mutex_unlock(&c->xc_remote_lock); return p; }
+/* xpc_connection_create(NULL) makes a listener; xpc_receive.zig projects its own remote into an ordinary one. */
+void op751_ordinary(struct xpc_connection *c) { c->xc_listener=false; }

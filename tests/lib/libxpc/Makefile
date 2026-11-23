@@ -5,6 +5,7 @@ SCRIPTS+= receive_pending_test
 SCRIPTS+= raw_drop_test
 SCRIPTS+= object_model_test decode_lifetime_test stage_a_test bsm_header_test
 SCRIPTS+= ool_limit_test
+SCRIPTS+= endpoint_listener_test
 CLEANFILES+= ${SCRIPTS}
 SCRIPTSDIR= ${TESTSDIR}
 ZIG?= zig
@@ -12,6 +13,9 @@ ZIG_SYSROOT?= ${SYSROOT}
 ATF_C_ARCHIVE?= /Users/me/wip-mach/rmx-implementer/build/op395/obj/Users/me/wip-mach/rmx-implementer/build/op395/source/amd64.amd64/lib/atf/libatf-c/libprivateatf-c.a
 XPC_SO?= ${SYSROOT}/usr/lib/libxpc.so.5
 XPC_TEST_RPATH?= /usr/tests/lib/libxpc/lib
+# The product library by its soname, for programs with no run path; XPC_SO
+# may name the consumer fixture instead.
+XPC_LIB_SO?= ${SYSROOT}/usr/lib/libxpc.so.5
 raw_drop_test: ${.CURDIR}/raw_drop.zig
 	${ZIG} build-exe ${.ALLSRC} ${XPC_SO} ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/usr/lib/libnv.so ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc \
 	    --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -idirafter ${SYSROOT}/usr/include/apple -I${SRCTOP}/contrib/atf \
@@ -33,7 +37,11 @@ bsm_header_test: ${.CURDIR}/bsm_header.zig
 	${ZIG} build-exe ${.ALLSRC} ${SYSROOT}/usr/lib/libbsm.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc \
 	    --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf -femit-bin=${.TARGET}
 ool_limit_test: ${.CURDIR}/ool_limit.zig
-	${ZIG} build-exe ${.ALLSRC} ${XPC_SO} ${SYSROOT}/usr/lib/libdispatch.so.5 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/usr/lib/libBlocksRuntime.so \
+	${ZIG} build-exe ${.ALLSRC} ${XPC_LIB_SO} ${SYSROOT}/usr/lib/libdispatch.so.5 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/usr/lib/libBlocksRuntime.so \
+	    ${SYSROOT}/lib/libthr.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include \
+	    -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -femit-bin=${.TARGET}
+endpoint_listener_test: ${.CURDIR}/endpoint_listener.zig
+	${ZIG} build-exe ${.ALLSRC} ${XPC_LIB_SO} ${SYSROOT}/usr/lib/libdispatch.so.5 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/usr/lib/libBlocksRuntime.so \
 	    ${SYSROOT}/lib/libthr.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include \
 	    -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -femit-bin=${.TARGET}
 xpc_receive_test: ${.CURDIR}/xpc_receive.zig ${.CURDIR}/reconnect.zig

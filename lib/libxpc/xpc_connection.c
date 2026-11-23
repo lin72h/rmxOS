@@ -81,9 +81,29 @@ static void xpc_connection_release_local(mach_port_t port, bool send);
 static void xpc_connection_unlist(struct xpc_connection *conn);
 static dispatch_queue_t xpc_connection_reply_queue(struct xpc_connection *conn);
 static void xpc_send(xpc_connection_t xconn, xpc_object_t message, uint64_t id);
+static struct xpc_connection *xpc_connection_alloc(const char *name,
+    dispatch_queue_t targetq);
+static bool xpc_port_add_ref(mach_port_t name);
+static bool xpc_connection_remote_alive(struct xpc_connection *conn);
 
+/*
+ * connection.h: "If NULL, an anonymous listener connection will be created."
+ * libxpc's own unnamed connections (a client from an endpoint, a listener's
+ * peer) come from xpc_connection_alloc() and are not listeners.
+ */
 xpc_connection_t
 xpc_connection_create(const char *name, dispatch_queue_t targetq)
+{
+	struct xpc_connection *conn;
+
+	conn = xpc_connection_alloc(name, targetq);
+	if (conn != NULL && name == NULL)
+		conn->xc_listener = true;
+	return (conn);
+}
+
+static struct xpc_connection *
+xpc_connection_alloc(const char *name, dispatch_queue_t targetq)
 {
 	int error;
 	kern_return_t kr;
@@ -191,11 +211,12 @@ xpc_connection_create_mach_service(const char *name, dispatch_queue_t targetq,
 {
 	struct xpc_connection *conn;
 
-	conn = xpc_connection_create(name, targetq);
+	conn = xpc_connection_alloc(name, targetq);
 	if (conn == NULL)
 		return (NULL);
 
 	conn->xc_flags = flags;
+	conn->xc_listener = (flags & XPC_CONNECTION_MACH_SERVICE_LISTENER) != 0;
 
 	if (!(flags & XPC_CONNECTION_MACH_SERVICE_LISTENER) &&
 	    !strcmp(name, "bootstrap")) {
@@ -214,6 +235,9 @@ xpc_connection_attach(struct xpc_connection *conn)
 	kern_return_t kr;
 	mach_port_t port;
 
+	/* Once its listener is gone, a connection from an endpoint is invalid. */
+	if (conn->xc_from_endpoint)
+		return (xpc_connection_remote_alive(conn));
 	if (!conn->xc_mach_service)
 		return (true);
 
@@ -259,12 +283,73 @@ xpc_connection_create_from_endpoint(xpc_endpoint_t endpoint)
 	if (xo == NULL || xo->xo_xpc_type != _XPC_TYPE_ENDPOINT)
 		return (NULL);
 
-	conn = xpc_connection_create(NULL, NULL);
+	conn = xpc_connection_alloc(NULL, NULL);
 	if (conn == NULL)
 		return (NULL);
 
-	conn->xc_remote_port = xo->xo_port;
+	/*
+	 * The connection takes its own reference on the endpoint's name: a send
+	 * right, or a dead name once the listener is gone. Without one, or with
+	 * a dead name, activation reports XPC_ERROR_CONNECTION_INVALID.
+	 * Cancellation or the peer's death releases it (drop_rights).
+	 */
+	conn->xc_from_endpoint = true;
+	if (xpc_port_add_ref(xo->xo_port)) {
+		conn->xc_remote_port = xo->xo_port;
+		conn->xc_owns_remote_port = true;
+	}
 	return (conn);
+}
+
+/*
+ * Take one more user reference on name for a new holder: a send right (made
+ * from the receive right when the task holds no send right), or a dead-name
+ * reference once the port has died. False when name denotes neither; then
+ * nothing was taken.
+ */
+static bool
+xpc_port_add_ref(mach_port_t name)
+{
+	mach_port_type_t type;
+	kern_return_t kr;
+	int tries;
+
+	if (!MACH_PORT_VALID(name))
+		return (false);
+	/* A port that dies between the two calls is read again as a dead name. */
+	for (tries = 0; tries < 2; tries++) {
+		if (mach_port_type(mach_task_self(), name, &type) != KERN_SUCCESS)
+			return (false);
+		if (type & MACH_PORT_TYPE_SEND)
+			kr = mach_port_mod_refs(mach_task_self(), name,
+			    MACH_PORT_RIGHT_SEND, 1);
+		else if (type & MACH_PORT_TYPE_RECEIVE)
+			kr = mach_port_insert_right(mach_task_self(), name, name,
+			    MACH_MSG_TYPE_MAKE_SEND);
+		else if (type & MACH_PORT_TYPE_DEAD_NAME)
+			kr = mach_port_mod_refs(mach_task_self(), name,
+			    MACH_PORT_RIGHT_DEAD_NAME, 1);
+		else
+			return (false);
+		if (kr == KERN_SUCCESS)
+			return (true);
+	}
+	return (false);
+}
+
+/* The remote is a live send right: not null, not a dead name. */
+static bool
+xpc_connection_remote_alive(struct xpc_connection *conn)
+{
+	mach_port_type_t type;
+	bool alive;
+
+	pthread_mutex_lock(&conn->xc_remote_lock);
+	alive = conn->xc_remote_port != MACH_PORT_NULL &&
+	    mach_port_type(mach_task_self(), conn->xc_remote_port, &type) ==
+	    KERN_SUCCESS && (type & MACH_PORT_TYPE_SEND) != 0;
+	pthread_mutex_unlock(&conn->xc_remote_lock);
+	return (alive);
 }
 
 void
@@ -596,14 +681,27 @@ xpc_endpoint_t
 xpc_endpoint_create(xpc_connection_t connection)
 {
 	struct xpc_connection *conn;
+	struct xpc_object *xo;
 	xpc_u val;
 
 	conn = connection;
 	if (conn == NULL)
 		return (NULL);
 
-	val.port = conn->xc_local_port;
-	return (_xpc_prim_create(_XPC_TYPE_ENDPOINT, val, 0));
+	memset(&val, 0, sizeof(val));	/* xo_port starts as MACH_PORT_NULL */
+	xo = _xpc_prim_create_flags(_XPC_TYPE_ENDPOINT, val, 0, _XPC_OWNS_PORT);
+	if (xo == NULL)
+		return (NULL);
+	/*
+	 * The endpoint holds its own send right to the connection's port until
+	 * its last reference goes (xpc_object_destroy). drop_rights releases the
+	 * port under xc_remote_lock, so the right is taken while it is held.
+	 */
+	pthread_mutex_lock(&conn->xc_remote_lock);
+	if (conn->xc_owns_local_port && xpc_port_add_ref(conn->xc_local_port))
+		xo->xo_port = conn->xc_local_port;
+	pthread_mutex_unlock(&conn->xc_remote_lock);
+	return (xo);
 }
 
 void
@@ -1285,7 +1383,8 @@ xpc_connection_receive_one(struct xpc_connection *conn)
 
 	debugf("message=%p, id=%d, remote=<%d>", result, id, remote);
 
-	if (conn->xc_flags & XPC_CONNECTION_MACH_SERVICE_LISTENER) {
+	/* A listener (Mach service or anonymous) gives its handler peers. */
+	if (conn->xc_listener) {
 		pthread_mutex_lock(&conn->xc_lock);
 		TAILQ_FOREACH(peer, &conn->xc_peers, xc_link) {
 			if (remote == peer->xc_remote_port) {
@@ -1303,7 +1402,7 @@ xpc_connection_receive_one(struct xpc_connection *conn)
 		debugf("new peer on port <%u>", remote);
 
 		/* New peer */
-		peer = xpc_connection_create(NULL, NULL);
+		peer = xpc_connection_alloc(NULL, NULL);
 		if (peer == NULL) {
 			xpc_release(result);
 			(void)mach_port_deallocate(mach_task_self(), remote);

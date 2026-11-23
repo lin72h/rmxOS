@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: BSD-2-Clause
 // A dictionary whose data value is larger than mach.ool_max_message, sent on
-// an in-process connection: an anonymous connection and a client made from
-// its endpoint, so nothing goes to launchd. libxpc sends inline, so the size
+// an in-process connection: an anonymous listener, the peer it hands out, and
+// a client made from its endpoint, so nothing goes to launchd. The server's
+// events are its peer's (op-751: xpc_connection_create(NULL) is a listener,
+// whose handler receives connections). libxpc sends inline, so the size
 // is its own to refuse (xpc_pipe_send's EMSGSIZE, xpc_misc.c); the send
 // returns nothing, and the refusal reaches the caller as an event on the
 // client connection. The case records those events, then requires that a
@@ -48,6 +50,7 @@ extern fn dispatch_release(O) void;
 extern const _xpc_error_connection_invalid: u8;
 extern const _xpc_error_connection_interrupted: u8;
 extern const _xpc_type_dictionary: u8;
+extern const _xpc_type_connection: u8;
 extern var _NSConcreteStackBlock: [32]?*anyopaque;
 extern fn _Block_copy(?*const anyopaque) ?*anyopaque;
 extern fn _Block_release(?*const anyopaque) void;
@@ -131,6 +134,24 @@ fn setHandler(conn: O, events: *Events) void {
     xpc_connection_set_event_handler(conn, b);
     _Block_release(b);
 }
+// The server is a listener: it gives each peer a handler that records into
+// the server's events and resumes it; its own other events are recorded too.
+var peers: u64 = 0;
+fn listenerInvoke(b: *Block, o: O) callconv(.c) void {
+    if (xpc_get_type(o) == @as(?*const anyopaque, @ptrCast(&_xpc_type_connection))) {
+        _ = @atomicRmw(u64, &peers, .Add, 1, .seq_cst);
+        setHandler(o, b.events);
+        xpc_connection_resume(o);
+        return;
+    }
+    b.events.record(o);
+}
+fn setListenerHandler(conn: O, events: *Events) void {
+    var literal = Block{ .isa = @ptrCast(&_NSConcreteStackBlock), .flags = 0, .reserved = 0, .invoke = &listenerInvoke, .descriptor = &descriptor, .events = events };
+    const b = _Block_copy(&literal);
+    xpc_connection_set_event_handler(conn, b);
+    _Block_release(b);
+}
 
 fn read(name: [*:0]const u8) u64 {
     var value: c_ulong = 0;
@@ -173,7 +194,7 @@ fn body(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const server = xpc_connection_create(null, server_q);
     dispatch_release(server_q);
     if (server == null) c.atf_tc_fail("anonymous connection");
-    setHandler(server, &server_events);
+    setListenerHandler(server, &server_events);
     xpc_connection_resume(server);
     const endpoint = xpc_endpoint_create(server);
     const client = xpc_connection_create_from_endpoint(endpoint);
@@ -205,6 +226,7 @@ fn body(_: [*c]const c.atf_tc_t) callconv(.c) void {
     _ = c.printf("xpc_ool_limit max=%lu data=%lu invalid=0x%lx interrupted=0x%lx\n", max, @as(c_ulong, len), INVALID, INTERRUPTED);
     client_events.show("client");
     server_events.show("server");
+    _ = c.printf("xpc_ool_limit peers=%lu\n", @atomicLoad(u64, &peers, .seq_cst));
     _ = c.printf("xpc_ool_limit expected_small_arrived=1 observed_small_arrived=%d expected_big_arrived=0 observed_big_arrived=%d expected_bytes=%lu observed_bytes=%lu expected_pid1=launchd observed_pid1=%s\n", @as(c_int, @intFromBool(arrived)), @as(c_int, @intFromBool(big_arrived)), start, after, if (have_pid1) @as([*:0]const u8, @ptrCast(&comm)) else "unread");
 
     xpc_connection_cancel(client);

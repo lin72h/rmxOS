@@ -170,6 +170,11 @@ xpc_object_destroy(struct xpc_object *xo)
 	if (xo->xo_xpc_type == _XPC_TYPE_FD)
 		(void)close(xo->xo_fd);
 
+	/* Its send right, or the dead name it became; other endpoints borrow. */
+	if (xo->xo_xpc_type == _XPC_TYPE_ENDPOINT &&
+	    (xo->xo_flags & _XPC_OWNS_PORT) != 0 && xo->xo_port != MACH_PORT_NULL)
+		(void)mach_port_deallocate(mach_task_self(), xo->xo_port);
+
 	if (xo->xo_reply_port != MACH_PORT_NULL)
 		(void)mach_port_deallocate(mach_task_self(), xo->xo_reply_port);
 	free(xo->xo_audit_token);

@@ -88,6 +88,8 @@ typedef union {
 
 #define _XPC_FROM_WIRE		0x1
 #define _XPC_GLOBAL_OBJECT_FLAG	0x2
+/* An endpoint from xpc_endpoint_create(): it holds a reference on xo_port. */
+#define _XPC_OWNS_PORT		0x4
 struct xpc_object {
 	uint8_t			xo_xpc_type;
 	uint16_t		xo_flags;
@@ -148,6 +150,8 @@ struct xpc_connection {
 	bool			xc_owns_local_send;	/* our uref on xc_local_port */
 	bool			xc_mach_service;	/* attach at activation */
 	bool			xc_listed;	/* in xc_parent's xc_peers */
+	bool			xc_listener;	/* hands each new remote out as a peer */
+	bool			xc_from_endpoint;	/* remote taken from an endpoint */
 	uid_t			xc_remote_euid;
 	gid_t			xc_remote_guid;
 	pid_t			xc_remote_pid;

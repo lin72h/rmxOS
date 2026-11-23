@@ -78,9 +78,32 @@ fn handler(ctx: O, reply: O) callconv(.c) void {
     _ = c.sem_post(slot.done);
 }
 fn empty(_: O) callconv(.c) void {}
+extern fn xpc_endpoint_create(O) O;
+extern fn xpc_connection_create_from_endpoint(O) O;
+extern fn xpc_connection_set_target_queue(O, O) void;
+// macOS's shape for a sender (op-751): xpc_connection_create(NULL) is an
+// anonymous listener, and a sender is a connection made from its endpoint,
+// here targeting queue. The listener is never resumed: these cases only queue
+// and cancel requests on the sender.
+const Sender = struct { listener: O, conn: O };
+fn sender(queue: O) Sender {
+    const listener = xpc_connection_create(null, null);
+    need(listener != null, "anonymous listener");
+    const endpoint = xpc_endpoint_create(listener);
+    need(endpoint != null, "listener endpoint");
+    const conn = xpc_connection_create_from_endpoint(endpoint);
+    xpc_release(endpoint);
+    if (conn != null) xpc_connection_set_target_queue(conn, queue);
+    return .{ .listener = listener, .conn = conn };
+}
+fn retire(listener: O) void {
+    xpc_connection_cancel(listener);
+    xpc_release(listener);
+}
 fn cancelled(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const queue = dispatch_queue_create("op736.cancelled", null);
-    const conn = xpc_connection_create(null, queue);
+    const s = sender(queue);
+    const conn = s.conn;
     const message = xpc_dictionary_create(null, null, 0);
     need(conn != null and message != null, "connection setup");
     xpc_connection_cancel(conn);
@@ -97,6 +120,7 @@ fn cancelled(_: [*c]const c.atf_tc_t) callconv(.c) void {
     _ = c.printf("pending_cancelled expected_handlers=1 observed_handlers=%u expected_invalid=1 observed_invalid=%u sync_invalid=1\n", slot.calls, slot.invalid);
     xpc_release(message);
     xpc_release(conn);
+    retire(s.listener);
     dispatch_release(queue);
     _ = c.sem_destroy(&done);
 }
@@ -110,7 +134,8 @@ fn sendPending(ctx: O) callconv(.c) void {
 }
 fn cancelPending(_: [*c]const c.atf_tc_t) callconv(.c) void {
     replies = dispatch_queue_create("op736.replies", null);
-    pending_conn = xpc_connection_create(null, replies);
+    const s = sender(replies);
+    pending_conn = s.conn;
     pending_message = xpc_dictionary_create(null, null, 0);
     need(pending_conn != null and pending_message != null, "pending setup");
     const sendq = op500_send_queue(pending_conn);
@@ -138,13 +163,15 @@ fn cancelPending(_: [*c]const c.atf_tc_t) callconv(.c) void {
     _ = c.printf("pending_cancel expected_entries=100 observed_entries=100 expected_handlers=100 observed_handlers=100\n");
     xpc_release(pending_message);
     xpc_release(pending_conn);
+    retire(s.listener);
     dispatch_release(replies);
     _ = c.sem_destroy(&done);
     _ = c.sem_destroy(&submitted);
 }
 fn allocFailure(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const queue = dispatch_queue_create("op736.alloc", null);
-    const conn = xpc_connection_create(null, queue);
+    const s = sender(queue);
+    const conn = s.conn;
     const message = xpc_dictionary_create(null, null, 0);
     var done: c.sem_t = undefined;
     need(conn != null and message != null and c.sem_init(&done, 0, 0) == 0, "allocation setup");
@@ -160,6 +187,7 @@ fn allocFailure(_: [*c]const c.atf_tc_t) callconv(.c) void {
     xpc_connection_cancel(conn);
     dispatch_sync_f(queue, null, &empty);
     xpc_release(conn);
+    retire(s.listener);
     xpc_release(message);
     dispatch_release(queue);
     _ = c.sem_destroy(&done);
@@ -301,7 +329,8 @@ fn initSem(sem: *c.sem_t) void {
 }
 fn ownedTarget(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const queue = dispatch_queue_create("op746.owned", null);
-    const conn = xpc_connection_create(null, queue);
+    const s = sender(queue);
+    const conn = s.conn;
     const message = xpc_dictionary_create(null, null, 0);
     need(queue != null and conn != null and message != null, "owned queue setup");
     var gate: Gate = undefined;
@@ -337,6 +366,7 @@ fn ownedTarget(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(slot.calls == 1 and slot.invalid == 1, "owned target completion exactly once");
     _ = c.printf("queue_owned_target expected_handlers=1 observed_handlers=%u connection_destroyed_after_release=1 queue_finalized=1\n", slot.calls);
     xpc_release(message);
+    retire(s.listener);
     for ([_]*c.sem_t{ &gate.entered, &gate.release, &done, &destroyed, &queueDestroyed }) |sem| _ = c.sem_destroy(sem);
 }
 var specific_key: u8 = 0;
@@ -354,7 +384,8 @@ fn failureQueue(_: [*c]const c.atf_tc_t) callconv(.c) void {
     var done: c.sem_t = undefined;
     initSem(&done);
     for (0..2) |kind| {
-        const conn = xpc_connection_create(null, queue);
+        const s = sender(queue);
+        const conn = s.conn;
         const message = xpc_dictionary_create(null, null, 0);
         need(conn != null and message != null, "failure queue setup");
         if (kind == 0) xpc_connection_cancel(conn) else op736_fail_pending_alloc();
@@ -370,6 +401,7 @@ fn failureQueue(_: [*c]const c.atf_tc_t) callconv(.c) void {
         _ = c.printf("failure_queue kind=%zu expected_handlers=1 observed_handlers=%u expected_queue=1 observed_queue=%u expected_after_return=1 observed_after_return=%u\n", kind, state.slot.calls, state.on_queue, state.after_return);
         xpc_connection_cancel(conn);
         xpc_release(conn);
+        retire(s.listener);
         xpc_release(message);
     }
     dispatch_release(queue);
@@ -387,7 +419,8 @@ fn syncWork(ctx: O) callconv(.c) void {
 extern fn op500_recv_queue(O) O;
 fn syncSuspended(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const queue = dispatch_queue_create("op746.sync", null);
-    const conn = xpc_connection_create(null, queue);
+    const s = sender(queue);
+    const conn = s.conn;
     const message = xpc_dictionary_create(null, null, 0);
     need(conn != null and message != null, "suspended sync setup");
     // This additional fixture suspension remains even when cancel balances the
@@ -408,6 +441,7 @@ fn syncSuspended(_: [*c]const c.atf_tc_t) callconv(.c) void {
     dispatch_sync_f(recvq, null, &empty);
     _ = c.printf("sync_suspended expected_invalid=1 observed_invalid=%u recv_queue_held=1\n", @as(u32, @intFromBool(state.invalid)));
     xpc_release(conn);
+    retire(s.listener);
     xpc_release(message);
     dispatch_release(worker);
     dispatch_release(queue);

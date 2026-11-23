@@ -39,6 +39,7 @@ extern fn op500_send_queue(O) O;
 extern fn op500_recv_queue(O) O;
 extern fn op502_interrupted(O) u32;
 extern fn op502_peer(O) void;
+extern fn op751_ordinary(O) void;
 extern fn op500_pipe_send(O, u32, u32, u64) c_int;
 const Hooks = extern struct {
     before_handler: *const fn (O) callconv(.c) void,
@@ -214,6 +215,9 @@ fn start(which: u32) O {
     need(conn != null, "connection");
     local = op500_local(conn);
     if (mode != 7 and mode != 8) {
+        // xpc_connection_create(NULL) makes an anonymous listener; this
+        // fixture's connection is an ordinary one whose remote it projects.
+        op751_ordinary(conn);
         need(c.mach_port_mod_refs(c.mach_task_self(), remote, c.MACH_PORT_RIGHT_SEND, 1) == 0, "owned remote uref");
         op500_remote(conn, remote);
     }
