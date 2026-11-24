@@ -346,6 +346,22 @@ fn gone(_: [*c]const c.atf_tc_t) callconv(.c) void {
     report("local_port_gone", &.{ c.MACH_RCV_INVALID_NAME, c.MACH_RCV_INVALID_NAME, 0, 1, 1, 1, 1, 1, 2 }, &.{ native_result, kr, p, cancelled, terminal_event, get(&invalid), get(&local_releases), get(&remote_releases), get(&source_completions) });
     conclude();
 }
+// The two requests, as the remote holds them (op-757): each carries a
+// send-once reply right, and a request the remote destroys is one it
+// released unanswered. The remote keeps them until the phase under test has
+// completed the calls, then lets them go.
+var held: [2][8192]u8 align(8) = undefined;
+var held_count: usize = 0;
+fn hold(name: u32) void {
+    const h: *c.mach_msg_header_t = @ptrCast(&held[held_count]);
+    @memset(&held[held_count], 0);
+    need(c.mach_msg(h, c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, held[held_count].len, name, 0, 0) == 0, "competing receive");
+    held_count += 1;
+}
+fn releaseHeld() void {
+    for (held[0..held_count]) |*m| c.mach_msg_destroy(@ptrCast(m));
+    held_count = 0;
+}
 fn pending() O {
     const q = dispatch_queue_create("op500.replies", null);
     need(q != null, "reply queue");
@@ -354,8 +370,9 @@ fn pending() O {
     for (&slots) |*slot| op500_reply(conn, obj, q, slot, &reply);
     xpc_release(obj);
     fence(op500_send_queue(conn));
-    drain(remote);
-    drain(remote);
+    held_count = 0;
+    hold(remote);
+    hold(remote);
     return q;
 }
 fn remoteDeath(_: [*c]const c.atf_tc_t) callconv(.c) void {
@@ -364,6 +381,8 @@ fn remoteDeath(_: [*c]const c.atf_tc_t) callconv(.c) void {
     need(c.mach_port_mod_refs(c.mach_task_self(), remote, c.MACH_PORT_RIGHT_RECEIVE, -1) == 0, "remote receive death");
     need(wait(&reply_done, 3000) and wait(&reply_done, 3000), "two remote-death replies");
     need(wait(&event_done, 3000), "remote-death event");
+    // The remote's death came first; its requests go now, unanswered.
+    releaseHeld();
     fence(q);
     fence(replies);
     const cancelled = op500_cancelled(conn);
@@ -439,6 +458,7 @@ fn recovery(fail_lookup: bool) void {
     const replies = pending();
     need(c.mach_port_mod_refs(c.mach_task_self(), remote, c.MACH_PORT_RIGHT_RECEIVE, -1) == 0, "first service death");
     need(wait(&reply_done, 3000) and wait(&reply_done, 3000) and wait(&event_done, 3000), "first death completions");
+    releaseHeld();
     fence(q);
     fence(replies);
     const old = remote;
@@ -461,13 +481,9 @@ fn recovery(fail_lookup: bool) void {
             var bytes: [8192]u8 align(8) = @splat(0);
             const h: *c.mach_msg_header_t = @ptrCast(&bytes);
             need(c.mach_msg(h, c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, bytes.len, remote, 3000, 0) == 0, "request on replacement right");
-            const Wire = extern struct { header: c.mach_msg_header_t, size: usize, id: u64 };
-            const wire: *Wire = @ptrCast(&bytes);
             request_seen = 1;
-            const response = xpc_dictionary_create(null, null, 0);
-            xpc_dictionary_set_uint64(response, "value", 42);
-            need(op500_pipe_send(response, h.msgh_remote_port, remote, wire.id) == 0, "reply over replacement right");
-            xpc_release(response);
+            // The reply goes on the request's own send-once right (op-757).
+            need(op507.replyOnce(&bytes, 42) == 0, "reply over replacement right");
             c.mach_msg_destroy(h);
             need(wait(&reply_done, 3000), "replacement reply received");
             need(wait(&retired_done, 3000), "old send source cancellation completed");
@@ -501,6 +517,7 @@ fn cancelling(_: [*c]const c.atf_tc_t) callconv(.c) void {
     xpc_connection_cancel(conn);
     xpc_release(conn);
     need(wait(&reply_done, 3000) and wait(&reply_done, 3000), "cancellation replies");
+    releaseHeld();
     fence(replies);
     const held = @intFromBool(op500_cancel_count(conn) > 0);
     const early_local = get(&local_releases);

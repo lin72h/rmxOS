@@ -138,3 +138,10 @@ mach_swtch_test: ${.CURDIR}/mach_swtch.zig ${.CURDIR}/mach_switch_abi.c
 	${ZIG} build-exe ${.CURDIR}/mach_swtch.zig ${.CURDIR}/mach_switch_abi.c -target x86_64-freebsd -lc -lpthread \
 	    --sysroot ${ZIG_SYSROOT} -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys \
 	    ${ATF_C_ARCHIVE} -femit-bin=${.TARGET}
+
+# op-757: a send-once right in a body port descriptor, dropped by another process.
+SCRIPTS+= mach_send_once_test
+mach_send_once_test: ${.CURDIR}/mach_send_once.zig
+	${ZIG} build-exe ${.ALLSRC} ${MACH_SO} ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc -lpthread \
+	    --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include -I${SRCTOP}/contrib/atf \
+	    -I${SRCTOP}/sys -femit-bin=${.TARGET}

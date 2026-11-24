@@ -45,22 +45,33 @@ struct xpc_send_context {
 	struct xpc_connection *xsc_connection;
 	xpc_object_t		xsc_message;
 	uint64_t		xsc_id;
+	struct xpc_pending_call *xsc_call;	/* a request's call, held */
 };
 
+/* The event's dictionary owns the header right it came with (xo_reply_port). */
 struct xpc_event_context {
 	struct xpc_connection *xec_connection;
 	xpc_object_t		xec_event;
-	mach_port_t		xec_remote_port;
 };
 
 static void xpc_connection_recv_message(void *context);
+static bool xpc_connection_arm_reply(struct xpc_connection *conn,
+    struct xpc_pending_call *call);
+static void xpc_connection_reply_event(void *context);
+static void xpc_connection_reply_cancelled(void *context);
+static bool xpc_connection_claim(struct xpc_connection *conn,
+    struct xpc_pending_call *call);
+static void xpc_pending_release(struct xpc_pending_call *call);
+static xpc_object_t xpc_connection_drop_error(struct xpc_connection *conn);
+static void xpc_connection_set_credentials(struct xpc_connection *conn,
+    audit_token_t *tok);
 static void xpc_connection_remote_dead(void *context);
 static void xpc_connection_remote_proc_dead(void *context);
 static void xpc_connection_arm_proc_source(struct xpc_connection *conn);
 static void xpc_connection_retire_proc_source(struct xpc_connection *conn);
 static bool xpc_connection_cancel_sources(struct xpc_connection *conn);
 static void xpc_connection_dispatch_event(struct xpc_connection *conn,
-    xpc_object_t event, mach_port_t remote_port);
+    xpc_object_t event);
 static void xpc_connection_invoke_event(void *context);
 static void xpc_connection_invoke_pending(void *context);
 static void xpc_connection_dispatch_pending(struct xpc_connection *conn,
@@ -80,7 +91,8 @@ static void xpc_connection_release_rights(struct xpc_connection *conn);
 static void xpc_connection_release_local(mach_port_t port, bool send);
 static void xpc_connection_unlist(struct xpc_connection *conn);
 static dispatch_queue_t xpc_connection_reply_queue(struct xpc_connection *conn);
-static void xpc_send(xpc_connection_t xconn, xpc_object_t message, uint64_t id);
+static bool xpc_send(xpc_connection_t xconn, xpc_object_t message, uint64_t id,
+    mach_port_t reply);
 static struct xpc_connection *xpc_connection_alloc(const char *name,
     dispatch_queue_t targetq);
 static bool xpc_port_add_ref(mach_port_t name);
@@ -499,6 +511,7 @@ xpc_connection_send_message(xpc_connection_t xconn,
 	send->xsc_connection = xpc_retain(conn);
 	send->xsc_message = xpc_retain(message);
 	send->xsc_id = id;
+	send->xsc_call = NULL;
 	dispatch_async_f(conn->xc_send_queue, send, xpc_connection_send_work);
 }
 
@@ -519,6 +532,14 @@ xpc_connection_send_message_with_reply(xpc_connection_t xconn,
 		call = NULL;
 	}
 #endif
+	if (call != NULL && send != NULL) {
+		/* The completion's reference; the reply source takes another. */
+		call->xp_refs = 1;
+		if (!xpc_connection_arm_reply(conn, call)) {
+			free(call);
+			call = NULL;
+		}
+	}
 	if (call == NULL || send == NULL) {
 		free(call);
 		free(send);
@@ -540,16 +561,21 @@ xpc_connection_send_message_with_reply(xpc_connection_t xconn,
 	send->xsc_connection = xpc_retain(conn);
 	send->xsc_message = xpc_retain(message);
 	send->xsc_id = call->xp_id;
+	send->xsc_call = call;
 	pthread_mutex_lock(&conn->xc_pending_lock);
 	if (atomic_load_acq_int(&conn->xc_cancelled)) {
 		pthread_mutex_unlock(&conn->xc_pending_lock);
 		xpc_release(send->xsc_message);
 		xpc_release(send->xsc_connection);
 		free(send);
+		dispatch_source_cancel(call->xp_reply_source);
 		call->xp_response = xpc_retain(XPC_ERROR_CONNECTION_INVALID);
 		xpc_connection_dispatch_pending(conn, call);
 		return;
 	}
+	/* The send's reference: the request names the reply port until sent. */
+	atomic_add_int(&call->xp_refs, 1);
+	call->xp_listed = true;
 	TAILQ_INSERT_TAIL(&conn->xc_pending, call, xp_link);
 	pthread_mutex_unlock(&conn->xc_pending_lock);
 	dispatch_async_f(conn->xc_send_queue, send, xpc_connection_send_work);
@@ -723,27 +749,52 @@ xpc_transaction_end(void)
 
 }
 
-static void
-xpc_send(xpc_connection_t xconn, xpc_object_t message, uint64_t id)
+/*
+ * Send one message on conn. True only when the kernel took it; a request's
+ * send-once right for reply went with it then.
+ */
+static bool
+xpc_send(xpc_connection_t xconn, xpc_object_t message, uint64_t id,
+    mach_port_t reply)
 {
 	struct xpc_connection *conn;
+	struct xpc_object *xo;
+	mach_port_t sonce;
 	kern_return_t kr;
 
 	debugf("connection=%p, message=%p, id=%d", xconn, message, id);
 
 	conn = xconn;
+	xo = message;
+	/*
+	 * A reply goes on its request's send-once right, which it takes out
+	 * first: no later send can name it. Once used, the reply goes nowhere.
+	 * An unsent right is released here; if it is live, the kernel tells
+	 * the requester. Either way the outcome is the requester's, not this
+	 * connection's.
+	 */
+	if (reply == MACH_PORT_NULL && xo->xo_xpc_type == _XPC_TYPE_DICTIONARY &&
+	    (xo->xo_flags & _XPC_REPLY) != 0) {
+		sonce = atomic_readandclear_32(&xo->xo_reply_once);
+		if (sonce == MACH_PORT_NULL)
+			return (false);
+		if (xpc_pipe_send_reply(message, sonce, id) == 0)
+			return (true);
+		(void)mach_port_deallocate(mach_task_self(), sonce);
+		return (false);
+	}
 	if (xpc_connection_can_reconnect(conn) &&
 	    atomic_load_acq_int(&conn->xc_interrupted) != 0 &&
 	    !xpc_connection_reconnect(conn)) {
 		if (!atomic_load_acq_int(&conn->xc_cancelled))
 			xpc_connection_invalidate(conn,
 			    XPC_ERROR_CONNECTION_INTERRUPTED);
-		return;
+		return (false);
 	}
 	if (atomic_load_acq_int(&conn->xc_cancelled))
-		return;
-	kr = xpc_pipe_send(message, conn->xc_remote_port,
-	    conn->xc_local_port, id);
+		return (false);
+	kr = xpc_pipe_send_request(message, conn->xc_remote_port,
+	    conn->xc_local_port, id, reply);
 
 	if (kr != KERN_SUCCESS) {
 		debugf("send failed, kr=%d", kr);
@@ -751,19 +802,42 @@ xpc_send(xpc_connection_t xconn, xpc_object_t message, uint64_t id)
 			xpc_connection_cancel(conn);
 		else
 			xpc_connection_interrupt(conn);
+		return (false);
 	}
+	return (true);
 }
 
 static void
 xpc_connection_send_work(void *context)
 {
 	struct xpc_send_context *send;
+	struct xpc_connection *conn;
+	struct xpc_pending_call *call;
+	bool sent;
 
 	send = context;
-	if (!atomic_load_acq_int(&send->xsc_connection->xc_cancelled))
-		xpc_send(send->xsc_connection, send->xsc_message, send->xsc_id);
+	conn = send->xsc_connection;
+	call = send->xsc_call;
+	sent = false;
+	if (!atomic_load_acq_int(&conn->xc_cancelled))
+		sent = xpc_send(conn, send->xsc_message, send->xsc_id,
+		    call != NULL ? call->xp_reply_port : MACH_PORT_NULL);
+	if (call != NULL) {
+		/*
+		 * No reply can come for a request that did not go out. Cancel,
+		 * interrupt and death complete their calls themselves; this is
+		 * for one they leave listed.
+		 */
+		if (!sent && xpc_connection_claim(conn, call)) {
+			dispatch_source_cancel(call->xp_reply_source);
+			call->xp_response = xpc_retain(xpc_connection_drop_error(conn));
+			xpc_connection_dispatch_pending(conn, call);
+		}
+		/* No send names the reply port after this. */
+		xpc_pending_release(call);
+	}
 	xpc_release(send->xsc_message);
-	xpc_release(send->xsc_connection);
+	xpc_release(conn);
 	free(send);
 }
 
@@ -777,16 +851,158 @@ xpc_connection_invoke_pending(void *context)
 		call->xp_handler(call->xp_response);
 	if (call->xp_response != NULL)
 		xpc_release(call->xp_response);
+	call->xp_response = NULL;
 	if (call->xp_handler != NULL)
 		Block_release(call->xp_handler);
+	call->xp_handler = NULL;
 	if (call->xp_queue != NULL)
 		dispatch_release(call->xp_queue);
-	if (call->xp_remote_port != MACH_PORT_NULL)
-		(void)mach_port_deallocate(mach_task_self(), call->xp_remote_port);
+	call->xp_queue = NULL;
+	/* The completion's reference. */
+	xpc_pending_release(call);
+}
+
+/*
+ * The last reference: no source watches the reply port, no send names it,
+ * and the handler has run. Only here is its receive right released.
+ */
+static void
+xpc_pending_release(struct xpc_pending_call *call)
+{
+
+	if (atomic_fetchadd_int(&call->xp_refs, -1) != 1)
+		return;
+	if (call->xp_reply_source != NULL)
+		dispatch_release(call->xp_reply_source);
+	if (call->xp_reply_port != MACH_PORT_NULL)
+		(void)mach_port_mod_refs(mach_task_self(), call->xp_reply_port,
+		    MACH_PORT_RIGHT_RECEIVE, -1);
 #ifdef XPC_CONSUMER_TESTING
 	op500_pending_free(call);
 #endif
 	free(call);
+}
+
+/*
+ * Detach call from xc_pending if it is still listed there. True makes the
+ * caller the one path that completes it: its reply, a send-once
+ * notification, a request that did not go out, or the flush of
+ * cancellation, interruption, the remote's death or destruction.
+ */
+static bool
+xpc_connection_claim(struct xpc_connection *conn, struct xpc_pending_call *call)
+{
+	bool claimed;
+
+	pthread_mutex_lock(&conn->xc_pending_lock);
+	claimed = call->xp_listed;
+	if (claimed) {
+		TAILQ_REMOVE(&conn->xc_pending, call, xp_link);
+		call->xp_listed = false;
+	}
+	pthread_mutex_unlock(&conn->xc_pending_lock);
+	return (claimed);
+}
+
+/*
+ * A request that will get no reply: dropped unanswered (the server released
+ * it, or exited holding it), or not sent. A connection that can reconnect
+ * is interrupted; one that cannot is invalid once its remote is gone, and
+ * interrupted while it lives.
+ */
+static xpc_object_t
+xpc_connection_drop_error(struct xpc_connection *conn)
+{
+
+	if (atomic_load_acq_int(&conn->xc_cancelled))
+		return (XPC_ERROR_CONNECTION_INVALID);
+	if (!xpc_connection_can_reconnect(conn) &&
+	    !xpc_connection_remote_alive(conn))
+		return (XPC_ERROR_CONNECTION_INVALID);
+	return (XPC_ERROR_CONNECTION_INTERRUPTED);
+}
+
+/*
+ * The call's reply port: a receive right of its own, and a source on it that
+ * takes the one message the request's send-once right can bring, the reply
+ * or the kernel's MACH_NOTIFY_SEND_ONCE. The source holds the connection and
+ * a reference on the call until its cancel handler. False: nothing was kept.
+ */
+static bool
+xpc_connection_arm_reply(struct xpc_connection *conn,
+    struct xpc_pending_call *call)
+{
+	dispatch_source_t source;
+	mach_port_t port;
+
+	if (mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE,
+	    &port) != KERN_SUCCESS)
+		return (false);
+	source = dispatch_source_create(DISPATCH_SOURCE_TYPE_MACH_RECV, port, 0,
+	    dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0));
+	if (source == NULL) {
+		(void)mach_port_mod_refs(mach_task_self(), port,
+		    MACH_PORT_RIGHT_RECEIVE, -1);
+		return (false);
+	}
+	call->xp_reply_port = port;
+	call->xp_reply_source = source;
+	call->xp_conn = xpc_retain(conn);
+	atomic_add_int(&call->xp_refs, 1);
+	dispatch_set_context(source, call);
+	dispatch_source_set_event_handler_f(source, xpc_connection_reply_event);
+	dispatch_source_set_cancel_handler_f(source,
+	    xpc_connection_reply_cancelled);
+	dispatch_resume(source);
+	return (true);
+}
+
+/* The reply port's one message. Whatever it is, the source is done after it. */
+static void
+xpc_connection_reply_event(void *context)
+{
+	struct xpc_pending_call *call;
+	struct xpc_connection *conn;
+	xpc_object_t result, error;
+	mach_port_t remote;
+	uint64_t id;
+	int kr;
+
+	call = context;
+	conn = call->xp_conn;
+	result = NULL;
+	kr = xpc_pipe_receive(call->xp_reply_port, &remote, &result, &id);
+	if (kr == MACH_RCV_TIMED_OUT || kr == MACH_RCV_INTERRUPTED)
+		return;
+	if (kr == 0) {
+		/* The reply owns the header right it came with, if any. */
+		((struct xpc_object *)result)->xo_reply_port = remote;
+		xpc_connection_set_credentials(conn,
+		    ((struct xpc_object *)result)->xo_audit_token);
+		error = NULL;
+	} else {
+		/* MACH_NOTIFY_SEND_ONCE, or a message that is no reply: dropped. */
+		error = xpc_connection_drop_error(conn);
+	}
+	if (xpc_connection_claim(conn, call)) {
+		call->xp_response = error != NULL ? xpc_retain(error) : result;
+		xpc_connection_dispatch_pending(conn, call);
+	} else if (result != NULL)
+		xpc_release(result);
+	dispatch_source_cancel(call->xp_reply_source);
+}
+
+static void
+xpc_connection_reply_cancelled(void *context)
+{
+	struct xpc_pending_call *call;
+	struct xpc_connection *conn;
+
+	call = context;
+	conn = call->xp_conn;
+	call->xp_conn = NULL;
+	xpc_pending_release(call);
+	xpc_release(conn);
 }
 
 /* Called only by the unique owner of a detached pending entry. */
@@ -810,9 +1026,13 @@ xpc_connection_complete_pending(struct xpc_connection *conn, xpc_object_t error)
 	TAILQ_INIT(&pending);
 	pthread_mutex_lock(&conn->xc_pending_lock);
 	TAILQ_CONCAT(&pending, &conn->xc_pending, xp_link);
+	TAILQ_FOREACH(call, &pending, xp_link)
+		call->xp_listed = false;
 	pthread_mutex_unlock(&conn->xc_pending_lock);
 	while ((call = TAILQ_FIRST(&pending)) != NULL) {
 		TAILQ_REMOVE(&pending, call, xp_link);
+		/* A reply or notification that comes now finds the call taken. */
+		dispatch_source_cancel(call->xp_reply_source);
 		call->xp_response = xpc_retain(error);
 		xpc_connection_dispatch_pending(conn, call);
 	}
@@ -851,30 +1071,23 @@ xpc_connection_invoke_event(void *context)
 			Block_release(handler);
 		xpc_connection_unlist(conn);
 	}
+	/* A message's header right goes with its last reference. */
 	xpc_release(event->xec_event);
-	if (event->xec_remote_port != MACH_PORT_NULL)
-		(void)mach_port_deallocate(mach_task_self(),
-		    event->xec_remote_port);
 	xpc_release(event->xec_connection);
 	free(event);
 }
 
 static void
-xpc_connection_dispatch_event(struct xpc_connection *conn, xpc_object_t event,
-    mach_port_t remote_port)
+xpc_connection_dispatch_event(struct xpc_connection *conn, xpc_object_t event)
 {
 	struct xpc_event_context *delivery;
 
 	/* Held on the receive queue until activation; the handler is read then. */
 	delivery = malloc(sizeof(*delivery));
-	if (delivery == NULL) {
-		if (remote_port != MACH_PORT_NULL)
-			(void)mach_port_deallocate(mach_task_self(), remote_port);
+	if (delivery == NULL)
 		return;
-	}
 	delivery->xec_connection = xpc_retain(conn);
 	delivery->xec_event = xpc_retain(event);
-	delivery->xec_remote_port = remote_port;
 	dispatch_async_f(conn->xc_recv_queue, delivery,
 	    xpc_connection_invoke_event);
 }
@@ -883,7 +1096,7 @@ static void
 xpc_connection_deliver_event(struct xpc_connection *conn, xpc_object_t error)
 {
 
-	xpc_connection_dispatch_event(conn, error, MACH_PORT_NULL);
+	xpc_connection_dispatch_event(conn, error);
 }
 
 static void
@@ -1355,7 +1568,6 @@ xpc_connection_set_credentials(struct xpc_connection *conn, audit_token_t *tok)
 static bool
 xpc_connection_receive_one(struct xpc_connection *conn)
 {
-	struct xpc_pending_call *call;
 	struct xpc_connection *peer;
 	xpc_handler_t handler;
 	xpc_object_t result;
@@ -1373,11 +1585,16 @@ xpc_connection_receive_one(struct xpc_connection *conn)
 		if (kr == MACH_RCV_PORT_DIED || kr == MACH_RCV_INVALID_NAME ||
 		    kr == MACH_RCV_PORT_CHANGED)
 			xpc_connection_cancel(conn);
-		return (false);
+		/* A message decode refused is destroyed; the next one is ours. */
+		return (kr == EINVAL || kr == ENOMEM);
 	}
+	/*
+	 * The message owns its header right from here, so its XPC_RPORT value
+	 * names a right it holds for as long as it lives.
+	 */
+	((struct xpc_object *)result)->xo_reply_port = remote;
 	if (atomic_load_acq_int(&conn->xc_cancelled)) {
 		xpc_release(result);
-		(void)mach_port_deallocate(mach_task_self(), remote);
 		return (false);
 	}
 
@@ -1389,9 +1606,7 @@ xpc_connection_receive_one(struct xpc_connection *conn)
 		TAILQ_FOREACH(peer, &conn->xc_peers, xc_link) {
 			if (remote == peer->xc_remote_port) {
 				if (!atomic_load_acq_int(&peer->xc_cancelled))
-					xpc_connection_dispatch_event(peer, result, remote);
-				else
-					(void)mach_port_deallocate(mach_task_self(), remote);
+					xpc_connection_dispatch_event(peer, result);
 				pthread_mutex_unlock(&conn->xc_lock);
 				xpc_release(result);
 				return (true);
@@ -1405,12 +1620,12 @@ xpc_connection_receive_one(struct xpc_connection *conn)
 		peer = xpc_connection_alloc(NULL, NULL);
 		if (peer == NULL) {
 			xpc_release(result);
-			(void)mach_port_deallocate(mach_task_self(), remote);
 			return (true);
 		}
 		peer->xc_parent = conn;
+		/* The peer's own reference on the name its messages come from. */
 		peer->xc_remote_port = remote;
-		peer->xc_owns_remote_port = true;
+		peer->xc_owns_remote_port = xpc_port_add_ref(remote);
 		xpc_connection_set_credentials(peer,
 		    ((struct xpc_object *)result)->xo_audit_token);
 
@@ -1431,27 +1646,18 @@ xpc_connection_receive_one(struct xpc_connection *conn)
 
 		/* The peer's receive queue holds the message until it is activated. */
 		if (!atomic_load_acq_int(&peer->xc_cancelled))
-			xpc_connection_dispatch_event(peer, result, MACH_PORT_NULL);
+			xpc_connection_dispatch_event(peer, result);
 		xpc_release(result);
 
 	} else {
 		xpc_connection_set_credentials(conn,
 		    ((struct xpc_object *)result)->xo_audit_token);
 
-		pthread_mutex_lock(&conn->xc_pending_lock);
-		TAILQ_FOREACH(call, &conn->xc_pending, xp_link) {
-			if (call->xp_id == id) {
-				TAILQ_REMOVE(&conn->xc_pending, call, xp_link);
-				call->xp_response = result;
-				call->xp_remote_port = remote;
-				pthread_mutex_unlock(&conn->xc_pending_lock);
-				xpc_connection_dispatch_pending(conn, call);
-				return (true);
-			}
-		}
-		pthread_mutex_unlock(&conn->xc_pending_lock);
-
-		xpc_connection_dispatch_event(conn, result, remote);
+		/*
+		 * Replies come to their calls' reply ports; a message here is an
+		 * event, whatever its ID.
+		 */
+		xpc_connection_dispatch_event(conn, result);
 		xpc_release(result);
 	}
 	return (true);

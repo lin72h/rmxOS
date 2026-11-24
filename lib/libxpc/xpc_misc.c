@@ -57,6 +57,23 @@ struct xpc_message {
 	mach_msg_trailer_t trailer;
 };
 
+/*
+ * A request that expects a reply: the same size, ID and nvlist bytes after a
+ * body with one port descriptor, which carries a send-once right to the
+ * caller's own reply port. The header's reply slot is the one an ordinary
+ * message has, so a listener finds the same peer for both.
+ */
+struct xpc_request_message {
+	mach_msg_header_t header;
+	mach_msg_body_t body;
+	mach_msg_port_descriptor_t reply;
+	size_t size;
+	uint64_t id;
+	char data[0];
+};
+_Static_assert(offsetof(struct xpc_request_message, size) == 40,
+    "request wire: size follows header, body and one port descriptor");
+
 struct xpc_recv_message {
 	mach_msg_header_t header;
 	size_t size;
@@ -177,6 +194,10 @@ xpc_object_destroy(struct xpc_object *xo)
 
 	if (xo->xo_reply_port != MACH_PORT_NULL)
 		(void)mach_port_deallocate(mach_task_self(), xo->xo_reply_port);
+	/* Unused: the kernel tells the requester no reply will come. */
+	if (xo->xo_xpc_type == _XPC_TYPE_DICTIONARY &&
+	    xo->xo_reply_once != MACH_PORT_NULL)
+		(void)mach_port_deallocate(mach_task_self(), xo->xo_reply_once);
 	free(xo->xo_audit_token);
 	free(xo);
 }
@@ -418,13 +439,23 @@ xpc_pipe_routine_reply(xpc_object_t xobj __unused)
 	return (ENOTSUP);
 }
 
-int
-xpc_pipe_send(xpc_object_t xobj, mach_port_t dst, mach_port_t local,
-    uint64_t id)
+/*
+ * One pipe message: dst (by dst_type) gets the dictionary, with a send right
+ * made from local in the header's reply slot when local is not null, and,
+ * when reply is not null, a send-once right made from it in a body port
+ * descriptor. 0 only when the kernel took the message and every right it
+ * names.
+ */
+static int
+xpc_pipe_send_msg(xpc_object_t xobj, mach_port_t dst,
+    mach_msg_type_name_t dst_type, mach_port_t local, uint64_t id,
+    mach_port_t reply)
 {
 	struct xpc_object *xo;
-	size_t size, msg_size;
-	struct xpc_message *message;
+	struct xpc_request_message *request;
+	mach_msg_header_t *header;
+	size_t size, msg_size, offset;
+	char *data;
 	kern_return_t kr;
 	int err;
 
@@ -434,35 +465,81 @@ xpc_pipe_send(xpc_object_t xobj, mach_port_t dst, mach_port_t local,
 	if (xpc_pack(xo, NULL, &size) != 0)
 		return (EINVAL);
 
+	offset = reply != MACH_PORT_NULL ?
+	    offsetof(struct xpc_request_message, data) :
+	    offsetof(struct xpc_message, data);
 	/* Reserve a complete audit trailer, including the message alignment. */
 	if (size > XPC_RECV_SIZE)
 		return (EMSGSIZE);
-	msg_size = _ALIGN(size + offsetof(struct xpc_message, data));
+	msg_size = _ALIGN(size + offset);
 	if (msg_size > MAX_RECV - sizeof(mach_msg_audit_trailer_t))
 		return (EMSGSIZE);
-	if ((message = malloc(msg_size)) == NULL)
+	if ((header = calloc(1, msg_size)) == NULL)
 		return (ENOMEM);
+	data = (char *)header + offset;
 
-	if (xpc_pack(xo, &message->data, &size) != 0) {
-		free(message);
+	if (xpc_pack(xo, data, &size) != 0) {
+		free(header);
 		return (EINVAL);
 	}
 
-	message->header.msgh_size = msg_size;
-	message->header.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND,
-	    MACH_MSG_TYPE_MAKE_SEND);
-	message->header.msgh_remote_port = dst;
-	message->header.msgh_local_port = local;
-	message->header.msgh_id = XPC_PIPE_MESSAGE_ID;
-	message->id = id;
-	message->size = size;
-	kr = mach_msg_send(&message->header);
+	header->msgh_size = msg_size;
+	header->msgh_bits = MACH_MSGH_BITS(dst_type, MACH_MSG_TYPE_MAKE_SEND);
+	header->msgh_remote_port = dst;
+	header->msgh_local_port = local;
+	header->msgh_id = XPC_PIPE_MESSAGE_ID;
+	if (reply != MACH_PORT_NULL) {
+		request = (struct xpc_request_message *)header;
+		header->msgh_bits |= MACH_MSGH_BITS_COMPLEX;
+		request->body.msgh_descriptor_count = 1;
+		request->reply.name = reply;
+		request->reply.disposition = MACH_MSG_TYPE_MAKE_SEND_ONCE;
+		request->reply.type = MACH_MSG_PORT_DESCRIPTOR;
+		request->id = id;
+		request->size = size;
+	} else {
+		((struct xpc_message *)header)->id = id;
+		((struct xpc_message *)header)->size = size;
+	}
+	kr = mach_msg_send(header);
 	if (kr != KERN_SUCCESS)
 		err = (kr == KERN_INVALID_TASK || kr == MACH_SEND_INVALID_DEST) ? EPIPE : EINVAL;
 	else
 		err = 0;
-	free(message);
-	return (err);	
+	free(header);
+	return (err);
+}
+
+int
+xpc_pipe_send(xpc_object_t xobj, mach_port_t dst, mach_port_t local,
+    uint64_t id)
+{
+
+	return (xpc_pipe_send_msg(xobj, dst, MACH_MSG_TYPE_COPY_SEND, local, id,
+	    MACH_PORT_NULL));
+}
+
+/* A request whose reply is to come to the receive right reply. */
+int
+xpc_pipe_send_request(xpc_object_t xobj, mach_port_t dst, mach_port_t local,
+    uint64_t id, mach_port_t reply)
+{
+
+	return (xpc_pipe_send_msg(xobj, dst, MACH_MSG_TYPE_COPY_SEND, local, id,
+	    reply));
+}
+
+/*
+ * A reply on its request's send-once right. 0: the kernel took the right
+ * with the message. Otherwise the right, live or dead, is still the
+ * caller's to release.
+ */
+int
+xpc_pipe_send_reply(xpc_object_t xobj, mach_port_t sonce, uint64_t id)
+{
+
+	return (xpc_pipe_send_msg(xobj, sonce, MACH_MSG_TYPE_MOVE_SEND_ONCE,
+	    MACH_PORT_NULL, id, MACH_PORT_NULL));
 }
 
 #define LOG(...)	\
@@ -477,22 +554,52 @@ xpc_pipe_decode(struct xpc_recv_message *message, size_t capacity,
     bool own_reply, xpc_object_t *result)
 {
 	mach_msg_header_t *request = &message->header;
+	struct xpc_request_message *rm;
 	mach_msg_audit_trailer_t *tr;
 	struct xpc_object *xo;
 	size_t body = round_msg(request->msgh_size);
+	size_t offset, size;
+	uint64_t id;
+	mach_port_t sonce;
+	char *data;
 
-	if (request->msgh_size < offsetof(struct xpc_message, data) ||
-	    body < request->msgh_size || body > capacity ||
+	/*
+	 * A complex message is a request with exactly one port descriptor, a
+	 * send-once right for its reply. Any other descriptor type or count is
+	 * not ours: mach_msg_destroy releases each of its rights once.
+	 */
+	sonce = MACH_PORT_NULL;
+	if (request->msgh_bits & MACH_MSGH_BITS_COMPLEX) {
+		rm = (struct xpc_request_message *)message;
+		offset = offsetof(struct xpc_request_message, data);
+		if (request->msgh_size < offset ||
+		    rm->body.msgh_descriptor_count != 1 ||
+		    rm->reply.type != MACH_MSG_PORT_DESCRIPTOR ||
+		    rm->reply.disposition != MACH_MSG_TYPE_PORT_SEND_ONCE ||
+		    !MACH_PORT_VALID(rm->reply.name))
+			goto invalid;
+		sonce = rm->reply.name;
+		size = rm->size;
+		id = rm->id;
+		data = rm->data;
+	} else {
+		offset = offsetof(struct xpc_message, data);
+		if (request->msgh_size < offset)
+			goto invalid;
+		size = message->size;
+		id = message->id;
+		data = message->data;
+	}
+	if (body < request->msgh_size || body > capacity ||
 	    capacity - body < sizeof(*tr) ||
-	    (request->msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
-	    message->size > request->msgh_size - offsetof(struct xpc_message, data))
+	    size > request->msgh_size - offset)
 		goto invalid;
 	tr = (mach_msg_audit_trailer_t *)((char *)message + body);
 	if (tr->msgh_trailer_type != MACH_MSG_TRAILER_FORMAT_0 ||
 	    tr->msgh_trailer_size < sizeof(*tr) ||
 	    tr->msgh_trailer_size > capacity - body)
 		goto invalid;
-	xo = xpc_unpack(message->data, message->size);
+	xo = xpc_unpack(data, size);
 	if (xo == NULL)
 		goto invalid;
 	if (xo->xo_xpc_type != _XPC_TYPE_DICTIONARY) {
@@ -507,6 +614,7 @@ xpc_pipe_decode(struct xpc_recv_message *message, size_t capacity,
 	}
 #endif
 	if (xo->xo_audit_token == NULL) {
+		/* The object owns no right yet: the message's go once, here. */
 		xpc_release(xo);
 		mach_msg_destroy(request);
 		return (ENOMEM);
@@ -514,9 +622,11 @@ xpc_pipe_decode(struct xpc_recv_message *message, size_t capacity,
 	memcpy(xo->xo_audit_token, &tr->msgh_audit, sizeof(tr->msgh_audit));
 	xo->xo_flags |= _XPC_FROM_WIRE;
 	xpc_dictionary_set_mach_send(xo, XPC_RPORT, request->msgh_remote_port);
-	xpc_dictionary_set_uint64(xo, XPC_SEQID, message->id);
+	xpc_dictionary_set_uint64(xo, XPC_SEQID, id);
+	/* No failure follows: the rights pass to the object or the caller. */
 	if (own_reply)
 		xo->xo_reply_port = request->msgh_remote_port;
+	xo->xo_reply_once = sonce;
 	*result = xo;
 	return (0);
 invalid:
@@ -562,9 +672,10 @@ xpc_pipe_receive(mach_port_t local, mach_port_t *remote, xpc_object_t *result,
 	int error = xpc_pipe_decode(&message, sizeof(message), false, result);
 	if (error != 0)
 		return (error);
-	/* The connection's pending/event/peer path owns this right. */
+	/* The caller owns this right; a request's send-once right is the object's. */
 	*remote = request->msgh_remote_port;
-	*id = message.id;
+	*id = (request->msgh_bits & MACH_MSGH_BITS_COMPLEX) ?
+	    ((struct xpc_request_message *)&message)->id : message.id;
 	return (0);
 }
 

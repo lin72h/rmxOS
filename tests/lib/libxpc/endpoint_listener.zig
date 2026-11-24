@@ -9,9 +9,13 @@
 // implemented (sys/compat/mach/ipc/mach_port.c:233), so the task's names are
 // its descriptor table's port entries (kern.proc.filedesc, KF_TYPE_PORT 17
 // and KF_TYPE_PORTSET 18, as tests/lib/launchd/fd_inventory.zig counts them).
-// The count the cases compare is the names that hold a send right or a dead
-// name (mach_port_type). It leaves out every thread's MIG reply port, a
-// receive right alone that comes and goes with its thread.
+// The count the cases compare is the names a connection can own
+// (mach_port_type): a port's receive right together with its send right, as
+// a connection's own port is, and dead names (op-757). It leaves out every
+// thread's MIG reply port, a receive right alone, and the send right that
+// libdispatch caches to each worker thread's port
+// (lib/libdispatch/src/shims/tsd.h:147), a send right alone: both come and
+// go with threads.
 //
 // The program links libxpc.so.5 by its soname with no run path, so
 // LD_LIBRARY_PATH selects the library under test. Each case prints the path
@@ -207,7 +211,7 @@ const Snapshot = struct {
     types: [2048]u32 = undefined,
     n: usize = 0,
     ports: u64 = 0, // every port and port-set name
-    held: u64 = 0, // names holding a send right or a dead name
+    held: u64 = 0, // names holding a receive and a send right, or a dead name
 };
 fn snapshot(s: *Snapshot) void {
     s.* = .{};
@@ -229,7 +233,7 @@ fn snapshot(s: *Snapshot) void {
             s.ports += 1;
             var t: c.mach_port_type_t = 0;
             if (f.kf_type == 17 and c.mach_port_type(c.mach_task_self(), @intCast(f.kf_fd), &t) == 0) {
-                if ((t & (c.MACH_PORT_TYPE_SEND | c.MACH_PORT_TYPE_DEAD_NAME)) != 0) s.held += 1;
+                if (ownable(t)) s.held += 1;
             }
             need(s.n < s.fds.len, "port names fit the snapshot");
             s.fds[s.n] = f.kf_fd;
@@ -238,6 +242,25 @@ fn snapshot(s: *Snapshot) void {
         }
         offset += @intCast(f.kf_structsize);
     }
+}
+fn ownable(t: c.mach_port_type_t) bool {
+    const both = c.MACH_PORT_TYPE_RECEIVE | c.MACH_PORT_TYPE_SEND;
+    return (t & both) == both or (t & c.MACH_PORT_TYPE_DEAD_NAME) != 0;
+}
+// Each name of b that a is without, or whose type differs, with its rights'
+// references: what the end of a case holds that its start did not.
+fn printAdded(case: [*:0]const u8, a: *const Snapshot, b: *const Snapshot) void {
+    var added: u32 = 0;
+    for (b.fds[0..b.n], b.types[0..b.n]) |fd, t| {
+        var same = false;
+        for (a.fds[0..a.n], a.types[0..a.n]) |x, u| same = same or (x == fd and u == t);
+        if (same) continue;
+        added += 1;
+        const name: u32 = @intCast(fd);
+        _ = c.printf("xpc_b0 case=%s added_name=%d type=0x%x ownable=%d send=%llu receive=%llu send_once=%llu dead=%llu\n", case, fd, t, @as(c_int, @intFromBool(ownable(t))), refs(name, c.MACH_PORT_RIGHT_SEND), refs(name, c.MACH_PORT_RIGHT_RECEIVE), refs(name, c.MACH_PORT_RIGHT_SEND_ONCE), refs(name, c.MACH_PORT_RIGHT_DEAD_NAME));
+    }
+    _ = c.printf("xpc_b0 case=%s added_names=%u\n", case, added);
+    _ = c.fflush(null);
 }
 // The one port name made between two snapshots that holds a receive right
 // and a send right, as a new connection's own port does.
@@ -622,7 +645,7 @@ fn heldRounds(case: [*:0]const u8, cancel_server: bool) void {
         var t: c.mach_msg_type_number_t = 0;
         names_rc = c.mach_port_names(c.mach_task_self(), &list, &n, &types, &t);
     }
-    _ = c.printf("xpc_b0 case=%s mach_port_names_rc=%d counted=kern.proc.filedesc names_with_send_or_dead_name\n", case, names_rc);
+    _ = c.printf("xpc_b0 case=%s mach_port_names_rc=%d counted=kern.proc.filedesc names_with_receive_and_send_or_dead_name\n", case, names_rc);
     const q = dispatch_queue_create("op751.client", null);
     need(q != null, "client queue");
     // A first round lets libdispatch and libxpc make their one-time names.
@@ -647,6 +670,7 @@ fn heldRounds(case: [*:0]const u8, cancel_server: bool) void {
     var end: Snapshot = undefined;
     snapshot(&end);
     _ = c.printf("xpc_b0 case=%s ports_start=%llu ports_end=%llu held_start=%llu held_end=%llu\n", case, start.ports, end.ports, start.held, end.held);
+    printAdded(case, &start, &end);
     fact(case, "rounds_delivered", ROUNDS, load(&r.updates));
     fact(case, "client_peers", ROUNDS, load(&r.peers));
     fact(case, "server_invalid", ROUNDS, load(&r.server_invalid));
@@ -663,6 +687,57 @@ fn cancelledConnectionReleases(_: [*c]const c.atf_tc_t) callconv(.c) void {
     heldRounds("cancelledConnectionReleases", true);
 }
 
+// ---- nullEndpointInvalid -----------------------------------------------------
+
+fn ownsBoth(name: u32) bool {
+    var t: c.mach_port_type_t = 0;
+    const both = c.MACH_PORT_TYPE_RECEIVE | c.MACH_PORT_TYPE_SEND;
+    return c.mach_port_type(c.mach_task_self(), name, &t) == 0 and (t & both) == both;
+}
+// An endpoint made from a listener that has already given up its port names
+// no remote at all. Nothing is sent, so no failed send and no dead-name
+// notification ends the connection: only activation's check of a connection
+// from an endpoint (xpc_connection_attach) can.
+fn nullEndpointInvalid(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const case = "nullEndpointInvalid";
+    library(case);
+    var events: Events = undefined;
+    events.init();
+    var before: Snapshot = undefined;
+    var after: Snapshot = undefined;
+    snapshot(&before);
+    const l = xpc_connection_create(null, null);
+    snapshot(&after);
+    need(l != null, "listener");
+    const name = onlyNew(&before, &after) orelse c.atf_tc_fail("setup: one new port for the listener");
+    xpc_connection_cancel(l);
+    // The listener's rights go on its send queue. Then its name holds no
+    // receive right with a send right; the number itself may be reused.
+    const start = nowMs();
+    while (ownsBoth(name) and nowMs() - start < 3000) _ = c.usleep(10_000);
+    fact(case, "listener_port_dropped", 1, @intFromBool(!ownsBoth(name)));
+    conclude(case);
+    const held_before = stableHeld(3000);
+    const e = xpc_endpoint_create(l);
+    fact(case, "endpoint_returned", 1, @intFromBool(e != null));
+    conclude(case);
+    const conn = xpc_connection_create_from_endpoint(e);
+    fact(case, "connection_returned", 1, @intFromBool(conn != null));
+    conclude(case);
+    xpc_release(e);
+    setHandler(conn, &recordInto, &events);
+    xpc_connection_resume(conn);
+    const ended = events.waitFor(1, 3000);
+    // A second event would arrive here.
+    _ = c.usleep(200_000);
+    fact(case, "handler_first_event", INVALID, if (ended) events.first() else NONE);
+    fact(case, "handler_events", 1, events.count());
+    fact(case, "held_names_after_invalid", held_before, settleHeld(held_before, 3000));
+    xpc_release(conn);
+    xpc_release(l);
+    conclude(case);
+}
+
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
 fn shortHead(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "20");
@@ -670,11 +745,11 @@ fn shortHead(t: [*c]c.atf_tc_t) callconv(.c) void {
 fn longHead(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "30");
 }
-var cases: [5]c.atf_tc_t = undefined;
+var cases: [6]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "anonymousListenerPeer", "endpointOwnsRight", "deadEndpointInvalid", "heldConnectionReleases", "cancelledConnectionReleases" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &anonymousListenerPeer, &endpointOwnsRight, &deadEndpointInvalid, &heldConnectionReleases, &cancelledConnectionReleases };
-    const heads = [_]*const fn ([*c]c.atf_tc_t) callconv(.c) void{ &shortHead, &shortHead, &shortHead, &longHead, &longHead };
+    const names = [_][*:0]const u8{ "anonymousListenerPeer", "endpointOwnsRight", "deadEndpointInvalid", "heldConnectionReleases", "cancelledConnectionReleases", "nullEndpointInvalid" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &anonymousListenerPeer, &endpointOwnsRight, &deadEndpointInvalid, &heldConnectionReleases, &cancelledConnectionReleases, &nullEndpointInvalid };
+    const heads = [_]*const fn ([*c]c.atf_tc_t) callconv(.c) void{ &shortHead, &shortHead, &shortHead, &longHead, &longHead, &shortHead };
     for (&cases, names, bodies, heads) |*tc, name, body, head| {
         var err = c.atf_tc_init(tc, name, head, body, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;

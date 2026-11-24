@@ -195,6 +195,7 @@ _xpc_prim_create_flags(int type, xpc_u value, size_t size, uint16_t flags)
 	xo->xo_refcnt = 1;
 	xo->xo_audit_token = NULL;
 	xo->xo_reply_port = MACH_PORT_NULL;
+	xo->xo_reply_once = MACH_PORT_NULL;
 	/* A NULL tqe_prev marks an object that is in no array. */
 	xo->xo_link.tqe_next = NULL;
 	xo->xo_link.tqe_prev = NULL;

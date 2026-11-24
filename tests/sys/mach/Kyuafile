@@ -35,3 +35,4 @@ atf_test_program{name="mach_round3_test"}
 atf_test_program{name="mach_rights_locks_test"}
 
 atf_test_program{name="mach_send_possible_test"}
+atf_test_program{name="mach_send_once_test"}

@@ -90,6 +90,11 @@ typedef union {
 #define _XPC_GLOBAL_OBJECT_FLAG	0x2
 /* An endpoint from xpc_endpoint_create(): it holds a reference on xo_port. */
 #define _XPC_OWNS_PORT		0x4
+/*
+ * A dictionary from xpc_dictionary_create_reply() that took its request's
+ * send-once right: once that right is used, the reply is sent nowhere.
+ */
+#define _XPC_REPLY		0x8
 struct xpc_object {
 	uint8_t			xo_xpc_type;
 	uint16_t		xo_flags;
@@ -97,9 +102,20 @@ struct xpc_object {
 	size_t			xo_size;
 	xpc_u			xo_u;
 	audit_token_t *		xo_audit_token;
-	/* Only a received pipe request owns this right; dictionary values borrow it. */
+	/*
+	 * A received message owns the header's reply right; its XPC_RPORT
+	 * value borrows it for as long as the message lives.
+	 */
 	mach_port_t		xo_reply_port;
 	TAILQ_ENTRY(xpc_object) xo_link;
+	/*
+	 * Dictionaries only. A received request's send-once right to its
+	 * sender's reply port, or the reply that took it. Moved and used with
+	 * atomic_readandclear_32(); released unused, it tells the sender that
+	 * no reply will come (MACH_NOTIFY_SEND_ONCE). The global error objects
+	 * (xpc_type.c) end before this field.
+	 */
+	volatile mach_port_t	xo_reply_once;
 };
 
 struct xpc_dict_pair {
@@ -108,12 +124,23 @@ struct xpc_dict_pair {
 	TAILQ_ENTRY(xpc_dict_pair) xo_link;
 };
 
+/*
+ * A request that expects a reply. Its reply port's receive right is the
+ * call's own; the request carries a send-once right to it. The call is held
+ * by its completion (whoever detaches it from xc_pending), by its reply
+ * source until that source's cancel handler, and by the send of its request.
+ * The last of the three releases the reply port and frees the call.
+ */
 struct xpc_pending_call {
 	uint64_t		xp_id;
 	xpc_object_t		xp_response;
 	dispatch_queue_t	xp_queue;
 	xpc_handler_t		xp_handler;
-	mach_port_t		xp_remote_port;
+	struct xpc_connection *	xp_conn;	/* held by the reply source */
+	dispatch_source_t	xp_reply_source;
+	mach_port_t		xp_reply_port;
+	volatile u_int		xp_refs;
+	bool			xp_listed;	/* in xc_pending, under xc_pending_lock */
 	TAILQ_ENTRY(xpc_pending_call) xp_link;
 };
 
@@ -191,6 +218,10 @@ __private_extern__ void xpc_object_destroy(struct xpc_object *xo);
 __private_extern__ void xpc_connection_destroy(struct xpc_connection *conn);
 __private_extern__ int xpc_pipe_send(xpc_object_t obj, mach_port_t dst,
     mach_port_t local, uint64_t id);
+__private_extern__ int xpc_pipe_send_request(xpc_object_t obj, mach_port_t dst,
+    mach_port_t local, uint64_t id, mach_port_t reply);
+__private_extern__ int xpc_pipe_send_reply(xpc_object_t obj, mach_port_t sonce,
+    uint64_t id);
 __private_extern__ int xpc_pipe_receive(mach_port_t local, mach_port_t *remote,
     xpc_object_t *result, uint64_t *id);
 

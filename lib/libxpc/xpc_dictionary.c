@@ -27,6 +27,7 @@
 
 #include <sys/types.h>
 #include <mach/mach.h>
+#include <machine/atomic.h>
 #include <xpc/launchd.h>
 #include "xpc_internal.h"
 #include <assert.h>
@@ -311,7 +312,17 @@ xpc_dictionary_create_reply(xpc_object_t original)
 
 	xo_orig->xo_flags &= ~_XPC_FROM_WIRE;
 	xo = xpc_dictionary_create(NULL, NULL, 0);
+	if (xo == NULL)
+		return (NULL);
 	xpc_dictionary_set_uint64(xo, XPC_SEQID, id);
+	/*
+	 * The reply takes the request's send-once right, once: a second reply
+	 * to the same request finds none. A request sent without one (no reply
+	 * expected) gives a reply that goes to the peer, as before.
+	 */
+	xo->xo_reply_once = atomic_readandclear_32(&xo_orig->xo_reply_once);
+	if (xo->xo_reply_once != MACH_PORT_NULL)
+		xo->xo_flags |= _XPC_REPLY;
 	return (xo);
 }
 

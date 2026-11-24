@@ -170,17 +170,31 @@ fn finish() void {
     dispatch_release(target);
     dispatch_release(replies);
 }
+// op-757: a request that expects a reply is complex: after the header, one
+// port descriptor with its send-once reply right, then size, ID and bytes.
+pub const PortDescriptor = extern struct { name: u32, pad1: u32, pad2: u16, disposition: u8, kind: u8 };
+pub const RequestWire = extern struct { header: c.mach_msg_header_t, count: u32, port: PortDescriptor, size: usize, id: u64 };
+extern fn op757_pipe_reply(O, u32, u64) c_int;
+// Answer a received request as its server would, with "value" on its own
+// send-once right. That right is used then: its name is cleared so that
+// mach_msg_destroy of the request does not release it a second time.
+pub fn replyOnce(bytes: *align(8) [8192]u8, value: u64) c_int {
+    const w: *RequestWire = @ptrCast(bytes);
+    if ((w.header.msgh_bits & c.MACH_MSGH_BITS_COMPLEX) == 0 or w.count != 1 or
+        w.port.kind != c.MACH_MSG_PORT_DESCRIPTOR or w.port.disposition != c.MACH_MSG_TYPE_PORT_SEND_ONCE) return -1;
+    const obj = xpc_dictionary_create(null, null, 0);
+    xpc_dictionary_set_uint64(obj, "value", value);
+    const kr = op757_pipe_reply(obj, w.port.name, w.id);
+    xpc_release(obj);
+    if (kr == 0) w.port.name = 0;
+    return kr;
+}
 fn receive(p: u32, ms: u32, respond: bool) bool {
     var bytes: [8192]u8 align(8) = @splat(0);
     const h: *c.mach_msg_header_t = @ptrCast(&bytes);
     if (c.mach_msg(h, c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, bytes.len, p, ms, 0) != 0) return false;
     if (respond) {
-        const Wire = extern struct { header: c.mach_msg_header_t, size: usize, id: u64 };
-        const w: *Wire = @ptrCast(&bytes);
-        const obj = xpc_dictionary_create(null, null, 0);
-        xpc_dictionary_set_uint64(obj, "value", 42);
-        const kr = op500_pipe_send(obj, h.msgh_remote_port, p, w.id);
-        xpc_release(obj);
+        const kr = replyOnce(&bytes, 42);
         c.mach_msg_destroy(h);
         return kr == 0;
     }
