@@ -158,8 +158,9 @@ fn setBlob(d: O, n: usize, seed: u64) void {
     c.free(p);
 }
 // A dictionary: "value", then "op" and "n" when not 0, then data of blob
-// bytes; with seq, the key every reply carries, so its packed size is a
-// reply's.
+// bytes when not 0 (nvpair_createv_binary refuses empty data, so a dictionary
+// holding it cannot be packed); with seq, the key every reply carries, so its
+// packed size is a reply's.
 fn dict(value: u64, op: u64, n: u64, blob: usize, seq: bool) O {
     const d = xpc_dictionary_create(null, null, 0);
     need(d != null, "dictionary");
@@ -167,7 +168,7 @@ fn dict(value: u64, op: u64, n: u64, blob: usize, seq: bool) O {
     xpc_dictionary_set_uint64(d, "value", value);
     if (op != 0) xpc_dictionary_set_uint64(d, "op", op);
     if (n != 0) xpc_dictionary_set_uint64(d, "n", n);
-    setBlob(d, blob, value);
+    if (blob != 0) setBlob(d, blob, value);
     return d;
 }
 
