@@ -147,3 +147,27 @@ hook the listener calls after its handler returns with a new peer and before
 its last read of that peer. `listenerHoldsNewPeer`: the handler gives the peer
 a finalizer and cancels it; the hook waits up to 1 s for the finalizer, which
 must not run before the listener's last read and must run once after it.
+
+# Messages up to 1 MiB (op-780)
+
+`large_message.zig` links the product `libxpc.so.5` by its soname with no run
+path. libxpc's cap, `XPC_MAX_MESSAGE` (1 MiB), is the largest `msgh_size` it
+sends or reads; an ordinary message has 40 bytes before its packed nvlist, a
+request 56. Each case learns a dictionary's packed size from the wire, from a
+listener that is never resumed.
+
+- `sizeThreshold`: replies of 8000, 8100 and 8200 packed bytes arrive, bytes
+  compared.
+- `largeReply`, `largeRequest`: 64 KiB of data each way, bytes compared.
+- `capBoundary`: the largest ordinary message and the largest request arrive;
+  one byte more is refused at the sender (the client is interrupted), and a
+  small message on the same connection arrives afterwards.
+- `oversizeDropped`: a message of the cap plus 4 bytes (the smallest over the
+  cap the kernel takes), built with `mach_msg`, then an ordinary one, both
+  queued before the listener is resumed; the ordinary one arrives within 1 s.
+- `oversizeReplyDropped`: the case answers a request on its send-once right
+  with a message of the cap plus 4 bytes; the call completes once with an error
+  within 1 s, and its reply port goes.
+
+`receive_pending_test:sizes` checks the sender's `EMSGSIZE` itself, through
+the fixture's `op500_pipe_send`, one byte over the cap.

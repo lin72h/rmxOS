@@ -989,7 +989,10 @@ xpc_connection_reply_event(void *context)
 		    ((struct xpc_object *)result)->xo_audit_token);
 		error = NULL;
 	} else {
-		/* MACH_NOTIFY_SEND_ONCE, or a message that is no reply: dropped. */
+		/*
+		 * MACH_NOTIFY_SEND_ONCE, a message that is no reply, or a reply
+		 * not read (xpc_pipe_receive's EMSGSIZE or ENOMEM): dropped.
+		 */
 		error = xpc_connection_drop_error(conn);
 	}
 	if (xpc_connection_claim(conn, call)) {
@@ -1593,8 +1596,11 @@ xpc_connection_receive_one(struct xpc_connection *conn)
 		if (kr == MACH_RCV_PORT_DIED || kr == MACH_RCV_INVALID_NAME ||
 		    kr == MACH_RCV_PORT_CHANGED)
 			xpc_connection_cancel(conn);
-		/* A message decode refused is destroyed; the next one is ours. */
-		return (kr == EINVAL || kr == ENOMEM);
+		/*
+		 * A message decode refused is destroyed, and one not read is
+		 * taken off the queue (EMSGSIZE, ENOMEM): the next one is ours.
+		 */
+		return (kr == EINVAL || kr == ENOMEM || kr == EMSGSIZE);
 	}
 	/*
 	 * The message owns its header right from here, so its XPC_RPORT value

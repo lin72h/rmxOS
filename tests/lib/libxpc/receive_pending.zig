@@ -240,10 +240,29 @@ fn sizes(_: [*c]const c.atf_tc_t) callconv(.c) void {
         } else need(rc == c.MACH_RCV_TOO_LARGE and obj == null, "over-capacity defined receive error");
         need(refs(reply) == before, "capacity reply right cleanup");
     }
+    // One byte over the cap (XPC_MAX_MESSAGE, 1 MiB, op-780): an ordinary
+    // message carries header, size and ID (40 bytes) before its packed
+    // bytes. This dictionary's packed bytes less its data come from the wire.
+    const probe = xpc_dictionary_create(null, null, 0);
+    var small: [16]u8 = @splat(0x61);
+    xpc_dictionary_set_data(probe, "large", &small, small.len);
+    need(op500_pipe_send(probe, dst, 0, 1) == 0, "probe send");
+    xpc_release(probe);
+    var probe_wire = std.mem.zeroes(Wire);
+    need(c.mach_msg(&probe_wire.header, c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, @sizeOf(Wire), dst, 1000, 0) == 0, "probe wire");
+    c.mach_msg_destroy(&probe_wire.header);
+    need(probe_wire.size > small.len, "probe packed size");
+    const fixed = probe_wire.size - small.len;
+    const cap: usize = 1 << 20;
+    const over = cap - 40 + 1 - fixed;
+    const big: [*]u8 = @ptrCast(c.malloc(over) orelse c.atf_tc_fail("over-cap data"));
+    @memset(big[0..over], 0x61);
     const obj = xpc_dictionary_create(null, null, 0);
-    var bytes: [8192]u8 = @splat(0x61);
-    xpc_dictionary_set_data(obj, "large", &bytes, bytes.len);
-    need(op500_pipe_send(obj, dst, reply, 1) == c.EMSGSIZE, "sender refuses over capacity");
+    xpc_dictionary_set_data(obj, "large", big, over);
+    c.free(big);
+    const rc = op500_pipe_send(obj, dst, reply, 1);
+    _ = c.printf("receive_size sender packed=%lu cap=%lu expected_rc=%d observed_rc=%d\n", fixed + over, cap, c.EMSGSIZE, rc);
+    need(rc == c.EMSGSIZE, "sender refuses one byte over the cap");
     xpc_release(obj);
     need(c.mach_port_destroy(c.mach_task_self(), dst) == 0 and c.mach_port_destroy(c.mach_task_self(), reply) == 0, "size ports cleanup");
 }

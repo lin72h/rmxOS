@@ -32,13 +32,25 @@
 #include <xpc/launchd.h>
 #include <machine/atomic.h>
 #include <assert.h>
+#include <os/log.h>
+#include <pthread.h>
 #include <syslog.h>
 #include <stdarg.h>
 #include <uuid.h>
 
 #include "xpc_internal.h"
 
+/* The receive buffer on the stack, where every message is read first. */
 #define MAX_RECV 8192
+/*
+ * The largest message libxpc sends or reads on a connection: its msgh_size,
+ * header included, receive trailer not. The sender refuses a message over
+ * it; the receiver reads one up to it that does not fit MAX_RECV into a
+ * buffer of round_msg(msgh_size) plus the audit trailer.
+ */
+#define XPC_MAX_MESSAGE (1024 * 1024)
+_Static_assert(XPC_MAX_MESSAGE % (_ALIGNBYTES + 1) == 0,
+    "the cap is a multiple of the message alignment");
 #ifdef XPC_CONSUMER_TESTING
 #include "../../tests/lib/libxpc/projection.h"
 #endif
@@ -84,6 +96,25 @@ struct xpc_recv_message {
 
 static void xpc_copy_description_level(xpc_object_t obj, struct sbuf *sbuf,
     int level);
+
+/* A refused send and a message not read: org.rmxos.xpc, "connection". */
+static os_log_t xpc_pipe_log_object;
+static pthread_once_t xpc_pipe_log_once = PTHREAD_ONCE_INIT;
+
+static void
+xpc_pipe_log_init(void)
+{
+
+	xpc_pipe_log_object = os_log_create("org.rmxos.xpc", "connection");
+}
+
+static os_log_t
+xpc_pipe_log(void)
+{
+
+	(void)pthread_once(&xpc_pipe_log_once, xpc_pipe_log_init);
+	return (xpc_pipe_log_object);
+}
 
 void
 fail_log(const char *exp)
@@ -474,16 +505,19 @@ xpc_pipe_send_msg(xpc_object_t xobj, mach_port_t dst,
 	offset = reply != MACH_PORT_NULL ?
 	    offsetof(struct xpc_request_message, data) :
 	    offsetof(struct xpc_message, data);
-	/* Reserve a complete audit trailer, including the message alignment. */
-	if (size > XPC_RECV_SIZE) {
+	/*
+	 * The receiver reads any message up to XPC_MAX_MESSAGE, by the same
+	 * arithmetic (xpc_pipe_receive). The cap is a multiple of the message
+	 * alignment, so the aligned size is within it when the bytes are.
+	 */
+	if (size > XPC_MAX_MESSAGE - offset) {
+		os_log_error(xpc_pipe_log(),
+		    "send refused: a message of %zu bytes is over the cap of %u bytes",
+		    size + offset, (unsigned)XPC_MAX_MESSAGE);
 		free(packed);
 		return (EMSGSIZE);
 	}
 	msg_size = _ALIGN(size + offset);
-	if (msg_size > MAX_RECV - sizeof(mach_msg_audit_trailer_t)) {
-		free(packed);
-		return (EMSGSIZE);
-	}
 	if ((header = calloc(1, msg_size)) == NULL) {
 		free(packed);
 		return (ENOMEM);
@@ -643,49 +677,119 @@ invalid:
 	return (EINVAL);
 }
 
+/* One receive on local into buf, with the audit trailer, without waiting. */
+static kern_return_t
+xpc_pipe_receive_into(mach_port_t local, mach_msg_header_t *buf,
+    mach_msg_size_t capacity, mach_msg_option_t large)
+{
+
+	buf->msgh_size = capacity;
+	buf->msgh_local_port = local;
+#ifdef XPC_CONSUMER_TESTING
+	return (op500_receive(buf, MACH_RCV_MSG | MACH_RCV_TIMEOUT | large |
+#else
+	return (mach_msg(buf, MACH_RCV_MSG | MACH_RCV_TIMEOUT | large |
+#endif
+	    MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0) |
+	    MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_AUDIT),
+	    0, capacity, local, 0, MACH_PORT_NULL));
+}
+
+/*
+ * Take the message at the head of local's queue off it, unread: a receive
+ * without MACH_RCV_LARGE into a buffer it does not fit dequeues it, and the
+ * kernel destroys every right and region it carries (msg_receive_error_bounded).
+ */
+static void
+xpc_pipe_drop(mach_port_t local)
+{
+	struct {
+		mach_msg_header_t header;
+		mach_msg_audit_trailer_t trailer;
+	} head;
+	kern_return_t kr;
+
+	memset(&head, 0, sizeof(head));
+	kr = xpc_pipe_receive_into(local, &head.header, sizeof(head), 0);
+	/* A message as small as a header fits; it goes here instead. */
+	if (kr == KERN_SUCCESS || (kr & ~MACH_MSG_MASK) == MACH_RCV_BODY_ERROR)
+		mach_msg_destroy(&head.header);
+}
+
+/*
+ * The next message on local. A message the stack buffer does not hold stays
+ * queued with MACH_RCV_LARGE, and the kernel writes its size, without the
+ * trailer, into the header; up to XPC_MAX_MESSAGE it is read again into a
+ * buffer of its own. One that is not read (over the cap, no memory for its
+ * buffer, or too large again) is logged, taken off the queue once, and
+ * returned as EMSGSIZE or ENOMEM: one message handled, none for the caller.
+ */
 int
 xpc_pipe_receive(mach_port_t local, mach_port_t *remote, xpc_object_t *result,
     uint64_t *id)
 {
 	struct xpc_recv_message message = {0};
+	struct xpc_recv_message *buf;
 	mach_msg_header_t *request;
+	mach_msg_size_t capacity, size;
 	kern_return_t kr;
-	mig_reply_error_t response;
-	mach_msg_trailer_t *tr;
-	int data_size;
-	struct xpc_object *xo;
-	audit_token_t *auditp;
-	xpc_u val;
+	int error;
 
-	request = &message.header;
-	/* should be size - but what about arbitrary XPC data? */
-	request->msgh_size = MAX_RECV;
-	request->msgh_local_port = local;
-#ifdef XPC_CONSUMER_TESTING
-	kr = op500_receive(request, MACH_RCV_MSG | MACH_RCV_TIMEOUT |
-#else
-	kr = mach_msg(request, MACH_RCV_MSG | MACH_RCV_TIMEOUT |
-#endif
-	    MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0) |
-	    MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_AUDIT),
-	    0, request->msgh_size, request->msgh_local_port,
-	    0, MACH_PORT_NULL);
-
+	buf = &message;
+	capacity = sizeof(message);
+	kr = xpc_pipe_receive_into(local, &buf->header, capacity, MACH_RCV_LARGE);
+	if (kr == MACH_RCV_TOO_LARGE) {
+		size = message.header.msgh_size;
+		if (size > XPC_MAX_MESSAGE) {
+			os_log_error(xpc_pipe_log(),
+			    "message of %u bytes on port %u not read: over the cap of %u bytes",
+			    size, local, (unsigned)XPC_MAX_MESSAGE);
+			xpc_pipe_drop(local);
+			return (EMSGSIZE);
+		}
+		capacity = round_msg(size) + sizeof(mach_msg_audit_trailer_t);
+		/* Not zeroed: the decoder reads only what its checks allow. */
+		if ((buf = malloc(capacity)) == NULL) {
+			os_log_error(xpc_pipe_log(),
+			    "message of %u bytes on port %u not read: no memory for its buffer of %u bytes (cap %u bytes)",
+			    size, local, capacity, (unsigned)XPC_MAX_MESSAGE);
+			xpc_pipe_drop(local);
+			return (ENOMEM);
+		}
+		kr = xpc_pipe_receive_into(local, &buf->header, capacity,
+		    MACH_RCV_LARGE);
+		if (kr == MACH_RCV_TOO_LARGE) {
+			os_log_error(xpc_pipe_log(),
+			    "message of %u bytes on port %u not read: larger than its buffer of %u bytes (cap %u bytes)",
+			    buf->header.msgh_size, local, capacity,
+			    (unsigned)XPC_MAX_MESSAGE);
+			free(buf);
+			xpc_pipe_drop(local);
+			return (EMSGSIZE);
+		}
+	}
+	request = &buf->header;
 	if (kr != KERN_SUCCESS) {
 		if ((kr & ~MACH_MSG_MASK) == MACH_RCV_BODY_ERROR)
 			mach_msg_destroy(request);
 		if (kr != MACH_RCV_TIMED_OUT)
-			LOG("mach_msg_receive returned %d\n", kr);
+			os_log_error(xpc_pipe_log(),
+			    "receive on port %u returned %#x", local,
+			    (unsigned)kr);
+		if (buf != &message)
+			free(buf);
 		return (kr);
 	}
-	int error = xpc_pipe_decode(&message, sizeof(message), false, result);
-	if (error != 0)
-		return (error);
-	/* The caller owns this right; a request's send-once right is the object's. */
-	*remote = request->msgh_remote_port;
-	*id = (request->msgh_bits & MACH_MSGH_BITS_COMPLEX) ?
-	    ((struct xpc_request_message *)&message)->id : message.id;
-	return (0);
+	error = xpc_pipe_decode(buf, capacity, false, result);
+	if (error == 0) {
+		/* The caller owns this right; a request's send-once right is the object's. */
+		*remote = request->msgh_remote_port;
+		*id = (request->msgh_bits & MACH_MSGH_BITS_COMPLEX) ?
+		    ((struct xpc_request_message *)buf)->id : buf->id;
+	}
+	if (buf != &message)
+		free(buf);
+	return (error);
 }
 
 int
