@@ -229,7 +229,18 @@ const Names = struct {
     types: [2048]u32 = undefined,
     n: usize = 0,
     receive_only: u64 = 0, // a receive right without a send right
+    contexts: [2048]u64 = undefined, // a receive right's context, else 0
+    reply_ports: u64 = 0, // receive rights that carry libxpc's reply-port mark
 };
+// libxpc's mark on each call's reply port (XPC_REPLY_PORT_CONTEXT, op-775,
+// lib/libxpc/xpc_internal.h): "xpc.rply". A thread's MIG reply port, the other
+// receive-only right a task makes per thread, has none. op-751's and op-757's
+// libraries mark nothing.
+const REPLY_PORT_CONTEXT: u64 = 0x7870632e72706c79;
+fn contextOf(name: u32) u64 {
+    var v: c.mach_vm_address_t = 0;
+    return if (c.mach_port_get_context(c.mach_task_self(), name, &v) == 0) v else 0;
+}
 fn names(s: *Names) void {
     s.* = .{};
     var mib = [_]c_int{ c.CTL_KERN, c.KERN_PROC, c.KERN_PROC_FILEDESC, c.getpid() };
@@ -252,6 +263,8 @@ fn names(s: *Names) void {
             need(s.n < s.fds.len, "port names fit the snapshot");
             s.fds[s.n] = f.kf_fd;
             s.types[s.n] = t;
+            s.contexts[s.n] = if ((t & c.MACH_PORT_TYPE_RECEIVE) != 0) contextOf(@intCast(f.kf_fd)) else 0;
+            if (s.contexts[s.n] == REPLY_PORT_CONTEXT) s.reply_ports += 1;
             s.n += 1;
         }
         offset += @intCast(f.kf_structsize);
@@ -408,18 +421,35 @@ fn unrepliedReleased(_: [*c]const c.atf_tc_t) callconv(.c) void {
 // A named service served from a forked child (stage_a.zig's listeners serve
 // theirs in one process). The child exits holding the first request, before
 // it has sent the client anything.
-fn childServer(name: [*:0]const u8, ready: c_int, held: c_int) noreturn {
+//
+// op-775: a forked child's checked-in service port dies with it, and the
+// client's dead-name path then interrupts the connection on any library. So
+// before it exits the child gives the service port's receive right back to
+// the parent, on a channel port the parent checked in. The service port
+// lives on; only the held request's send-once right ends at exit.
+extern var bootstrap_port: u32;
+extern fn bootstrap_check_in(u32, [*:0]const u8, *u32) c_int;
+extern fn bootstrap_look_up(u32, [*:0]const u8, *u32) c_int;
+const PortMessage = extern struct { header: c.mach_msg_header_t, count: u32, port: PortDescriptor, trailer: [128]u8 };
+var child_held: c_int = -1;
+var child_service: u32 = 0;
+var child_back: u32 = 0;
+fn childServer(name: [*:0]const u8, back_name: [*:0]const u8, ready: c_int, held: c_int) noreturn {
     _ = c.alarm(10);
     child_held = held;
     const l = xpc_connection_create_mach_service(name, dispatch_queue_create("op757.child", null), LISTENER);
     if (l == null) c._exit(80);
     setHandler(l, &childListener, null);
     xpc_connection_resume(l);
+    // In one task a send right shares the name of its receive right: the
+    // look-up names the receive right the listener checked in.
+    if (bootstrap_look_up(bootstrap_port, name, &child_service) != 0) c._exit(83);
+    if ((portType(child_service) & c.MACH_PORT_TYPE_RECEIVE) == 0) c._exit(84);
+    if (bootstrap_look_up(bootstrap_port, back_name, &child_back) != 0) c._exit(85);
     var b: u8 = 'r';
     if (c.write(ready, &b, 1) != 1) c._exit(81);
     while (true) _ = c.pause();
 }
-var child_held: c_int = -1;
 fn childListener(_: ?*anyopaque, _: O, o: O) callconv(.c) void {
     if (eventCode(o) != PEER) return;
     setHandler(o, &childPeer, null);
@@ -427,8 +457,17 @@ fn childListener(_: ?*anyopaque, _: O, o: O) callconv(.c) void {
 }
 fn childPeer(_: ?*anyopaque, _: O, o: O) callconv(.c) void {
     if (eventCode(o) >= INVALID) return;
-    // Hold the request, say so, and exit with it unanswered.
+    // Hold the request, give the service port back, say so, and exit with
+    // the request unanswered.
     _ = xpc_retain(o);
+    var m = std.mem.zeroes(PortMessage);
+    m.header.msgh_bits = COMPLEX | c.MACH_MSG_TYPE_COPY_SEND;
+    m.header.msgh_size = @offsetOf(PortMessage, "trailer");
+    m.header.msgh_remote_port = child_back;
+    m.header.msgh_id = 775;
+    m.count = 1;
+    m.port = .{ .name = child_service, .pad1 = 0, .pad2 = 0, .disposition = c.MACH_MSG_TYPE_MOVE_RECEIVE, .kind = c.MACH_MSG_PORT_DESCRIPTOR };
+    if (c.mach_msg(&m.header, c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, m.header.msgh_size, 0, 0, 1000, 0) != 0) c._exit(86);
     var b: u8 = 'h';
     if (c.write(child_held, &b, 1) != 1) c._exit(82);
     c._exit(0);
@@ -445,6 +484,12 @@ fn unrepliedExit(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const n = c.snprintf(&buf, buf.len, "org.rmxos.op757.exit.%d", c.getpid());
     need(n > 0 and n < buf.len, "service name");
     const name: [*:0]const u8 = @ptrCast(&buf);
+    var back_buf: [96]u8 = undefined;
+    const bn = c.snprintf(&back_buf, back_buf.len, "org.rmxos.op757.back.%d", c.getpid());
+    need(bn > 0 and bn < back_buf.len, "channel name");
+    const back_name: [*:0]const u8 = @ptrCast(&back_buf);
+    var back: u32 = 0;
+    need(bootstrap_check_in(bootstrap_port, back_name, &back) == 0, "channel check-in");
     var ready: [2]c_int = undefined;
     var held: [2]c_int = undefined;
     need(c.pipe(&ready) == 0 and c.pipe(&held) == 0, "pipes");
@@ -454,7 +499,7 @@ fn unrepliedExit(_: [*c]const c.atf_tc_t) callconv(.c) void {
     if (pid == 0) {
         _ = c.close(ready[0]);
         _ = c.close(held[0]);
-        childServer(name, ready[1], held[1]);
+        childServer(name, back_name, ready[1], held[1]);
     }
     _ = c.close(ready[1]);
     _ = c.close(held[1]);
@@ -477,9 +522,15 @@ fn unrepliedExit(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const holding = readByte(held[0], 'h', 3000);
     const t0 = nowMs();
     fact(case, "server_held_request", 1, @intFromBool(holding));
+    // The service port's receive right, back from the child: it outlives it.
+    var m = std.mem.zeroes(PortMessage);
+    const got = c.mach_msg(&m.header, c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, @sizeOf(PortMessage), back, 2000, 0);
+    const returned = got == 0 and (m.header.msgh_bits & COMPLEX) != 0 and m.count == 1 and m.port.disposition == c.MACH_MSG_TYPE_PORT_RECEIVE;
+    const service: u32 = if (returned) m.port.name else 0;
+    fact(case, "service_port_returned", 1, @intFromBool(returned));
     const done = reply.waitFor(1, LIMIT_MS);
     const elapsed = if (done) load(&reply.first_ms) -| t0 else nowMs() - t0;
-    _ = c.printf("xpc_b0 case=%s reply_ms_after_hold=%llu\n", case, elapsed);
+    _ = c.printf("xpc_b0 case=%s reply_ms_after_hold=%llu service_type=0x%x\n", case, elapsed, if (returned) portType(service) else 0);
     var status: c_int = -1;
     var reaped: c_int = 0;
     const w0 = nowMs();
@@ -491,15 +542,18 @@ fn unrepliedExit(_: [*c]const c.atf_tc_t) callconv(.c) void {
         _ = c.kill(pid, c.SIGKILL);
         _ = c.waitpid(pid, &status, 0);
     }
-    // A second completion would arrive here.
+    // A second completion, or the connection's own interruption, would
+    // arrive here; the service port is alive, so the connection has none.
     _ = c.usleep(200_000);
     fact(case, "exit_reply", INTERRUPTED, if (done) reply.first() else NONE);
     fact(case, "exit_within_limit", 1, @intFromBool(done and elapsed <= LIMIT_MS));
     fact(case, "exit_completions", 1, reply.count());
+    fact(case, "connection_events_while_service_lives", 0, client.count());
     fact(case, "child_exited_zero", 1, @intFromBool(reaped == pid and status == 0));
-    _ = c.printf("xpc_b0 case=%s client_events=%llu client_first=%llu\n", case, client.count(), client.first());
     xpc_connection_cancel(conn);
     xpc_release(conn);
+    if (returned) _ = c.mach_port_mod_refs(c.mach_task_self(), service, c.MACH_PORT_RIGHT_RECEIVE, -1);
+    _ = c.mach_port_mod_refs(c.mach_task_self(), back, c.MACH_PORT_RIGHT_RECEIVE, -1);
     _ = c.close(ready[0]);
     _ = c.close(held[0]);
     conclude(case);
@@ -681,6 +735,48 @@ fn awaitCount(what: *u64, n: u64, ms: u64) bool {
     return load(what) >= n;
 }
 const ROUNDS = 100;
+fn replyPorts() u64 {
+    var s: Names = undefined;
+    names(&s);
+    return s.reply_ports;
+}
+// The reply-port count once it is at or below target, or its last value
+// after ms.
+fn settleReplyPorts(target: u64, ms: u64) u64 {
+    const start = nowMs();
+    var n = replyPorts();
+    while (n > target and nowMs() - start < ms) {
+        _ = c.usleep(10_000);
+        n = replyPorts();
+    }
+    return n;
+}
+// The task's threads (kern.proc.pid with KERN_PROC_INC_THREAD: one record each).
+fn threads() u64 {
+    var mib = [_]c_int{ c.CTL_KERN, c.KERN_PROC, c.KERN_PROC_PID | c.KERN_PROC_INC_THREAD, c.getpid() };
+    var size: usize = 0;
+    if (c.sysctl(&mib, mib.len, null, &size, null, 0) != 0) return 0;
+    return size / @sizeOf(c.struct_kinfo_proc);
+}
+// Each receive-only name of b that a is without, with its receive status
+// (MACH_PORT_RECEIVE_STATUS) and its context: what tells a reply port from
+// a thread's MIG reply port.
+fn printAddedReceive(case: [*:0]const u8, a: *const Names, b: *const Names) void {
+    var added: u32 = 0;
+    for (b.fds[0..b.n], b.types[0..b.n], b.contexts[0..b.n]) |fd, t, ctx| {
+        if ((t & c.MACH_PORT_TYPE_RECEIVE) == 0 or (t & c.MACH_PORT_TYPE_SEND) != 0) continue;
+        var old = false;
+        for (a.fds[0..a.n], a.types[0..a.n]) |x, u| old = old or (x == fd and u == t);
+        if (old) continue;
+        added += 1;
+        var st: c.mach_port_status_t = std.mem.zeroes(c.mach_port_status_t);
+        var count: c.mach_msg_type_number_t = @sizeOf(c.mach_port_status_t) / @sizeOf(c.natural_t);
+        const rc = c.mach_port_get_attributes(c.mach_task_self(), @intCast(fd), c.MACH_PORT_RECEIVE_STATUS, @ptrCast(&st), &count);
+        _ = c.printf("xpc_b0 case=%s added_receive=%d reply_port=%u context=0x%llx status_rc=%d sorights=%u pset=%u msgcount=%u seqno=%u qlimit=%u srights=%u\n", case, fd, @as(c_uint, @intFromBool(ctx == REPLY_PORT_CONTEXT)), ctx, rc, st.mps_sorights, st.mps_pset, st.mps_msgcount, st.mps_seqno, st.mps_qlimit, @as(c_uint, @intCast(st.mps_srights)));
+    }
+    _ = c.printf("xpc_b0 case=%s added_receive_names=%u\n", case, added);
+    _ = c.fflush(null);
+}
 fn replyPortsReleased(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const case = "replyPortsReleased";
     library(case);
@@ -696,19 +792,140 @@ fn replyPortsReleased(_: [*c]const c.atf_tc_t) callconv(.c) void {
     burst(p.client, &warm, 2 * ROUNDS);
     _ = awaitCount(&warm.replies, ROUNDS, 5000);
     _ = awaitCount(&warm.interrupted, ROUNDS, 2000);
-    const baseline = stableReceiveOnly(3000);
+    const reply_start = settleReplyPorts(0, 3000);
     var start: Names = undefined;
     names(&start);
+    const threads_start = threads();
     var t: Tally = .{};
     _ = c.sem_init(&t.sem, 0, 0);
     burst(p.client, &t, 2 * ROUNDS);
+    var during: Names = undefined;
+    names(&during);
     const answered = awaitCount(&t.replies, ROUNDS, 5000);
     const dropped = awaitCount(&t.interrupted, ROUNDS, 3000);
-    const settled = settleReceiveOnly(baseline, 5000);
-    _ = c.printf("xpc_b0 case=%s observed answered=%u dropped=%u replies=%llu interrupted=%llu invalid=%llu other=%llu server_answered=%llu server_released=%llu receive_only_start=%llu receive_only_end=%llu\n", case, @as(c_uint, @intFromBool(answered)), @as(c_uint, @intFromBool(dropped)), load(&t.replies), load(&t.interrupted), load(&t.invalid), load(&t.other), load(&s.answered), load(&s.released), start.receive_only, settled);
-    _ = c.printf("xpc_b0 case=%s receive_only_baseline=%llu receive_only_settled=%llu\n", case, baseline, settled);
-    fact(case, "receive_only_names_over_start", 0, if (settled > baseline) settled - baseline else 0);
+    const settled = settleReplyPorts(reply_start, 5000);
+    var end: Names = undefined;
+    names(&end);
+    const threads_end = threads();
+    _ = c.printf("xpc_b0 case=%s observed answered=%u dropped=%u replies=%llu interrupted=%llu invalid=%llu other=%llu server_answered=%llu server_released=%llu\n", case, @as(c_uint, @intFromBool(answered)), @as(c_uint, @intFromBool(dropped)), load(&t.replies), load(&t.interrupted), load(&t.invalid), load(&t.other), load(&s.answered), load(&s.released));
+    _ = c.printf("xpc_b0 case=%s reply_ports_start=%llu reply_ports_during=%llu reply_ports_settled=%llu receive_only_start=%llu receive_only_end=%llu threads_start=%llu threads_end=%llu\n", case, reply_start, during.reply_ports, settled, start.receive_only, end.receive_only, threads_start, threads_end);
+    printAddedReceive(case, &start, &end);
+    // Only names that carry libxpc's reply-port mark count: a thread's MIG
+    // reply port is receive-only too, and threads come and go.
+    fact(case, "reply_ports_over_start", 0, if (settled > reply_start) settled - reply_start else 0);
     retire(p);
+    conclude(case);
+}
+
+// ---- replyAfterCancel --------------------------------------------------------
+
+// A reply that reaches its reply port after cancel's flush has completed the
+// call (op-775). The client's target queue is held, so the reply source and
+// its cancel handler, which run on the connection's receive queue, wait while
+// the server answers. The call completes once, with INVALID, and the reply
+// port goes once, with the reply still in it.
+const Holder = struct {
+    request: O = null,
+    peer: O = null,
+    sem: c.sem_t = undefined,
+};
+fn holdPeer(ctx: ?*anyopaque, peer: O, o: O) callconv(.c) void {
+    const h: *Holder = @ptrCast(@alignCast(ctx.?));
+    if (eventCode(o) >= INVALID or h.request != null) return;
+    h.peer = xpc_retain(peer);
+    h.request = xpc_retain(o);
+    _ = c.sem_post(&h.sem);
+}
+fn holdListener(ctx: ?*anyopaque, _: O, o: O) callconv(.c) void {
+    if (eventCode(o) != PEER) return;
+    setHandler(o, &holdPeer, ctx);
+    xpc_connection_resume(o);
+}
+const Gate = struct { entered: c.sem_t = undefined, release: c.sem_t = undefined };
+fn blockQueue(ctx: ?*anyopaque) callconv(.c) void {
+    const g: *Gate = @ptrCast(@alignCast(ctx.?));
+    _ = c.sem_post(&g.entered);
+    _ = c.sem_wait(&g.release);
+}
+// True once the one marked reply port holds one message, within ms.
+fn replyInPort(ms: u64) bool {
+    const start = nowMs();
+    while (nowMs() - start < ms) {
+        var s: Names = undefined;
+        names(&s);
+        for (s.fds[0..s.n], s.contexts[0..s.n]) |fd, ctx| {
+            if (ctx != REPLY_PORT_CONTEXT) continue;
+            var st: c.mach_port_status_t = std.mem.zeroes(c.mach_port_status_t);
+            var count: c.mach_msg_type_number_t = @sizeOf(c.mach_port_status_t) / @sizeOf(c.natural_t);
+            if (c.mach_port_get_attributes(c.mach_task_self(), @intCast(fd), c.MACH_PORT_RECEIVE_STATUS, @ptrCast(&st), &count) == 0 and st.mps_msgcount == 1) return true;
+        }
+        _ = c.usleep(10_000);
+    }
+    return false;
+}
+extern fn dispatch_async_f(O, ?*anyopaque, *const fn (?*anyopaque) callconv(.c) void) void;
+extern fn xpc_connection_set_target_queue(O, O) void;
+fn replyAfterCancel(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const case = "replyAfterCancel";
+    library(case);
+    const ports_start = settleReplyPorts(0, 2000);
+    var h: Holder = .{};
+    _ = c.sem_init(&h.sem, 0, 0);
+    const l = xpc_connection_create(null, dispatch_queue_create("op775.hold", null));
+    need(l != null, "listener");
+    setHandler(l, &holdListener, &h);
+    xpc_connection_resume(l);
+    const e = xpc_endpoint_create(l);
+    need(e != null, "endpoint");
+    const conn = xpc_connection_create_from_endpoint(e);
+    need(conn != null, "client");
+    xpc_release(e);
+    const q = dispatch_queue_create("op775.client", null);
+    xpc_connection_set_target_queue(conn, q);
+    var client: Events = undefined;
+    client.init();
+    setHandler(conn, &recordInto, &client);
+    xpc_connection_resume(conn);
+    var replies: Events = undefined;
+    replies.init();
+    sendWithReply(conn, 1, &replies);
+    need(waitMs(&h.sem, 3000), "server holds the request");
+    var g: Gate = .{};
+    _ = c.sem_init(&g.entered, 0, 0);
+    _ = c.sem_init(&g.release, 0, 0);
+    dispatch_async_f(q, &g, &blockQueue);
+    need(waitMs(&g.entered, 3000), "client queue held");
+    // The server answers now. The reply waits in the call's reply port: its
+    // source cannot run while the queue is held.
+    const r = xpc_dictionary_create_reply(h.request);
+    need(r != null, "reply");
+    xpc_dictionary_set_uint64(r, "value", 2);
+    xpc_connection_send_message(h.peer, r);
+    xpc_release(r);
+    const in_port = replyInPort(2000);
+    // The flush takes the call before the source sees the reply; the call's
+    // INVALID waits on the held queue too.
+    xpc_connection_cancel(conn);
+    _ = c.usleep(100_000);
+    const ports_held = replyPorts();
+    const early = replies.count();
+    _ = c.sem_post(&g.release);
+    const done = replies.waitFor(1, 3000);
+    // A second completion would arrive here.
+    _ = c.usleep(200_000);
+    const settled = settleReplyPorts(ports_start, 3000);
+    _ = c.printf("xpc_b0 case=%s reply_ports_start=%llu reply_ports_while_held=%llu reply_ports_settled=%llu client_events=%llu client_first=%llu\n", case, ports_start, ports_held, settled, client.count(), client.first());
+    fact(case, "reply_waiting_in_port", 1, @intFromBool(in_port));
+    fact(case, "completions_while_held", 0, early);
+    fact(case, "completion", INVALID, if (done) replies.first() else NONE);
+    fact(case, "completions", 1, replies.count());
+    fact(case, "reply_port_kept_until_release", 1, @intFromBool(ports_held == ports_start + 1));
+    fact(case, "reply_ports_over_start", 0, if (settled > ports_start) settled - ports_start else 0);
+    xpc_release(h.request);
+    xpc_release(h.peer);
+    xpc_release(conn);
+    xpc_connection_cancel(l);
+    xpc_release(l);
     conclude(case);
 }
 
@@ -716,10 +933,10 @@ extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c)
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "25");
 }
-var cases: [4]c.atf_tc_t = undefined;
+var cases: [5]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const ids = [_][*:0]const u8{ "unrepliedRequestInterrupted_released", "unrepliedRequestInterrupted_exit", "unexpectedDescriptorReleased", "replyPortsReleased" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &unrepliedReleased, &unrepliedExit, &unexpectedDescriptorReleased, &replyPortsReleased };
+    const ids = [_][*:0]const u8{ "unrepliedRequestInterrupted_released", "unrepliedRequestInterrupted_exit", "unexpectedDescriptorReleased", "replyPortsReleased", "replyAfterCancel" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &unrepliedReleased, &unrepliedExit, &unexpectedDescriptorReleased, &replyPortsReleased, &replyAfterCancel };
     for (&cases, ids, bodies) |*tc, id, body| {
         var err = c.atf_tc_init(tc, id, &head, body, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;

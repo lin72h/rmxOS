@@ -125,6 +125,13 @@ struct xpc_dict_pair {
 };
 
 /*
+ * The context of each call's reply port (mach_port_set_context): "xpc.rply".
+ * Only a mark, so that a test can tell a reply port from the other receive
+ * rights of its task, such as a thread's MIG reply port.
+ */
+#define XPC_REPLY_PORT_CONTEXT	0x7870632e72706c79ULL
+
+/*
  * A request that expects a reply. Its reply port's receive right is the
  * call's own; the request carries a send-once right to it. The call is held
  * by its completion (whoever detaches it from xc_pending), by its reply

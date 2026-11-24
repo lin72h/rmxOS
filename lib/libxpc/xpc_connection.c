@@ -927,6 +927,11 @@ xpc_connection_drop_error(struct xpc_connection *conn)
  * takes the one message the request's send-once right can bring, the reply
  * or the kernel's MACH_NOTIFY_SEND_ONCE. The source holds the connection and
  * a reference on the call until its cancel handler. False: nothing was kept.
+ *
+ * The source runs on the connection's receive queue, as a reply did when it
+ * came to the connection's own port: a suspended connection holds its replies
+ * and their notifications until it is resumed. Cancel resumes that queue, and
+ * its flush completes the calls on their own queues without it.
  */
 static bool
 xpc_connection_arm_reply(struct xpc_connection *conn,
@@ -938,8 +943,11 @@ xpc_connection_arm_reply(struct xpc_connection *conn,
 	if (mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE,
 	    &port) != KERN_SUCCESS)
 		return (false);
+	/* Only a mark; a port without it works the same. */
+	(void)mach_port_set_context(mach_task_self(), port,
+	    XPC_REPLY_PORT_CONTEXT);
 	source = dispatch_source_create(DISPATCH_SOURCE_TYPE_MACH_RECV, port, 0,
-	    dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0));
+	    conn->xc_recv_queue);
 	if (source == NULL) {
 		(void)mach_port_mod_refs(mach_task_self(), port,
 		    MACH_PORT_RIGHT_RECEIVE, -1);

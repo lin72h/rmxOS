@@ -214,6 +214,9 @@ fn start(which: u32) O {
     dispatch_release(target);
     need(conn != null, "connection");
     local = op500_local(conn);
+    // op-775: the fixture's mark on the connection's own port, so that report()
+    // can tell it from another right under the same number.
+    need(c.mach_port_set_context(c.mach_task_self(), local, OWN_CONTEXT) == 0, "mark the connection's port");
     if (mode != 7 and mode != 8) {
         // xpc_connection_create(NULL) makes an anonymous listener; this
         // fixture's connection is an ordinary one whose remote it projects.
@@ -249,12 +252,31 @@ fn finish() void {
 fn fact(name: [*:0]const u8, i: usize, expected: u64, observed: u64) void {
     _ = c.printf("xpc case=%s fact=%u expected=%llu observed=%llu\n", name, @as(c_uint, @intCast(i)), expected, observed);
 }
+// "op775own": the fixture's context on the connection's port.
+const OWN_CONTEXT: c.mach_vm_address_t = 0x6f703737356f776e;
+fn refsOf(name: u32, right: c.mach_port_right_t) c_uint {
+    var n: c.mach_port_urefs_t = 0;
+    return if (c.mach_port_get_refs(c.mach_task_self(), name, right, &n) == 0) n else 0;
+}
 fn report(name: [*:0]const u8, want: []const u64, got: []const u64) void {
     for (want, got, 0..) |e, o, i| fact(name, i, e, o);
     var differs = false;
     for (want, got) |e, o| differs = differs or e != o;
+    // rmxOS port names are descriptor numbers, given out again at once: after
+    // finish() this number may name another right (op-757: named_pending's
+    // send-error phase found it present once). The connection's own right is
+    // the receive right this fixture marked in start(), or the dead name its
+    // send right becomes when that receive right goes first. Any other right
+    // under the number is not the connection's; its type and references are
+    // printed whenever the number names anything.
     var kind: c.mach_port_type_t = 0;
-    const local_gone = @intFromBool(c.mach_port_type(c.mach_task_self(), local, &kind) == c.KERN_INVALID_NAME);
+    const type_rc = c.mach_port_type(c.mach_task_self(), local, &kind);
+    var context: c.mach_vm_address_t = 0;
+    const marked = type_rc == 0 and (kind & c.MACH_PORT_TYPE_RECEIVE) != 0 and
+        c.mach_port_get_context(c.mach_task_self(), local, &context) == 0 and context == OWN_CONTEXT;
+    const own_kept = type_rc == 0 and (marked or (kind & c.MACH_PORT_TYPE_DEAD_NAME) != 0);
+    if (type_rc != c.KERN_INVALID_NAME) _ = c.printf("xpc name case=%s local=%u type_rc=%d type=0x%x context=0x%llx marked=%u own_kept=%u send=%u receive=%u send_once=%u dead=%u\n", name, local, type_rc, kind, @as(c_ulonglong, context), @as(c_uint, @intFromBool(marked)), @as(c_uint, @intFromBool(own_kept)), refsOf(local, c.MACH_PORT_RIGHT_SEND), refsOf(local, c.MACH_PORT_RIGHT_RECEIVE), refsOf(local, c.MACH_PORT_RIGHT_SEND_ONCE), refsOf(local, c.MACH_PORT_RIGHT_DEAD_NAME));
+    const local_gone = @intFromBool(!own_kept);
     var count: u32 = 0;
     const right: u32 = if (mode == 4 or mode == 6 or mode == 7 or mode == 8) c.MACH_PORT_RIGHT_DEAD_NAME else c.MACH_PORT_RIGHT_SEND;
     var remaining = if (c.mach_port_get_refs(c.mach_task_self(), remote, right, &count) == 0) count else 0;
