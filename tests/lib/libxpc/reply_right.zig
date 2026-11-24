@@ -262,10 +262,14 @@ fn receiveOnly() u64 {
     names(&s);
     return s.receive_only;
 }
+// The count once it is at or below target, or its last value after ms. A
+// worker thread keeps the MIG reply port it made (mig_support.c,
+// mig_get_reply_port) until it exits, so threads that end lower the count;
+// a reply port that stays raises it.
 fn settleReceiveOnly(target: u64, ms: u64) u64 {
     const start = nowMs();
     var n = receiveOnly();
-    while (n != target and nowMs() - start < ms) {
+    while (n > target and nowMs() - start < ms) {
         _ = c.usleep(10_000);
         n = receiveOnly();
     }
@@ -702,7 +706,8 @@ fn replyPortsReleased(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const dropped = awaitCount(&t.interrupted, ROUNDS, 3000);
     const settled = settleReceiveOnly(baseline, 5000);
     _ = c.printf("xpc_b0 case=%s observed answered=%u dropped=%u replies=%llu interrupted=%llu invalid=%llu other=%llu server_answered=%llu server_released=%llu receive_only_start=%llu receive_only_end=%llu\n", case, @as(c_uint, @intFromBool(answered)), @as(c_uint, @intFromBool(dropped)), load(&t.replies), load(&t.interrupted), load(&t.invalid), load(&t.other), load(&s.answered), load(&s.released), start.receive_only, settled);
-    fact(case, "receive_only_names_after", baseline, settled);
+    _ = c.printf("xpc_b0 case=%s receive_only_baseline=%llu receive_only_settled=%llu\n", case, baseline, settled);
+    fact(case, "receive_only_names_over_start", 0, if (settled > baseline) settled - baseline else 0);
     retire(p);
     conclude(case);
 }
