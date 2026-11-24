@@ -1637,7 +1637,14 @@ xpc_connection_receive_one(struct xpc_connection *conn)
 		xpc_connection_set_credentials(peer,
 		    ((struct xpc_object *)result)->xo_audit_token);
 
-		/* The list holds the peer, and the peer its listener. */
+		/*
+		 * The list holds the peer, and the peer its listener. The listener
+		 * holds the peer too, until its last read below: a handler that
+		 * cancels the peer, or accepts it after its client has gone, lets
+		 * the peer's final event and the release of its rights, on the
+		 * peer's own queues, release the list's reference first.
+		 */
+		xpc_retain(peer);
 		xpc_retain(conn);
 		pthread_mutex_lock(&conn->xc_lock);
 		TAILQ_INSERT_TAIL(&conn->xc_peers, peer, xc_link);
@@ -1651,11 +1658,16 @@ xpc_connection_receive_one(struct xpc_connection *conn)
 			handler(peer);
 			Block_release(handler);
 		}
+#ifdef XPC_CONSUMER_TESTING
+		op780_after_handler(conn, peer);
+#endif
 
 		/* The peer's receive queue holds the message until it is activated. */
 		if (!atomic_load_acq_int(&peer->xc_cancelled))
 			xpc_connection_dispatch_event(peer, result);
 		xpc_release(result);
+		/* The listener's reference. */
+		xpc_release(peer);
 
 	} else {
 		xpc_connection_set_credentials(conn,

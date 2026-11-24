@@ -139,3 +139,11 @@ after an epoch refresh) at 1 MiB over the warmed start.
 `descriptorsAfterRefusedSends` sends a dictionary holding an `xpc_fd_create`
 value 100 times; each pack is refused, and the open descriptors other than port
 names stay as they were.
+
+# The listener's reference on a new peer (op-780)
+
+`peer_reference.zig` links the consumer fixture, whose `op780_after_handler`
+hook the listener calls after its handler returns with a new peer and before
+its last read of that peer. `listenerHoldsNewPeer`: the handler gives the peer
+a finalizer and cancels it; the hook waits up to 1 s for the finalizer, which
+must not run before the listener's last read and must run once after it.

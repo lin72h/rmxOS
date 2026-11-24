@@ -11,3 +11,4 @@ atf_test_program{name="ool_limit_test"}
 atf_test_program{name="endpoint_listener_test"}
 atf_test_program{name="reply_right_test"}
 atf_test_program{name="pack_release_test"}
+atf_test_program{name="peer_reference_test"}

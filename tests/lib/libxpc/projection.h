@@ -31,4 +31,11 @@ int op736_pending_alloc_fail(void);
 void op736_fail_pending_alloc(void);
 int op746_audit_alloc_fail(void);
 void op746_fail_audit_alloc(void);
+/*
+ * op-780: a listener calls this after its handler has returned with a new
+ * peer, before its last read of the peer. Installed apart from op500_hooks,
+ * whose callers pass their own copies of that struct.
+ */
+void op780_after_handler(void *, void *);
+void op780_install_after_handler(void (*)(void *, void *));
 #endif
