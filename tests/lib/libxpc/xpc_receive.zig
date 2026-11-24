@@ -350,16 +350,16 @@ fn gone(_: [*c]const c.atf_tc_t) callconv(.c) void {
 // send-once reply right, and a request the remote destroys is one it
 // released unanswered. The remote keeps them until the phase under test has
 // completed the calls, then lets them go.
-var held: [2][8192]u8 align(8) = undefined;
+var held_requests: [2][8192]u8 align(8) = undefined;
 var held_count: usize = 0;
 fn hold(name: u32) void {
-    const h: *c.mach_msg_header_t = @ptrCast(&held[held_count]);
-    @memset(&held[held_count], 0);
-    need(c.mach_msg(h, c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, held[held_count].len, name, 0, 0) == 0, "competing receive");
+    const h: *c.mach_msg_header_t = @ptrCast(&held_requests[held_count]);
+    @memset(&held_requests[held_count], 0);
+    need(c.mach_msg(h, c.MACH_RCV_MSG | c.MACH_RCV_TIMEOUT, 0, held_requests[held_count].len, name, 0, 0) == 0, "competing receive");
     held_count += 1;
 }
 fn releaseHeld() void {
-    for (held[0..held_count]) |*m| c.mach_msg_destroy(@ptrCast(m));
+    for (held_requests[0..held_count]) |*m| c.mach_msg_destroy(@ptrCast(m));
     held_count = 0;
 }
 fn pending() O {

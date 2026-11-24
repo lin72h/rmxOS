@@ -89,7 +89,7 @@ fn child(mode: u8, report: c_int, command: c_int) noreturn {
     c._exit(0);
 }
 
-fn form(name: [*:0]const u8, mode: u8) void {
+fn runForm(name: [*:0]const u8, mode: u8) void {
     const task = c.mach_task_self();
     const notify = receivePort();
     const channel = receivePort();
@@ -156,8 +156,8 @@ fn form(name: [*:0]const u8, mode: u8) void {
 }
 
 fn sendOnceDescriptorNotify(_: [*c]const c.atf_tc_t) callconv(.c) void {
-    form("exit", 'x');
-    form("deallocate", 'd');
+    runForm("exit", 'x');
+    runForm("deallocate", 'd');
     if (failed) c.atf_tc_fail("a send-once observation differs from its expected value");
 }
 fn head(t: [*c]c.atf_tc_t) callconv(.c) void {

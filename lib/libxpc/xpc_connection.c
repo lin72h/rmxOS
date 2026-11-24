@@ -915,11 +915,11 @@ xpc_connection_drop_error(struct xpc_connection *conn)
 {
 
 	if (atomic_load_acq_int(&conn->xc_cancelled))
-		return (XPC_ERROR_CONNECTION_INVALID);
+		return (__DECONST(xpc_object_t, XPC_ERROR_CONNECTION_INVALID));
 	if (!xpc_connection_can_reconnect(conn) &&
 	    !xpc_connection_remote_alive(conn))
-		return (XPC_ERROR_CONNECTION_INVALID);
-	return (XPC_ERROR_CONNECTION_INTERRUPTED);
+		return (__DECONST(xpc_object_t, XPC_ERROR_CONNECTION_INVALID));
+	return (__DECONST(xpc_object_t, XPC_ERROR_CONNECTION_INTERRUPTED));
 }
 
 /*
