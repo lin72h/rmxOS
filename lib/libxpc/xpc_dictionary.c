@@ -146,6 +146,28 @@ nv2xpc(const nvlist_t *nv)
 	return (xo);
 }
 
+/*
+ * A nested dictionary or array: the parent takes the list xpc2nv made for it.
+ * nvlist_add_nvlist_* would add a clone (nvpair_createv_nvlist_type) and leave
+ * this list, and every copy in it, behind. A parent already in error does not
+ * take it (nvlist_movev_* frees only a list with a parent), so it goes here.
+ */
+static void
+xpc2nv_nested(nvlist_t *nv, const char *key, struct xpc_object *xo)
+{
+	nvlist_t *child;
+
+	child = xpc2nv(xo);
+	if (nvlist_error(nv) != 0) {
+		nvlist_destroy(child);
+		return;
+	}
+	if (xo->xo_xpc_type == _XPC_TYPE_DICTIONARY)
+		nvlist_move_nvlist_dictionary(nv, key, child);
+	else
+		nvlist_move_nvlist_array(nv, key, child);
+}
+
 static void
 xpc2nv_primitive(nvlist_t *nv, const char *key, xpc_object_t value)
 {
@@ -153,11 +175,8 @@ xpc2nv_primitive(nvlist_t *nv, const char *key, xpc_object_t value)
 
 	switch (xotmp->xo_xpc_type) {
 	case _XPC_TYPE_DICTIONARY:
-		nvlist_add_nvlist_dictionary(nv, key, xpc2nv(xotmp));
-		break;
-
 	case _XPC_TYPE_ARRAY:
-		nvlist_add_nvlist_array(nv, key, xpc2nv(xotmp));
+		xpc2nv_nested(nv, key, xotmp);
 		break;
 
 	case _XPC_TYPE_BOOL:

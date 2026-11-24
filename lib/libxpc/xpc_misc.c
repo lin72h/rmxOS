@@ -127,24 +127,28 @@ xpc_array_destroy(struct xpc_object *dict)
 	}
 }
 
-static int
-xpc_pack(struct xpc_object *xo, void *buf, size_t *size)
+/*
+ * The dictionary's nvlist bytes in a buffer of their own, *size of them, for
+ * the caller to free; NULL when the list cannot be packed (nvlist_pack_buffer
+ * refuses any descriptor). The list goes on every path, and with it every copy
+ * xpc2nv made, a descriptor's duplicate included.
+ */
+static void *
+xpc_pack(struct xpc_object *xo, size_t *size)
 {
 	nvlist_t *nv;
 	void *packed;
 
 	nv = xpc2nv(xo);
-
-	packed = nvlist_pack_buffer(nv, NULL, size);
-	if (packed == NULL) {
-		errno = EINVAL;
-		return (-1);
+	if (nv == NULL) {
+		errno = ENOMEM;
+		return (NULL);
 	}
-
-	if (buf != NULL)
-		memcpy(buf, packed, *size);
-	free(packed);
-	return (0);
+	packed = nvlist_pack_buffer(nv, NULL, size);
+	nvlist_destroy(nv);
+	if (packed == NULL)
+		errno = EINVAL;
+	return (packed);
 }
 
 static struct xpc_object *
@@ -456,32 +460,37 @@ xpc_pipe_send_msg(xpc_object_t xobj, mach_port_t dst,
 	mach_msg_header_t *header;
 	size_t size, msg_size, offset;
 	char *data;
+	void *packed;
 	kern_return_t kr;
 	int err;
 
 	xo = xobj;
 	assert(xo->xo_xpc_type == _XPC_TYPE_DICTIONARY);
 
-	if (xpc_pack(xo, NULL, &size) != 0)
+	/* Packed once per send, into its own buffer, then copied in. */
+	if ((packed = xpc_pack(xo, &size)) == NULL)
 		return (EINVAL);
 
 	offset = reply != MACH_PORT_NULL ?
 	    offsetof(struct xpc_request_message, data) :
 	    offsetof(struct xpc_message, data);
 	/* Reserve a complete audit trailer, including the message alignment. */
-	if (size > XPC_RECV_SIZE)
+	if (size > XPC_RECV_SIZE) {
+		free(packed);
 		return (EMSGSIZE);
-	msg_size = _ALIGN(size + offset);
-	if (msg_size > MAX_RECV - sizeof(mach_msg_audit_trailer_t))
-		return (EMSGSIZE);
-	if ((header = calloc(1, msg_size)) == NULL)
-		return (ENOMEM);
-	data = (char *)header + offset;
-
-	if (xpc_pack(xo, data, &size) != 0) {
-		free(header);
-		return (EINVAL);
 	}
+	msg_size = _ALIGN(size + offset);
+	if (msg_size > MAX_RECV - sizeof(mach_msg_audit_trailer_t)) {
+		free(packed);
+		return (EMSGSIZE);
+	}
+	if ((header = calloc(1, msg_size)) == NULL) {
+		free(packed);
+		return (ENOMEM);
+	}
+	data = (char *)header + offset;
+	memcpy(data, packed, size);
+	free(packed);
 
 	header->msgh_size = msg_size;
 	header->msgh_bits = MACH_MSGH_BITS(dst_type, MACH_MSG_TYPE_MAKE_SEND);

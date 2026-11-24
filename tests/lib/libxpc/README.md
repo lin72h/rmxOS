@@ -129,3 +129,13 @@ field accessors: it builds only where the header declares them with
 op-260 adds `noStderr` beside `noStdout`: a client and server exchange ten
 messages with standard error on a pipe, and the pipe must stay empty. libxpc's
 `debugf` trace exists only in builds that define `XPC_DEBUG`.
+# Pack release (op-780)
+
+`pack_release.zig` links the product `libxpc.so.5` by its soname with no run
+path, so `LD_LIBRARY_PATH` selects the library under test. `heapAfterSends`
+sends one dictionary (data, a nested dictionary and an array) 1,000 times on an
+in-process connection and bounds the live heap (jemalloc `stats.allocated`
+after an epoch refresh) at 1 MiB over the warmed start.
+`descriptorsAfterRefusedSends` sends a dictionary holding an `xpc_fd_create`
+value 100 times; each pack is refused, and the open descriptors other than port
+names stay as they were.
