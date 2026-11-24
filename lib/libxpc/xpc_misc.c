@@ -510,7 +510,7 @@ xpc_pipe_send_msg(xpc_object_t xobj, mach_port_t dst,
 	return (err);
 }
 
-int
+__private_extern__ int
 xpc_pipe_send(xpc_object_t xobj, mach_port_t dst, mach_port_t local,
     uint64_t id)
 {
@@ -520,7 +520,7 @@ xpc_pipe_send(xpc_object_t xobj, mach_port_t dst, mach_port_t local,
 }
 
 /* A request whose reply is to come to the receive right reply. */
-int
+__private_extern__ int
 xpc_pipe_send_request(xpc_object_t xobj, mach_port_t dst, mach_port_t local,
     uint64_t id, mach_port_t reply)
 {
@@ -534,7 +534,7 @@ xpc_pipe_send_request(xpc_object_t xobj, mach_port_t dst, mach_port_t local,
  * with the message. Otherwise the right, live or dead, is still the
  * caller's to release.
  */
-int
+__private_extern__ int
 xpc_pipe_send_reply(xpc_object_t xobj, mach_port_t sonce, uint64_t id)
 {
 
