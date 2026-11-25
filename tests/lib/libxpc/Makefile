@@ -10,6 +10,7 @@ SCRIPTS+= reply_right_test
 SCRIPTS+= pack_release_test
 SCRIPTS+= peer_reference_test
 SCRIPTS+= large_message_test
+SCRIPTS+= endpoint_message_test
 CLEANFILES+= ${SCRIPTS}
 SCRIPTSDIR= ${TESTSDIR}
 ZIG?= zig
@@ -61,6 +62,10 @@ peer_reference_test: ${.CURDIR}/peer_reference.zig
 	    ${SYSROOT}/lib/libthr.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include \
 	    -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -rpath ${XPC_TEST_RPATH} -femit-bin=${.TARGET}
 large_message_test: ${.CURDIR}/large_message.zig
+	${ZIG} build-exe ${.ALLSRC} ${XPC_LIB_SO} ${SYSROOT}/usr/lib/libdispatch.so.5 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/usr/lib/libBlocksRuntime.so \
+	    ${SYSROOT}/lib/libthr.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include \
+	    -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -femit-bin=${.TARGET}
+endpoint_message_test: ${.CURDIR}/endpoint_message.zig
 	${ZIG} build-exe ${.ALLSRC} ${XPC_LIB_SO} ${SYSROOT}/usr/lib/libdispatch.so.5 ${SYSROOT}/usr/lib/libmach.so.5 ${SYSROOT}/usr/lib/libBlocksRuntime.so \
 	    ${SYSROOT}/lib/libthr.so.3 ${ATF_C_ARCHIVE} -target x86_64-freebsd -lc --sysroot ${ZIG_SYSROOT} -I${SYSROOT}/usr/include \
 	    -I${SRCTOP}/contrib/atf -I${SRCTOP}/sys -femit-bin=${.TARGET}

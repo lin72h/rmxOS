@@ -171,3 +171,37 @@ listener that is never resumed.
 
 `receive_pending_test:sizes` checks the sender's `EMSGSIZE` itself, through
 the fixture's `op500_pipe_send`, one byte over the cap.
+
+# Endpoints in messages (op-796)
+
+`endpoint_message.zig` links the product `libxpc.so.5` by its soname with no
+run path. An endpoint value in a dictionary, at any depth, travels as a port
+descriptor with a copy of its send right, after a request's send-once reply
+right, and the packed list holds its index among the endpoint descriptors;
+the receiver's endpoint object owns the right it received. In one task a send
+right shares its port's name, so the in-process cases count references on the
+target listener's own name (`mach_port_get_refs`); in another task a received
+endpoint's name is read from its description, `(endpoint) <name>`.
+
+- `endpointInReply` (`container`'s shape): a forked child holds an anonymous
+  and a named listener and answers on the named one with an endpoint of the
+  anonymous one. The parent connects from the endpoint after the reply has
+  gone and makes three request-and-reply exchanges, the first held while the
+  other two complete; the child reads each audit token. When the child exits,
+  the connection's last event is `XPC_ERROR_CONNECTION_INVALID` and no dead
+  name for the endpoint remains once the endpoint is released.
+- `endpointInMessage`: an endpoint at `list[0].ep` (a dictionary in an array
+  in the dictionary) in an ordinary message; the server connects from it and
+  one message reaches the target. Then the wire as built: an ordinary message
+  and a request read from a listener that is never resumed, and the server's
+  reply to a request the case sends itself, read from a port of its own.
+- `endpointReleasedBeforeUse`: the reply handler connects from the reply's
+  endpoint and lets it go; one exchange follows.
+- `secondEndpoint`: two endpoints of one listener from two replies, two
+  clients; destroying one endpoint and cancelling its client leaves the
+  listener and the other client working.
+- `endpointNames`: 20 round trips, each carrying an endpoint out and back;
+  the send rights on the target's name return to where they started.
+- `endpointCapRefused`: 64 endpoints (the cap) arrive, 65 are refused at the
+  sender (logged, the client interrupted) and a small message follows; a
+  request with 64 endpoints is answered.
