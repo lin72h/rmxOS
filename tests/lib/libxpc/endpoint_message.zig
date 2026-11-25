@@ -378,12 +378,20 @@ fn nested(o: O) O {
     const inner = xpc_array_get_value(list, 0);
     return if (inner == null) null else xpc_dictionary_get_value(inner, "ep");
 }
-// A dictionary with n copies of ep in its array "eps".
-fn manyMessage(value: u64, op: u64, ep: O, n: usize) O {
+// A dictionary with n endpoints of listener l in its array "eps", each its
+// own object: an array admits an object once (xpc_array_admit), so one
+// endpoint appended n times is one slot.
+fn manyMessage(value: u64, op: u64, l: O, n: usize) O {
     const d = dict(value, op);
     const eps = xpc_array_create(null, 0);
     need(eps != null, "endpoint array");
-    for (0..n) |_| xpc_array_append_value(eps, ep);
+    for (0..n) |_| {
+        const e = xpc_endpoint_create(l);
+        need(e != null, "endpoint for the array");
+        xpc_array_append_value(eps, e);
+        xpc_release(e);
+    }
+    need(xpc_array_get_count(eps) == n, "the array holds every endpoint");
     xpc_dictionary_set_value(d, "eps", eps);
     xpc_release(eps);
     return d;
@@ -909,11 +917,12 @@ fn printView(case: [*:0]const u8, form: [*:0]const u8, v: View) void {
     _ = c.printf("xpc_b0 case=%s wire form=%s bits=0x%08x complex=%llu descriptors=%llu d0=%llu:%u d1=%llu:%u list_offset=%llu size=%llu id=%llu magic=0x%llx index=%lld reply_port=%u\n", case, form, v.bits, v.complex, v.count, v.disp[0], v.name[0], v.disp[1], v.name[1], v.list, v.size, v.id, v.magic, v.index, v.reply_port);
     _ = c.fflush(null);
 }
-// A request the case sends itself: header to dest with a send right made
-// from reply, a send-once right to reply, then a copy of the send right
-// carried, then size, ID and the packed list.
+// A request the case sends itself, as libxpc builds one with an endpoint:
+// header to dest with a send right made from reply; two descriptors, a
+// send-once right to reply and a copy of the send right carried, ending at
+// 52; 4 bytes of padding; size at 56, ID at 64 and the packed list at 72.
 fn sendRequest(dest: u32, reply_port: u32, carried: u32, payload: []const u8, id: u64) c_int {
-    const total = std.mem.alignForward(usize, 56 + payload.len, 8);
+    const total = std.mem.alignForward(usize, 72 + payload.len, 8);
     const buf: [*]align(8) u8 = @ptrCast(@alignCast(c.calloc(1, total) orelse c.atf_tc_fail("setup: request buffer")));
     defer c.free(buf);
     const h: *c.mach_msg_header_t = @ptrCast(buf);
@@ -926,9 +935,9 @@ fn sendRequest(dest: u32, reply_port: u32, carried: u32, payload: []const u8, id
     const d: [*]align(4) PortDescriptor = @ptrCast(@alignCast(buf + 28));
     d[0] = .{ .name = reply_port, .pad1 = 0, .pad2 = 0, .disposition = c.MACH_MSG_TYPE_MAKE_SEND_ONCE, .kind = c.MACH_MSG_PORT_DESCRIPTOR };
     d[1] = .{ .name = carried, .pad1 = 0, .pad2 = 0, .disposition = c.MACH_MSG_TYPE_COPY_SEND, .kind = c.MACH_MSG_PORT_DESCRIPTOR };
-    std.mem.writeInt(u64, buf[40..48], payload.len, .little);
-    std.mem.writeInt(u64, buf[48..56], id, .little);
-    @memcpy(buf[56..][0..payload.len], payload);
+    std.mem.writeInt(u64, buf[56..64], payload.len, .little);
+    std.mem.writeInt(u64, buf[64..72], id, .little);
+    @memcpy(buf[72..][0..payload.len], payload);
     return c.mach_msg(h, c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, h.msgh_size, 0, 0, 1000, 0);
 }
 var captured: [4096]u8 = undefined;
@@ -951,7 +960,7 @@ fn wireRecords(case: [*:0]const u8, et: O, tport: u32, sport: u32) void {
     fact(case, "ordinary_descriptors", 1, o.count);
     fact(case, "ordinary_d0_disposition", PORT_SEND, o.disp[0]);
     fact(case, "ordinary_d0_names_target", tport, o.name[0]);
-    fact(case, "ordinary_list_at_40", 0x6c, if (o.list == 40) o.magic else 0);
+    fact(case, "ordinary_list_at_56", 0x6c, if (o.list == 56) o.magic else 0);
     fact(case, "ordinary_endpoint_index", 0, @bitCast(o.index));
     c.mach_msg_destroy(@ptrCast(&wire));
     // Request.
@@ -966,10 +975,10 @@ fn wireRecords(case: [*:0]const u8, et: O, tport: u32, sport: u32) void {
     fact(case, "request_d0_disposition", PORT_SEND_ONCE, r.disp[0]);
     fact(case, "request_d1_disposition", PORT_SEND, r.disp[1]);
     fact(case, "request_d1_names_target", tport, r.name[1]);
-    fact(case, "request_list_at_56", 0x6c, if (r.list == 56) r.magic else 0);
+    fact(case, "request_list_at_72", 0x6c, if (r.list == 72) r.magic else 0);
     fact(case, "request_endpoint_index", 0, @bitCast(r.index));
-    const n: usize = if (r.size <= captured.len and r.list == 56) @intCast(r.size) else 0;
-    @memcpy(captured[0..n], wire[56..][0..n]);
+    const n: usize = if (r.size <= captured.len and r.list == 72) @intCast(r.size) else 0;
+    @memcpy(captured[0..n], wire[72..][0..n]);
     // The request's send-once right goes with it: its call completes with an error.
     c.mach_msg_destroy(@ptrCast(&wire));
     _ = waitMs(&kr.sem, LIMIT_MS);
@@ -985,7 +994,7 @@ fn wireRecords(case: [*:0]const u8, et: O, tport: u32, sport: u32) void {
     fact(case, "reply_descriptors", 1, p.count);
     fact(case, "reply_d0_disposition", PORT_SEND, p.disp[0]);
     fact(case, "reply_d0_names_target", tport, p.name[0]);
-    fact(case, "reply_list_at_40", 0x6c, if (p.list == 40) p.magic else 0);
+    fact(case, "reply_list_at_56", 0x6c, if (p.list == 56) p.magic else 0);
     fact(case, "reply_endpoint_index", 0, @bitCast(p.index));
     fact(case, "reply_id", 796, p.id);
     fact(case, "reply_has_no_reply_port", 0, p.reply_port);
@@ -1210,19 +1219,17 @@ fn endpointCapRefused(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const s = listen("op796.cap.server", &serverListener, &srv, &sport);
     cli.init();
     const client = clientOf(s, &cli);
-    const et = xpc_endpoint_create(t);
-    need(et != null, "target endpoint");
     const start = refs(tport, SEND);
-    send(client, manyMessage(90, OP_COUNT, et, CAP));
+    send(client, manyMessage(90, OP_COUNT, t, CAP));
     const cap_arrived = awaitCount(&srv.count[90], 1, LIMIT_MS);
     const interrupted_before = cli.tally(INTERRUPTED);
-    send(client, manyMessage(91, OP_COUNT, et, CAP + 1));
+    send(client, manyMessage(91, OP_COUNT, t, CAP + 1));
     const interrupted = cli.waitCode(INTERRUPTED, LIMIT_MS) and cli.tally(INTERRUPTED) > interrupted_before;
     send(client, dict(92, 0));
     const small = awaitCount(&srv.count[92], 1, LIMIT_MS);
     const k = &calls[0];
     k.init();
-    call(client, manyMessage(93, OP_COUNT_REPLY, et, CAP), k, &callDone);
+    call(client, manyMessage(93, OP_COUNT_REPLY, t, CAP), k, &callDone);
     const answered = waitMs(&k.sem, LIMIT_MS);
     _ = c.usleep(200_000);
     _ = c.printf("xpc_b0 case=%s observed cap_count=%llu cap_named=%llu over_count=%llu small_count=%llu request_code=%llu request_n=%llu client_interrupted=%llu client_invalid=%llu log_expected=send_refused_endpoints_%llu_cap_%llu\n", case, load(&srv.found[90]), load(&srv.named[90]), load(&srv.count[91]), load(&srv.count[92]), k.code, k.count, cli.tally(INTERRUPTED), cli.tally(INVALID), CAP + 1, CAP);
@@ -1235,7 +1242,6 @@ fn endpointCapRefused(_: [*c]const c.atf_tc_t) callconv(.c) void {
     fact(case, "request_at_cap_reply", 93, if (answered) k.code else NONE);
     fact(case, "request_at_cap_endpoints", CAP, k.count);
     fact(case, "send_refs_back", start, settleRefs(tport, SEND, start, 2000));
-    xpc_release(et);
     retire(client);
     retire(s);
     retire(t);
