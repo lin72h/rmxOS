@@ -1602,10 +1602,7 @@ xpc_connection_receive_one(struct xpc_connection *conn)
 		 */
 		return (kr == EINVAL || kr == ENOMEM || kr == EMSGSIZE);
 	}
-	/*
-	 * The message owns its header right from here, so its XPC_RPORT value
-	 * names a right it holds for as long as it lives.
-	 */
+	/* The message owns its header right from here. */
 	((struct xpc_object *)result)->xo_reply_port = remote;
 	if (atomic_load_acq_int(&conn->xc_cancelled)) {
 		xpc_release(result);

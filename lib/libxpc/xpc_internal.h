@@ -102,10 +102,7 @@ struct xpc_object {
 	size_t			xo_size;
 	xpc_u			xo_u;
 	audit_token_t *		xo_audit_token;
-	/*
-	 * A received message owns the header's reply right; its XPC_RPORT
-	 * value borrows it for as long as the message lives.
-	 */
+	/* A received message owns the header's reply right until it goes. */
 	mach_port_t		xo_reply_port;
 	TAILQ_ENTRY(xpc_object) xo_link;
 	/*

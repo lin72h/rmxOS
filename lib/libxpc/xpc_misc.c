@@ -467,7 +467,6 @@ xpc_copy_entitlement_for_token(const char *key __unused, audit_token_t *token __
 }
 
 
-#define XPC_RPORT "XPC remote port"
 int
 xpc_pipe_routine_reply(xpc_object_t xobj __unused)
 {
@@ -664,7 +663,6 @@ xpc_pipe_decode(struct xpc_recv_message *message, size_t capacity,
 	}
 	memcpy(xo->xo_audit_token, &tr->msgh_audit, sizeof(tr->msgh_audit));
 	xo->xo_flags |= _XPC_FROM_WIRE;
-	xpc_dictionary_set_mach_send(xo, XPC_RPORT, request->msgh_remote_port);
 	xpc_dictionary_set_uint64(xo, XPC_SEQID, id);
 	/* No failure follows: the rights pass to the object or the caller. */
 	if (own_reply)
