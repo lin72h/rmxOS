@@ -131,9 +131,79 @@ const Events = struct {
     }
 };
 
+// ---- Final events (op-805) -------------------------------------------------
+//
+// xpc_connection_cancel is asynchronous (lib/libxpc/xpc_connection.c): the
+// connection's final INVALID comes later, on its receive queue, and its
+// rights go separately, from its send queue. Each case runs in its own
+// process, and exit() runs at the depth of the case's returned frame, so
+// what a handler can reach lives in static storage. Each connection a case
+// gives a handler has an End here, carried in its handler's block: what the
+// handler received, its INVALIDs, and every event after the first INVALID.
+// The case waits for every End's INVALID before it goes on. INVALID is the
+// last event a connection's handler receives (connection.h), so an event
+// after it is a libxpc defect, never the case's.
+const End = struct {
+    label: [*:0]const u8 = "",
+    events: u64 = 0,
+    invalid: u64 = 0,
+    after: u64 = 0,
+};
+const END_SLOTS = 512;
+var ends: [END_SLOTS]End = @splat(.{});
+var ends_made: u64 = 0;
+// Past END_SLOTS: counted as made, never ended, so the case fails.
+var end_overflow: End = .{ .label = "overflow" };
+fn newEnd(label: [*:0]const u8) *End {
+    const i = @atomicRmw(u64, &ends_made, .Add, 1, .seq_cst);
+    if (i >= END_SLOTS) return &end_overflow;
+    ends[@intCast(i)].label = label;
+    return &ends[@intCast(i)];
+}
+fn endsMade() []End {
+    return ends[0..@intCast(@min(load(&ends_made), END_SLOTS))];
+}
+fn hasInvalid(e: *End) bool {
+    return load(&e.invalid) != 0;
+}
+// Until e has its INVALID, or ms.
+fn awaitEnd(e: *End, ms: u64) bool {
+    const start = nowMs();
+    while (!hasInvalid(e) and nowMs() - start < ms) _ = c.usleep(1_000);
+    return hasInvalid(e);
+}
+// Until every End made so far has its INVALID, or ms: how many have.
+fn awaitEnds(ms: u64) u64 {
+    const start = nowMs();
+    while (true) {
+        var n: u64 = 0;
+        for (endsMade()) |*e| n += @intFromBool(hasInvalid(e));
+        if (n == load(&ends_made) or nowMs() - start >= ms) return n;
+        _ = c.usleep(2_000);
+    }
+}
+// After the last INVALID: the time an event after it has to arrive.
+const QUIET_MS = 50;
+// A case's last step: every End's INVALID, the quiet window, then the facts.
+fn finalEvents(case: [*:0]const u8) void {
+    const have = awaitEnds(3000);
+    _ = c.usleep(QUIET_MS * 1000);
+    var after: u64 = load(&end_overflow.after);
+    var events: u64 = 0;
+    for (endsMade()) |*e| {
+        after += load(&e.after);
+        events += load(&e.events);
+        if (!hasInvalid(e) or load(&e.after) != 0) _ = c.printf("xpc_b0 case=%s end=%s events=%llu invalid=%llu after_invalid=%llu\n", case, e.label, load(&e.events), load(&e.invalid), load(&e.after));
+    }
+    _ = c.printf("xpc_b0 case=%s final ends=%llu invalid=%llu events=%llu after_invalid=%llu quiet_ms=%u\n", case, load(&ends_made), have, events, after, @as(c_uint, QUIET_MS));
+    fact(case, "final_invalids", load(&ends_made), have);
+    fact(case, "events_after_invalid", 0, after);
+}
+
 // Blocks ABI (BlocksRuntime runtime.c), as in ool_limit.zig: a stack literal
 // copied to the heap once. The handler gets its context and the connection
-// it was set on, so a peer's handler can reply on its peer.
+// it was set on, so a peer's handler can reply on its peer. A connection's
+// handler block carries the connection's End; a reply block carries none.
 const Fn = *const fn (?*anyopaque, O, O) callconv(.c) void;
 const Descriptor = extern struct { reserved: c_ulong, size: c_ulong };
 const Block = extern struct {
@@ -145,17 +215,23 @@ const Block = extern struct {
     f: Fn,
     ctx: ?*anyopaque,
     conn: O,
+    end: ?*End,
 };
 fn blockInvoke(b: *Block, o: O) callconv(.c) void {
+    if (b.end) |e| if (hasInvalid(e)) bump(&e.after);
     b.f(b.ctx, b.conn, o);
+    if (b.end) |e| {
+        bump(&e.events);
+        if (o == @as(O, @ptrCast(@constCast(&_xpc_error_connection_invalid)))) bump(&e.invalid);
+    }
 }
 const descriptor = Descriptor{ .reserved = 0, .size = @sizeOf(Block) };
-fn block(f: Fn, ctx: ?*anyopaque, conn: O) ?*anyopaque {
-    var literal = Block{ .isa = @ptrCast(&_NSConcreteStackBlock), .flags = 0, .reserved = 0, .invoke = &blockInvoke, .descriptor = &descriptor, .f = f, .ctx = ctx, .conn = conn };
+fn block(f: Fn, ctx: ?*anyopaque, conn: O, end: ?*End) ?*anyopaque {
+    var literal = Block{ .isa = @ptrCast(&_NSConcreteStackBlock), .flags = 0, .reserved = 0, .invoke = &blockInvoke, .descriptor = &descriptor, .f = f, .ctx = ctx, .conn = conn, .end = end };
     return _Block_copy(&literal);
 }
-fn setHandler(conn: O, f: Fn, ctx: ?*anyopaque) void {
-    const b = block(f, ctx, conn);
+fn setHandler(conn: O, f: Fn, ctx: ?*anyopaque, end: *End) void {
+    const b = block(f, ctx, conn, end);
     xpc_connection_set_event_handler(conn, b);
     _Block_release(b);
 }
@@ -176,7 +252,7 @@ fn sendValue(conn: O, value: u64) void {
 }
 fn sendWithReply(conn: O, value: u64, replies: *Events) void {
     const m = message(value);
-    const b = block(&recordInto, replies, null);
+    const b = block(&recordInto, replies, null, null);
     xpc_connection_send_message_with_reply(conn, m, null, b);
     _Block_release(b);
     xpc_release(m);
@@ -367,7 +443,7 @@ fn listenerEvent(ctx: ?*anyopaque, _: O, o: O) callconv(.c) void {
     if (code != PEER) return;
     switch (s.mode) {
         .serve => {
-            setHandler(o, &peerEvent, s);
+            setHandler(o, &peerEvent, s, newEnd("peer"));
             xpc_connection_resume(o);
         },
         .refuse => {
@@ -380,18 +456,24 @@ fn listenerEvent(ctx: ?*anyopaque, _: O, o: O) callconv(.c) void {
 
 // ---- anonymousListenerPeer ---------------------------------------------------
 
+// What the case's handlers and reply blocks reach (op-805).
+var anon_refuse: Listen = undefined;
+var anon_refused_client: Events = undefined;
+var anon_serve: Listen = undefined;
+var anon_client: Events = undefined;
+var anon_replies: Events = undefined;
 fn anonymousListenerPeer(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const case = "anonymousListenerPeer";
     library(case);
     // A listener that refuses its peer. The client's own port is found
     // before anything is resumed, while nothing else makes or frees names.
-    var refuse: Listen = undefined;
+    const refuse = &anon_refuse;
     refuse.init(.refuse);
-    var refused_client: Events = undefined;
+    const refused_client = &anon_refused_client;
     refused_client.init();
     const la = xpc_connection_create(null, dispatch_queue_create("op751.refuse", null));
     need(la != null, "refusing listener");
-    setHandler(la, &listenerEvent, &refuse);
+    setHandler(la, &listenerEvent, refuse, newEnd("refusing_listener"));
     const ea = xpc_endpoint_create(la);
     need(ea != null, "refusing listener's endpoint");
     var before: Snapshot = undefined;
@@ -403,7 +485,7 @@ fn anonymousListenerPeer(_: [*c]const c.atf_tc_t) callconv(.c) void {
     xpc_release(ea);
     const local = onlyNew(&before, &after) orelse c.atf_tc_fail("setup: one new port for the connection");
     const own = refs(local, c.MACH_PORT_RIGHT_SEND);
-    setHandler(ca, &recordInto, &refused_client);
+    setHandler(ca, &recordInto, refused_client, newEnd("refused_client"));
     xpc_connection_resume(la);
     xpc_connection_resume(ca);
     sendValue(ca, 7);
@@ -420,24 +502,24 @@ fn anonymousListenerPeer(_: [*c]const c.atf_tc_t) callconv(.c) void {
     // A listener that serves its peer: one connection to the listener, the
     // message to the peer once it has a handler and is resumed, and the
     // peer's reply to the sender.
-    var serve: Listen = undefined;
+    const serve = &anon_serve;
     serve.init(.serve);
-    var client: Events = undefined;
+    const client = &anon_client;
     client.init();
-    var replies: Events = undefined;
+    const replies = &anon_replies;
     replies.init();
     const lb = xpc_connection_create(null, dispatch_queue_create("op751.serve", null));
     need(lb != null, "serving listener");
-    setHandler(lb, &listenerEvent, &serve);
+    setHandler(lb, &listenerEvent, serve, newEnd("serving_listener"));
     xpc_connection_resume(lb);
     const eb = xpc_endpoint_create(lb);
     need(eb != null, "serving listener's endpoint");
     const cb = xpc_connection_create_from_endpoint(eb);
     need(cb != null, "connection from the serving listener's endpoint");
     xpc_release(eb);
-    setHandler(cb, &recordInto, &client);
+    setHandler(cb, &recordInto, client, newEnd("client"));
     xpc_connection_resume(cb);
-    sendWithReply(cb, 751, &replies);
+    sendWithReply(cb, 751, replies);
     const replied = replies.waitFor(1, 3000);
     const served = serve.peer_events.waitFor(1, 3000);
     fact(case, "reply_value", 752, if (replied) replies.first() else NONE);
@@ -454,6 +536,7 @@ fn anonymousListenerPeer(_: [*c]const c.atf_tc_t) callconv(.c) void {
     xpc_release(lb);
     xpc_connection_cancel(la);
     xpc_release(la);
+    finalEvents(case);
     conclude(case);
 }
 
@@ -461,14 +544,17 @@ fn anonymousListenerPeer(_: [*c]const c.atf_tc_t) callconv(.c) void {
 
 // In one task every send right to the listener's port shares the name of its
 // receive right, so the references on that name are what can be counted.
+var owns_serve: Listen = undefined;
+var owns_client: Events = undefined;
+var owns_replies: Events = undefined;
 fn endpointOwnsRight(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const case = "endpointOwnsRight";
     library(case);
-    var serve: Listen = undefined;
+    const serve = &owns_serve;
     serve.init(.serve);
-    var client: Events = undefined;
+    const client = &owns_client;
     client.init();
-    var replies: Events = undefined;
+    const replies = &owns_replies;
     replies.init();
     var before: Snapshot = undefined;
     var after: Snapshot = undefined;
@@ -489,15 +575,18 @@ fn endpointOwnsRight(_: [*c]const c.atf_tc_t) callconv(.c) void {
     fact(case, "send_refs_endpoint_released", 2, refs(name, send));
     conclude(case);
 
-    setHandler(l, &listenerEvent, &serve);
+    setHandler(l, &listenerEvent, serve, newEnd("listener"));
     xpc_connection_resume(l);
-    setHandler(conn, &recordInto, &client);
+    const client_end = newEnd("client");
+    setHandler(conn, &recordInto, client, client_end);
     xpc_connection_resume(conn);
-    sendWithReply(conn, 41, &replies);
+    sendWithReply(conn, 41, replies);
     const replied = replies.waitFor(1, 3000);
     fact(case, "reply_after_endpoint_released", 42, if (replied) replies.first() else NONE);
     fact(case, "send_refs_connected", 2, refs(name, send));
     xpc_connection_cancel(conn);
+    // Its final INVALID before the count.
+    _ = awaitEnd(client_end, 3000);
     fact(case, "send_refs_after_cancel", 1, settleRefs(name, send, 1, 3000));
     const ended = client.waitFor(1, 3000);
     fact(case, "client_final_event", INVALID, if (ended) client.first() else NONE);
@@ -508,6 +597,7 @@ fn endpointOwnsRight(_: [*c]const c.atf_tc_t) callconv(.c) void {
     fact(case, "client_events", 1, client.count());
     xpc_connection_cancel(l);
     xpc_release(l);
+    finalEvents(case);
     conclude(case);
 }
 
@@ -515,15 +605,21 @@ fn endpointOwnsRight(_: [*c]const c.atf_tc_t) callconv(.c) void {
 
 // "this connection will receive XPC_ERROR_CONNECTION_INVALID if the listening
 // side crashes, exits or cancels the listener connection."
+var dead_events: Events = undefined;
+var dead_queued: Events = undefined;
+var dead_later: Events = undefined;
+var dead_listener: Events = undefined;
 fn deadEndpointInvalid(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const case = "deadEndpointInvalid";
     library(case);
-    var events: Events = undefined;
+    const events = &dead_events;
     events.init();
-    var queued: Events = undefined;
+    const queued = &dead_queued;
     queued.init();
-    var later: Events = undefined;
+    const later = &dead_later;
     later.init();
+    const listener_events = &dead_listener;
+    listener_events.init();
     var before: Snapshot = undefined;
     var after: Snapshot = undefined;
     snapshot(&before);
@@ -533,6 +629,8 @@ fn deadEndpointInvalid(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const name = onlyNew(&before, &after) orelse c.atf_tc_fail("setup: one new port for the listener");
     const e = xpc_endpoint_create(l);
     need(e != null, "endpoint");
+    // Never resumed: a handler sees its INVALID and does not activate it.
+    setHandler(l, &recordInto, listener_events, newEnd("listener"));
     xpc_connection_cancel(l);
     xpc_release(l);
     // The listener's receive right goes on its send queue; the endpoint's
@@ -550,10 +648,10 @@ fn deadEndpointInvalid(_: [*c]const c.atf_tc_t) callconv(.c) void {
     fact(case, "dead_refs_with_connection", 2, refs(name, dead));
     xpc_release(e);
     fact(case, "dead_refs_endpoint_released", 1, refs(name, dead));
-    setHandler(conn, &recordInto, &events);
-    sendWithReply(conn, 1, &queued);
+    setHandler(conn, &recordInto, events, newEnd("client"));
+    sendWithReply(conn, 1, queued);
     xpc_connection_resume(conn);
-    sendWithReply(conn, 2, &later);
+    sendWithReply(conn, 2, later);
     const ended = events.waitFor(1, 3000);
     const queued_done = queued.waitFor(1, 3000);
     const later_done = later.waitFor(1, 3000);
@@ -566,6 +664,7 @@ fn deadEndpointInvalid(_: [*c]const c.atf_tc_t) callconv(.c) void {
     // The connection gives up its dead name at cancellation.
     fact(case, "dead_refs_after_invalid", 0, settleRefs(name, dead, 0, 3000));
     xpc_release(conn);
+    finalEvents(case);
     conclude(case);
 }
 
@@ -600,7 +699,7 @@ fn clientListener(ctx: ?*anyopaque, x: O, o: O) callconv(.c) void {
     const r: *Round = @ptrCast(@alignCast(ctx.?));
     if (eventCode(o) == PEER) {
         bump(&r.peers);
-        setHandler(o, &clientUpdate, r);
+        setHandler(o, &clientUpdate, r, newEnd("round_peer"));
         xpc_connection_resume(o);
         return;
     }
@@ -614,14 +713,14 @@ fn serverEvent(ctx: ?*anyopaque, _: O, o: O) callconv(.c) void {
 fn oneRound(r: *Round, value: u64, cancel_server: bool, q: O) O {
     const l = xpc_connection_create(null, q);
     need(l != null, "client listener");
-    setHandler(l, &clientListener, r);
+    setHandler(l, &clientListener, r, newEnd("round_listener"));
     xpc_connection_resume(l);
     const e = xpc_endpoint_create(l);
     need(e != null, "client listener's endpoint");
     const s = xpc_connection_create_from_endpoint(e);
     need(s != null, "server connection from the endpoint");
     xpc_release(e);
-    setHandler(s, &serverEvent, r);
+    setHandler(s, &serverEvent, r, newEnd("round_server"));
     xpc_connection_resume(s);
     sendValue(s, value);
     need(waitMs(&r.update_sem, 3000), "progress update reached the client");
@@ -635,6 +734,8 @@ fn oneRound(r: *Round, value: u64, cancel_server: bool, q: O) O {
     return s;
 }
 const ROUNDS = 100;
+var held_warm: Round = undefined;
+var held_round: Round = undefined;
 fn heldRounds(case: [*:0]const u8, cancel_server: bool) void {
     library(case);
     var names_rc: c_int = 0;
@@ -649,23 +750,28 @@ fn heldRounds(case: [*:0]const u8, cancel_server: bool) void {
     const q = dispatch_queue_create("op751.client", null);
     need(q != null, "client queue");
     // A first round lets libdispatch and libxpc make their one-time names.
-    var warm: Round = undefined;
+    const warm = &held_warm;
     warm.init();
-    const w = oneRound(&warm, 1000, cancel_server, q);
+    const w = oneRound(warm, 1000, cancel_server, q);
     if (!cancel_server) _ = waitMs(&warm.server_sem, 3000);
     xpc_release(w);
+    // The warm round's listener, server and peer end before the count.
+    const warm_ended = awaitEnds(3000);
     const baseline = stableHeld(3000);
     var start: Snapshot = undefined;
     snapshot(&start);
 
-    var r: Round = undefined;
+    const r = &held_round;
     r.init();
     var servers: [ROUNDS]O = @splat(null);
-    for (&servers, 0..) |*s, i| s.* = oneRound(&r, i, cancel_server, q);
+    for (&servers, 0..) |*s, i| s.* = oneRound(r, i, cancel_server, q);
     // Held and never cancelled, each server connection still hears that its
     // listener is gone.
     const t0 = nowMs();
     while (load(&r.server_invalid) < ROUNDS and nowMs() - t0 < 5000) _ = c.usleep(10_000);
+    // Every round's listener, server and peer ends before the names count.
+    const rounds_ended = awaitEnds(5000);
+    _ = c.printf("xpc_b0 case=%s ends_before_count warm=%llu rounds=%llu made=%llu\n", case, warm_ended, rounds_ended, load(&ends_made));
     const settled = settleHeld(baseline, 5000);
     var end: Snapshot = undefined;
     snapshot(&end);
@@ -678,6 +784,7 @@ fn heldRounds(case: [*:0]const u8, cancel_server: bool) void {
     fact(case, "held_names_after_rounds", baseline, settled);
     for (servers) |s| xpc_release(s);
     fact(case, "held_names_after_release", baseline, settleHeld(baseline, 2000));
+    finalEvents(case);
     conclude(case);
 }
 fn heldConnectionReleases(_: [*c]const c.atf_tc_t) callconv(.c) void {
@@ -698,11 +805,15 @@ fn ownsBoth(name: u32) bool {
 // no remote at all. Nothing is sent, so no failed send and no dead-name
 // notification ends the connection: only activation's check of a connection
 // from an endpoint (xpc_connection_attach) can.
+var null_events: Events = undefined;
+var null_listener: Events = undefined;
 fn nullEndpointInvalid(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const case = "nullEndpointInvalid";
     library(case);
-    var events: Events = undefined;
+    const events = &null_events;
     events.init();
+    const listener_events = &null_listener;
+    listener_events.init();
     var before: Snapshot = undefined;
     var after: Snapshot = undefined;
     snapshot(&before);
@@ -710,6 +821,8 @@ fn nullEndpointInvalid(_: [*c]const c.atf_tc_t) callconv(.c) void {
     snapshot(&after);
     need(l != null, "listener");
     const name = onlyNew(&before, &after) orelse c.atf_tc_fail("setup: one new port for the listener");
+    // Never resumed: a handler sees its INVALID and does not activate it.
+    setHandler(l, &recordInto, listener_events, newEnd("listener"));
     xpc_connection_cancel(l);
     // The listener's rights go on its send queue. Then its name holds no
     // receive right with a send right; the number itself may be reused.
@@ -725,7 +838,7 @@ fn nullEndpointInvalid(_: [*c]const c.atf_tc_t) callconv(.c) void {
     fact(case, "connection_returned", 1, @intFromBool(conn != null));
     conclude(case);
     xpc_release(e);
-    setHandler(conn, &recordInto, &events);
+    setHandler(conn, &recordInto, events, newEnd("client"));
     xpc_connection_resume(conn);
     const ended = events.waitFor(1, 3000);
     // A second event would arrive here.
@@ -735,6 +848,7 @@ fn nullEndpointInvalid(_: [*c]const c.atf_tc_t) callconv(.c) void {
     fact(case, "held_names_after_invalid", held_before, settleHeld(held_before, 3000));
     xpc_release(conn);
     xpc_release(l);
+    finalEvents(case);
     conclude(case);
 }
 

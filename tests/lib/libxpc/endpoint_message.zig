@@ -266,7 +266,78 @@ fn endpointName(o: O) u32 {
     return if (i < s.len and s[i] == '>' and v <= 0xffffffff) @intCast(v) else 0;
 }
 
-// Blocks ABI (BlocksRuntime runtime.c), as in reply_right.zig.
+// ---- Final events (op-805) -------------------------------------------------
+//
+// xpc_connection_cancel is asynchronous (lib/libxpc/xpc_connection.c): the
+// connection's final INVALID comes later, on its receive queue, and its
+// rights go separately, from its send queue. Each case runs in its own
+// process, and exit() runs at the depth of the case's returned frame, so
+// what a handler can reach lives in static storage. Each connection a case
+// gives a handler has an End here, carried in its handler's block: what the
+// handler received, its INVALIDs, and every event after the first INVALID.
+// The case waits for every End's INVALID before it goes on. INVALID is the
+// last event a connection's handler receives (connection.h), so an event
+// after it is a libxpc defect, never the case's.
+const End = struct {
+    label: [*:0]const u8 = "",
+    events: u64 = 0,
+    invalid: u64 = 0,
+    after: u64 = 0,
+};
+const END_SLOTS = 512;
+var ends: [END_SLOTS]End = @splat(.{});
+var ends_made: u64 = 0;
+// Past END_SLOTS: counted as made, never ended, so the case fails.
+var end_overflow: End = .{ .label = "overflow" };
+fn newEnd(label: [*:0]const u8) *End {
+    const i = @atomicRmw(u64, &ends_made, .Add, 1, .seq_cst);
+    if (i >= END_SLOTS) return &end_overflow;
+    ends[@intCast(i)].label = label;
+    return &ends[@intCast(i)];
+}
+fn endsMade() []End {
+    return ends[0..@intCast(@min(load(&ends_made), END_SLOTS))];
+}
+fn hasInvalid(e: *End) bool {
+    return load(&e.invalid) != 0;
+}
+// Until e has its INVALID, or ms.
+fn awaitEnd(e: *End, ms: u64) bool {
+    const start = nowMs();
+    while (!hasInvalid(e) and nowMs() - start < ms) _ = c.usleep(1_000);
+    return hasInvalid(e);
+}
+// Until every End made so far has its INVALID, or ms: how many have.
+fn awaitEnds(ms: u64) u64 {
+    const start = nowMs();
+    while (true) {
+        var n: u64 = 0;
+        for (endsMade()) |*e| n += @intFromBool(hasInvalid(e));
+        if (n == load(&ends_made) or nowMs() - start >= ms) return n;
+        _ = c.usleep(2_000);
+    }
+}
+// After the last INVALID: the time an event after it has to arrive.
+const QUIET_MS = 50;
+// A case's last step: every End's INVALID, the quiet window, then the facts.
+fn finalEvents(case: [*:0]const u8) void {
+    const have = awaitEnds(3000);
+    _ = c.usleep(QUIET_MS * 1000);
+    var after: u64 = load(&end_overflow.after);
+    var events: u64 = 0;
+    for (endsMade()) |*e| {
+        after += load(&e.after);
+        events += load(&e.events);
+        if (!hasInvalid(e) or load(&e.after) != 0) _ = c.printf("xpc_b0 case=%s end=%s events=%llu invalid=%llu after_invalid=%llu\n", case, e.label, load(&e.events), load(&e.invalid), load(&e.after));
+    }
+    _ = c.printf("xpc_b0 case=%s final ends=%llu invalid=%llu events=%llu after_invalid=%llu quiet_ms=%u\n", case, load(&ends_made), have, events, after, @as(c_uint, QUIET_MS));
+    fact(case, "final_invalids", load(&ends_made), have);
+    fact(case, "events_after_invalid", 0, after);
+}
+
+// Blocks ABI (BlocksRuntime runtime.c), as in reply_right.zig. A
+// connection's handler block carries the connection's End (none in the
+// forked server); a reply block carries none.
 const Fn = *const fn (?*anyopaque, O, O) callconv(.c) void;
 const Descriptor = extern struct { reserved: c_ulong, size: c_ulong };
 const Block = extern struct {
@@ -278,17 +349,23 @@ const Block = extern struct {
     f: Fn,
     ctx: ?*anyopaque,
     conn: O,
+    end: ?*End,
 };
 fn blockInvoke(b: *Block, o: O) callconv(.c) void {
+    if (b.end) |e| if (hasInvalid(e)) bump(&e.after);
     b.f(b.ctx, b.conn, o);
+    if (b.end) |e| {
+        bump(&e.events);
+        if (o == @as(O, @ptrCast(@constCast(&_xpc_error_connection_invalid)))) bump(&e.invalid);
+    }
 }
 const descriptor = Descriptor{ .reserved = 0, .size = @sizeOf(Block) };
-fn block(f: Fn, ctx: ?*anyopaque, conn: O) ?*anyopaque {
-    var literal = Block{ .isa = @ptrCast(&_NSConcreteStackBlock), .flags = 0, .reserved = 0, .invoke = &blockInvoke, .descriptor = &descriptor, .f = f, .ctx = ctx, .conn = conn };
+fn block(f: Fn, ctx: ?*anyopaque, conn: O, end: ?*End) ?*anyopaque {
+    var literal = Block{ .isa = @ptrCast(&_NSConcreteStackBlock), .flags = 0, .reserved = 0, .invoke = &blockInvoke, .descriptor = &descriptor, .f = f, .ctx = ctx, .conn = conn, .end = end };
     return _Block_copy(&literal);
 }
-fn setHandler(conn: O, f: Fn, ctx: ?*anyopaque) void {
-    const b = block(f, ctx, conn);
+fn setHandler(conn: O, f: Fn, ctx: ?*anyopaque, end: ?*End) void {
+    const b = block(f, ctx, conn, end);
     xpc_connection_set_event_handler(conn, b);
     _Block_release(b);
 }
@@ -457,7 +534,7 @@ fn callConnect(ctx: ?*anyopaque, _: O, o: O) callconv(.c) void {
     _ = c.sem_post(&k.sem);
 }
 fn call(conn: O, m: O, k: *Call, f: Fn) void {
-    const b = block(f, k, null);
+    const b = block(f, k, null, null);
     xpc_connection_send_message_with_reply(conn, m, null, b);
     _Block_release(b);
     xpc_release(m);
@@ -496,7 +573,7 @@ fn targetListener(ctx: ?*anyopaque, _: O, o: O) callconv(.c) void {
     const t: *Target = @ptrCast(@alignCast(ctx.?));
     if (eventCode(o) != PEER) return;
     bump(&t.peers);
-    setHandler(o, &targetPeer, t);
+    setHandler(o, &targetPeer, t, newEnd("target_peer"));
     xpc_connection_resume(o);
 }
 // A server: its peers do what each message's op asks.
@@ -543,7 +620,7 @@ fn serverPeer(ctx: ?*anyopaque, peer: O, o: O) callconv(.c) void {
                 const i = @atomicRmw(u64, &s.nconns, .Add, 1, .seq_cst);
                 if (conn != null and i < s.conns.len) {
                     s.conns[@intCast(i)] = conn;
-                    setHandler(conn, &ignore, null);
+                    setHandler(conn, &ignore, null, newEnd("server_connection"));
                     xpc_connection_resume(conn);
                     send(conn, dict(code + 1, 0));
                     bump(&s.sent[slot]);
@@ -578,7 +655,7 @@ fn serverListener(ctx: ?*anyopaque, _: O, o: O) callconv(.c) void {
     const s: *Server = @ptrCast(@alignCast(ctx.?));
     if (eventCode(o) != PEER) return;
     bump(&s.peers);
-    setHandler(o, &serverPeer, s);
+    setHandler(o, &serverPeer, s, newEnd("server_peer"));
     xpc_connection_resume(o);
 }
 // An anonymous listener and its port name, by snapshots around its creation.
@@ -592,7 +669,7 @@ fn listenerWithPort(tag: [*:0]const u8, port: *u32) O {
 }
 fn listen(tag: [*:0]const u8, f: Fn, ctx: ?*anyopaque, port: *u32) O {
     const l = listenerWithPort(tag, port);
-    setHandler(l, f, ctx);
+    setHandler(l, f, ctx, newEnd(tag));
     xpc_connection_resume(l);
     return l;
 }
@@ -603,7 +680,7 @@ fn clientOf(l: O, events: *Events) O {
     const conn = xpc_connection_create_from_endpoint(e);
     need(conn != null, "client from the local endpoint");
     xpc_release(e);
-    setHandler(conn, &recordInto, events);
+    setHandler(conn, &recordInto, events, newEnd("client"));
     xpc_connection_resume(conn);
     return conn;
 }
@@ -626,6 +703,12 @@ var tgt: Target = .{};
 var srv: Server = .{};
 var cli: Events = undefined;
 var calls: [4]Call = undefined;
+// The other connections' events (op-805): one case runs per process.
+var named_events: Events = undefined;
+var conn_events: Events = undefined;
+var quiet_events: Events = undefined;
+var capture_events: Events = undefined;
+var second_events: [3]Events = undefined;
 
 // ---- endpointInReply -----------------------------------------------------------
 
@@ -643,11 +726,11 @@ fn childServe(name: [*:0]const u8, ready: c_int) noreturn {
     _ = c.alarm(20);
     child_anon = xpc_connection_create(null, dispatch_queue_create("op796.child.anonymous", null));
     if (child_anon == null) c._exit(80);
-    setHandler(child_anon, &childAnonListener, null);
+    setHandler(child_anon, &childAnonListener, null, null);
     xpc_connection_resume(child_anon);
     const l = xpc_connection_create_mach_service(name, dispatch_queue_create("op796.child.named", null), LISTENER);
     if (l == null) c._exit(81);
-    setHandler(l, &childNamedListener, null);
+    setHandler(l, &childNamedListener, null, null);
     xpc_connection_resume(l);
     var b: u8 = 'r';
     if (c.write(ready, &b, 1) != 1) c._exit(82);
@@ -655,12 +738,12 @@ fn childServe(name: [*:0]const u8, ready: c_int) noreturn {
 }
 fn childAnonListener(_: ?*anyopaque, _: O, o: O) callconv(.c) void {
     if (eventCode(o) != PEER) return;
-    setHandler(o, &childAnonPeer, null);
+    setHandler(o, &childAnonPeer, null, null);
     xpc_connection_resume(o);
 }
 fn childNamedListener(_: ?*anyopaque, _: O, o: O) callconv(.c) void {
     if (eventCode(o) != PEER) return;
-    setHandler(o, &childNamedPeer, null);
+    setHandler(o, &childNamedPeer, null, null);
     xpc_connection_resume(o);
 }
 fn childNamedPeer(_: ?*anyopaque, peer: O, o: O) callconv(.c) void {
@@ -736,11 +819,11 @@ fn endpointInReply(_: [*c]const c.atf_tc_t) callconv(.c) void {
     }
     const dead_start = deadNames();
     // Ask the named listener for an endpoint.
-    var named_events: Events = undefined;
     named_events.init();
     const named = xpc_connection_create_mach_service(name, dispatch_queue_create("op796.reply.named", null), 0);
     need(named != null, "named client");
-    setHandler(named, &recordInto, &named_events);
+    const named_end = newEnd("named_client");
+    setHandler(named, &recordInto, &named_events, named_end);
     xpc_connection_resume(named);
     const ask = &calls[0];
     ask.init();
@@ -749,9 +832,11 @@ fn endpointInReply(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const asked = waitMs(&ask.sem, LIMIT_MS);
     fact(case, "endpoint_reply_arrived", 1, if (asked) ask.code else NONE);
     fact(case, "endpoint_in_reply", 1, ask.found);
-    // Its service port dies with the server: let the named client's rights go first.
+    // Its service port dies with the server: let the named client's rights go
+    // first, and its final INVALID come before the case goes on.
     xpc_connection_cancel(named);
     xpc_release(named);
+    fact(case, "named_client_invalid", 1, @intFromBool(awaitEnd(named_end, 3000)));
     if (ask.ep == null) {
         stopChild(pid);
         conclude(case);
@@ -765,9 +850,9 @@ fn endpointInReply(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const conn = xpc_connection_create_from_endpoint(e);
     need(conn != null, "connection from the endpoint");
     fact(case, "send_refs_with_connection", 2, refs(ename, SEND));
-    var events: Events = undefined;
+    const events = &conn_events;
     events.init();
-    setHandler(conn, &recordInto, &events);
+    setHandler(conn, &recordInto, events, newEnd("endpoint_client"));
     xpc_connection_resume(conn);
     // Three exchanges: the first held while the second and third complete.
     const a = &calls[1];
@@ -812,6 +897,7 @@ fn endpointInReply(_: [*c]const c.atf_tc_t) callconv(.c) void {
     fact(case, "dead_refs_after_endpoint_released", 0, settleRefs(ename, DEAD, 0, 2000));
     fact(case, "dead_names_back", dead_start, settleDead(dead_start, 2000));
     xpc_release(conn);
+    finalEvents(case);
     conclude(case);
 }
 
@@ -857,6 +943,7 @@ fn endpointInMessage(_: [*c]const c.atf_tc_t) callconv(.c) void {
     xpc_release(et);
     retire(s);
     retire(t);
+    finalEvents(case);
     conclude(case);
 }
 
@@ -948,9 +1035,11 @@ var captured: [4096]u8 = undefined;
 fn wireRecords(case: [*:0]const u8, et: O, tport: u32, sport: u32) void {
     var cport: u32 = 0;
     const cap = listenerWithPort("op796.wire.capture", &cport);
-    var quiet: Events = undefined;
-    quiet.init();
-    const cc = clientOf(cap, &quiet);
+    // Never resumed: a handler sees its INVALID and does not activate it.
+    capture_events.init();
+    setHandler(cap, &recordInto, &capture_events, newEnd("capture_listener"));
+    quiet_events.init();
+    const cc = clientOf(cap, &quiet_events);
     // Ordinary.
     send(cc, nestedMessage(22, 0, et));
     fact(case, "ordinary_received", 0, @bitCast(@as(i64, receiveWire(cport, 2000))));
@@ -1034,9 +1123,10 @@ fn endpointReleasedBeforeUse(_: [*c]const c.atf_tc_t) callconv(.c) void {
     }
     // The reply and its endpoint are gone: the connection's reference stays.
     fact(case, "send_refs_after_release", start + 1, settleRefs(tport, SEND, start + 1, 1000));
-    var events: Events = undefined;
+    const events = &conn_events;
     events.init();
-    setHandler(k.conn, &recordInto, &events);
+    const conn_end = newEnd("endpoint_client");
+    setHandler(k.conn, &recordInto, events, conn_end);
     xpc_connection_resume(k.conn);
     const x = &calls[1];
     x.init();
@@ -1048,10 +1138,12 @@ fn endpointReleasedBeforeUse(_: [*c]const c.atf_tc_t) callconv(.c) void {
     fact(case, "connection_events", 0, events.count());
     fact(case, "send_refs_connected", start + 1, refs(tport, SEND));
     retire(k.conn);
+    _ = awaitEnd(conn_end, 3000);
     fact(case, "send_refs_after_cancel", start, settleRefs(tport, SEND, start, 2000));
     retire(client);
     retire(s);
     retire(t);
+    finalEvents(case);
     conclude(case);
 }
 
@@ -1093,15 +1185,15 @@ fn secondEndpoint(_: [*c]const c.atf_tc_t) callconv(.c) void {
         conclude(case);
     }
     fact(case, "send_refs_two_endpoints", start + 2, refs(tport, SEND));
-    var ev1: Events = undefined;
-    var ev2: Events = undefined;
+    const ev1 = &second_events[0];
+    const ev2 = &second_events[1];
     ev1.init();
     ev2.init();
     const c1 = xpc_connection_create_from_endpoint(g1.ep);
     const c2 = xpc_connection_create_from_endpoint(g2.ep);
     need(c1 != null and c2 != null, "two clients");
-    setHandler(c1, &recordInto, &ev1);
-    setHandler(c2, &recordInto, &ev2);
+    setHandler(c1, &recordInto, ev1, newEnd("first_client"));
+    setHandler(c2, &recordInto, ev2, newEnd("second_client"));
     xpc_connection_resume(c1);
     xpc_connection_resume(c2);
     fact(case, "send_refs_two_clients", start + 4, refs(tport, SEND));
@@ -1127,11 +1219,11 @@ fn secondEndpoint(_: [*c]const c.atf_tc_t) callconv(.c) void {
     call(c2, dict(46, OP_REQUEST), x2, &callDone);
     const d3 = waitMs(&x2.sem, LIMIT_MS);
     fact(case, "second_client_after", 47, if (d3) x2.code else NONE);
-    var ev3: Events = undefined;
+    const ev3 = &second_events[2];
     ev3.init();
     const c3 = xpc_connection_create_from_endpoint(g2.ep);
     need(c3 != null, "third client");
-    setHandler(c3, &recordInto, &ev3);
+    setHandler(c3, &recordInto, ev3, newEnd("third_client"));
     xpc_connection_resume(c3);
     x1.init();
     call(c3, dict(48, OP_REQUEST), x1, &callDone);
@@ -1149,6 +1241,7 @@ fn secondEndpoint(_: [*c]const c.atf_tc_t) callconv(.c) void {
     retire(client);
     retire(s);
     retire(t);
+    finalEvents(case);
     conclude(case);
 }
 
@@ -1195,6 +1288,7 @@ fn endpointNames(_: [*c]const c.atf_tc_t) callconv(.c) void {
     retire(client);
     retire(s);
     retire(t);
+    finalEvents(case);
     conclude(case);
 }
 fn sumFound(first: usize, n: usize) u64 {
@@ -1245,6 +1339,7 @@ fn endpointCapRefused(_: [*c]const c.atf_tc_t) callconv(.c) void {
     retire(client);
     retire(s);
     retire(t);
+    finalEvents(case);
     conclude(case);
 }
 
