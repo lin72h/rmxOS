@@ -198,6 +198,27 @@ struct xpc_service {
 	TAILQ_HEAD(, xpc_connection) xs_connections;
 };
 
+/*
+ * The most endpoint values one message carries. Each goes as a port
+ * descriptor with a send right (xpc_pipe_send_msg), after a request's
+ * send-once reply right; a sender refuses a dictionary with more.
+ */
+#define XPC_MAX_ENDPOINTS	64
+
+/*
+ * A message's endpoints in walk order (xpc2nv, nv2xpc). The packed list holds
+ * each endpoint as its index here, and the message's i-th endpoint
+ * descriptor carries xpt_names[i]. The sender counts every endpoint, so
+ * xpt_count over XPC_MAX_ENDPOINTS refuses the send; the receiver marks in
+ * xpt_taken each name an object took.
+ */
+struct xpc_port_table {
+	size_t		xpt_count;
+	uint64_t	xpt_taken;
+	mach_port_t	xpt_names[XPC_MAX_ENDPOINTS];
+};
+_Static_assert(XPC_MAX_ENDPOINTS <= 64, "xpt_taken has a bit per endpoint");
+
 #define xo_nv xo_u.nv
 #define xo_str xo_u.str
 #define xo_bool xo_u.b
@@ -216,8 +237,11 @@ __private_extern__ struct xpc_object *_xpc_prim_create(int type, xpc_u value,
 __private_extern__ struct xpc_object *_xpc_prim_create_flags(int type,
     xpc_u value, size_t size, uint16_t flags);
 __private_extern__ const char *_xpc_get_type_name(xpc_object_t obj);
-__private_extern__ struct xpc_object *nv2xpc(const nvlist_t *nv);
-__private_extern__ nvlist_t *xpc2nv(struct xpc_object *xo);
+__private_extern__ struct xpc_object *nv2xpc(const nvlist_t *nv,
+    struct xpc_port_table *ports);
+__private_extern__ nvlist_t *xpc2nv(struct xpc_object *xo,
+    struct xpc_port_table *ports);
+__private_extern__ bool nv_endpoints_valid(const nvlist_t *nv, size_t count);
 __private_extern__ void xpc_object_destroy(struct xpc_object *xo);
 __private_extern__ void xpc_connection_destroy(struct xpc_connection *conn);
 __private_extern__ int xpc_pipe_send(xpc_object_t obj, mach_port_t dst,

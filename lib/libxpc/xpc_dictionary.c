@@ -35,7 +35,8 @@
 
 #define NVLIST_XPC_TYPE		"__XPC_TYPE"
 
-static void xpc2nv_primitive(nvlist_t *nv, const char *key, xpc_object_t value);
+static void xpc2nv_primitive(nvlist_t *nv, const char *key, xpc_object_t value,
+    struct xpc_port_table *ports);
 static void nvlist_add_xpc_double(nvlist_t *nv, const char *key, double value);
 static double nvlist_get_xpc_double(const nvlist_t *nv, const char *key);
 
@@ -50,8 +51,101 @@ nv_release_entry(nvlist_t *nv, const char *key)
 	}
 }
 
-struct xpc_object *
-nv2xpc(const nvlist_t *nv)
+/*
+ * Whether nv's endpoint entries, at any depth nv2xpc reads, name each of the
+ * message's count endpoint descriptors once: every index below count, none
+ * twice, and *entries ends as count when every descriptor is named.
+ */
+static bool
+nv_endpoints_walk(const nvlist_t *nv, size_t count, uint64_t *seen,
+    size_t *entries)
+{
+	void *cookiep;
+	const char *key;
+	uint64_t index;
+	int type;
+
+	cookiep = NULL;
+	while ((key = nvlist_next(nv, &type, &cookiep)) != NULL) {
+		switch (type) {
+		case NV_TYPE_ENDPOINT:
+			index = nvpair_get_number(cookiep);
+			if (index >= count || (*seen & (1ULL << index)) != 0)
+				return (false);
+			*seen |= 1ULL << index;
+			(*entries)++;
+			break;
+
+		case NV_TYPE_NVLIST_ARRAY:
+			if (!nv_endpoints_walk(nvlist_get_nvlist_array(nv, key),
+			    count, seen, entries))
+				return (false);
+			break;
+
+		case NV_TYPE_NVLIST_DICTIONARY:
+			if (!nv_endpoints_walk(nvlist_get_nvlist_dictionary(nv,
+			    key), count, seen, entries))
+				return (false);
+			break;
+		}
+	}
+	return (true);
+}
+
+/*
+ * The decoder's check, before any object owns a right: a received list may
+ * name only the endpoint descriptors its message carries, each once, and
+ * must name every one, so that each received right has exactly one owner.
+ */
+__private_extern__ bool
+nv_endpoints_valid(const nvlist_t *nv, size_t count)
+{
+	uint64_t seen;
+	size_t entries;
+
+	if (count > XPC_MAX_ENDPOINTS)
+		return (false);
+	seen = 0;
+	entries = 0;
+	return (nv_endpoints_walk(nv, count, &seen, &entries) &&
+	    entries == count);
+}
+
+/*
+ * The endpoint at a list entry: an object that owns the send right received
+ * at its index. A name that is no right (null, or a port that died in
+ * transit) makes an endpoint without a port, which a connection reports as
+ * invalid. The name is the object's from here, or is released here when no
+ * object can be made; an index the decoder did not check is left untaken.
+ */
+static struct xpc_object *
+nv2xpc_endpoint(const nvpair_t *nvp, struct xpc_port_table *ports)
+{
+	struct xpc_object *xo;
+	uint64_t index;
+	xpc_u val;
+
+	index = nvpair_get_number(nvp);
+	if (ports == NULL || index >= ports->xpt_count ||
+	    (ports->xpt_taken & (1ULL << index)) != 0)
+		return (NULL);
+	ports->xpt_taken |= 1ULL << index;
+	/* All 64 bits: xpc_hash and the description read the union whole. */
+	memset(&val, 0, sizeof(val));
+	if (MACH_PORT_VALID(ports->xpt_names[index]))
+		val.port = ports->xpt_names[index];
+	xo = _xpc_prim_create_flags(_XPC_TYPE_ENDPOINT, val, 0, _XPC_OWNS_PORT);
+	if (xo == NULL && val.port != MACH_PORT_NULL)
+		(void)mach_port_deallocate(mach_task_self(), val.port);
+	return (xo);
+}
+
+/*
+ * The objects of a list. Its endpoint entries take their rights from ports
+ * (nv2xpc_endpoint); NULL when the list's own object cannot be made.
+ */
+__private_extern__ struct xpc_object *
+nv2xpc(const nvlist_t *nv, struct xpc_port_table *ports)
 {
 	struct xpc_object *xo, *xotmp;
 	void *cookiep;
@@ -66,9 +160,10 @@ nv2xpc(const nvlist_t *nv)
 
 	if (nvlist_type(nv) == NV_TYPE_NVLIST_DICTIONARY)
 		xo = xpc_dictionary_create(NULL, NULL, 0);
-
-	if (nvlist_type(nv) == NV_TYPE_NVLIST_ARRAY)
+	else
 		xo = xpc_array_create(NULL, 0);
+	if (xo == NULL)
+		return (NULL);
 
 	cookiep = NULL;
 	while ((key = nvlist_next(nv, &type, &cookiep)) != NULL) {
@@ -110,6 +205,10 @@ nv2xpc(const nvlist_t *nv)
 		case NV_TYPE_PTR:
 			break;
 
+		case NV_TYPE_ENDPOINT:
+			xotmp = nv2xpc_endpoint(cookiep, ports);
+			break;
+
 		case NV_TYPE_BINARY:
 			val.ptr = (uintptr_t)nvlist_get_binary(nv, key,
 			    &size);
@@ -124,12 +223,12 @@ nv2xpc(const nvlist_t *nv)
 
 		case NV_TYPE_NVLIST_ARRAY:
 			nvtmp = nvlist_get_nvlist_array(nv, key);
-			xotmp = nv2xpc(nvtmp);
+			xotmp = nv2xpc(nvtmp, ports);
 			break;
 
 		case NV_TYPE_NVLIST_DICTIONARY:
 			nvtmp = nvlist_get_nvlist_dictionary(nv, key);
-			xotmp = nv2xpc(nvtmp);
+			xotmp = nv2xpc(nvtmp, ports);
 			break;
 		}
 
@@ -153,11 +252,12 @@ nv2xpc(const nvlist_t *nv)
  * take it (nvlist_movev_* frees only a list with a parent), so it goes here.
  */
 static void
-xpc2nv_nested(nvlist_t *nv, const char *key, struct xpc_object *xo)
+xpc2nv_nested(nvlist_t *nv, const char *key, struct xpc_object *xo,
+    struct xpc_port_table *ports)
 {
 	nvlist_t *child;
 
-	child = xpc2nv(xo);
+	child = xpc2nv(xo, ports);
 	if (nvlist_error(nv) != 0) {
 		nvlist_destroy(child);
 		return;
@@ -168,15 +268,34 @@ xpc2nv_nested(nvlist_t *nv, const char *key, struct xpc_object *xo)
 		nvlist_move_nvlist_array(nv, key, child);
 }
 
+/*
+ * An endpoint: its name goes as the message's next endpoint descriptor
+ * (xpc_pipe_send_msg), and the list holds that descriptor's index among the
+ * endpoints. Every endpoint is counted; a message with more than
+ * XPC_MAX_ENDPOINTS is refused by its sender, so only those that fit are kept.
+ */
 static void
-xpc2nv_primitive(nvlist_t *nv, const char *key, xpc_object_t value)
+xpc2nv_endpoint(nvlist_t *nv, const char *key, struct xpc_object *xo,
+    struct xpc_port_table *ports)
+{
+	size_t index;
+
+	index = ports->xpt_count++;
+	if (index < XPC_MAX_ENDPOINTS)
+		ports->xpt_names[index] = xo->xo_port;
+	nvlist_add_endpoint(nv, key, (int)index);
+}
+
+static void
+xpc2nv_primitive(nvlist_t *nv, const char *key, xpc_object_t value,
+    struct xpc_port_table *ports)
 {
 	struct xpc_object *xotmp = value;
 
 	switch (xotmp->xo_xpc_type) {
 	case _XPC_TYPE_DICTIONARY:
 	case _XPC_TYPE_ARRAY:
-		xpc2nv_nested(nv, key, xotmp);
+		xpc2nv_nested(nv, key, xotmp, ports);
 		break;
 
 	case _XPC_TYPE_BOOL:
@@ -187,6 +306,7 @@ xpc2nv_primitive(nvlist_t *nv, const char *key, xpc_object_t value)
 		break;
 
 	case _XPC_TYPE_ENDPOINT:
+		xpc2nv_endpoint(nv, key, xotmp, ports);
 		break;
 
 	case _XPC_TYPE_INT64:
@@ -260,8 +380,12 @@ nvlist_get_xpc_double(const nvlist_t *nv, const char *key)
 	return (value);
 }
 
-nvlist_t *
-xpc2nv(struct xpc_object *xo)
+/*
+ * The list of a dictionary or array. Each endpoint in it, at any depth, is
+ * named in ports in walk order, which the caller starts empty.
+ */
+__private_extern__ nvlist_t *
+xpc2nv(struct xpc_object *xo, struct xpc_port_table *ports)
 {
 	nvlist_t *nv;
 	struct xpc_object *xotmp;
@@ -269,7 +393,7 @@ xpc2nv(struct xpc_object *xo)
 	if (xo->xo_xpc_type == _XPC_TYPE_DICTIONARY) {
 		nv = nvlist_create_dictionary(0);
 		xpc_dictionary_apply(xo, ^(const char *k, xpc_object_t v) {
-			xpc2nv_primitive(nv, k, v);
+			xpc2nv_primitive(nv, k, v, ports);
 			return ((bool)true);
 		});
 	}
@@ -279,7 +403,7 @@ xpc2nv(struct xpc_object *xo)
 		nv = nvlist_create_array(0);
 		xpc_array_apply(xo, ^(size_t index, xpc_object_t v) {
 			asprintf(&key, "%ld", index);
-			xpc2nv_primitive(nv, key, v);
+			xpc2nv_primitive(nv, key, v, ports);
 			free(key);
 			return ((bool)true);
 		});
