@@ -501,18 +501,70 @@ xpc_pipe_routine_reply(xpc_object_t xobj __unused)
 }
 
 /*
+ * After a failed send, whether the header's destination right is still the
+ * sender's, by the stage of our kernel's send path that refused the message
+ * (sys/compat/mach/ipc: mach_msg_send runs ipc_kmsg_get, ipc_kmsg_copyin's
+ * header then body stages, then ipc_mqueue_send):
+ * - ipc_kmsg_get refuses before any right is copied in: MACH_SEND_TOO_LARGE,
+ *   _NO_BUFFER, _INVALID_DATA. (Its MACH_SEND_MSG_TOO_SMALL never holds for
+ *   a message built here, at least a header and a multiple of 8 bytes.)
+ * - ipc_kmsg_copyin_header refuses before its copyin, or after undoing it:
+ *   MACH_SEND_INVALID_HEADER, _INVALID_DEST, _INVALID_REPLY,
+ *   _INVALID_NOTIFY. Its one undo failure (MACH_SEND_INVALID_RIGHT) needs a
+ *   valid reply name in the header, which a reply has not.
+ * - ipc_kmsg_copyin_body destroys the header's rights before it returns
+ *   (ipc_kmsg_clean_partial): MACH_SEND_INVALID_RIGHT, _INVALID_TYPE,
+ *   _MSG_TOO_SMALL, _INVALID_MEMORY, and MACH_MSG_VM_KERNEL alone (inside
+ *   MACH_MSG_MASK). A destroyed send-once right tells its receiver that no
+ *   reply will come, and its name is free again before the send returns:
+ *   released again, it would release whatever right has the name by then.
+ * - ipc_mqueue_send's MACH_SEND_TIMED_OUT and _INTERRUPTED come after
+ *   copyin; a send-once destination never waits there, and no send here
+ *   sets MACH_SEND_TIMEOUT.
+ * A code from no stage of the send path (not a send error, system 4
+ * subsystem 0) left the message unread: kept. Every other send error is
+ * taken: a right kept by mistake leaks, a name released twice may not be
+ * this sender's any more.
+ */
+static bool
+xpc_send_kept(kern_return_t kr)
+{
+	kern_return_t code;
+
+	code = kr & ~MACH_MSG_MASK;
+	switch (code) {
+	case MACH_SEND_TOO_LARGE:
+	case MACH_SEND_NO_BUFFER:
+	case MACH_SEND_INVALID_DATA:
+	case MACH_SEND_INVALID_HEADER:
+	case MACH_SEND_INVALID_DEST:
+	case MACH_SEND_INVALID_REPLY:
+	case MACH_SEND_INVALID_NOTIFY:
+		return (true);
+	}
+	if (code == 0 || (err_get_system(kr) == 0x4 && err_get_sub(kr) == 0))
+		return (false);
+	return (true);
+}
+
+/*
  * One pipe message: dst (by dst_type) gets the dictionary, with a send right
  * made from local in the header's reply slot when local is not null. When
  * reply is not null, a send-once right made from it is the first body port
  * descriptor; each endpoint in the dictionary, at any depth, follows as a
  * copy of its send right (the wire: XPC_WIRE_DATA). 0 only when the kernel
  * took the message and every right it names. The endpoints keep their own
- * rights whether or not the send succeeds.
+ * rights whether or not the send succeeds, as do local and reply (made, not
+ * moved), and dst when dst_type copies it. After a failure, *kept (when not
+ * null) says whether dst's right is still the caller's: always after a
+ * refusal here (the pack, more than XPC_MAX_ENDPOINTS endpoints, over the
+ * cap, no buffer), and after a kernel failure only by its stage
+ * (xpc_send_kept).
  */
 static int
 xpc_pipe_send_msg(xpc_object_t xobj, mach_port_t dst,
     mach_msg_type_name_t dst_type, mach_port_t local, uint64_t id,
-    mach_port_t reply)
+    mach_port_t reply, bool *kept)
 {
 	struct xpc_object *xo;
 	struct xpc_port_table ports;
@@ -525,6 +577,8 @@ xpc_pipe_send_msg(xpc_object_t xobj, mach_port_t dst,
 
 	xo = xobj;
 	assert(xo->xo_xpc_type == _XPC_TYPE_DICTIONARY);
+	if (kept != NULL)
+		*kept = true;
 
 	/* Packed once per send, into its own buffer, then copied in. */
 	if ((packed = xpc_pack(xo, &size, &ports)) == NULL)
@@ -587,10 +641,16 @@ xpc_pipe_send_msg(xpc_object_t xobj, mach_port_t dst,
 	    &size, sizeof(size_t));
 	memcpy((char *)header + offset - sizeof(uint64_t), &id, sizeof(uint64_t));
 	kr = mach_msg_send(header);
-	if (kr != KERN_SUCCESS)
+	/* Success is the whole code: MACH_MSG_VM_KERNEL alone is in the mask. */
+	if (kr != KERN_SUCCESS) {
 		err = (kr == KERN_INVALID_TASK || kr == MACH_SEND_INVALID_DEST) ? EPIPE : EINVAL;
-	else
+		if (kept != NULL)
+			*kept = xpc_send_kept(kr);
+	} else {
 		err = 0;
+		if (kept != NULL)
+			*kept = false;
+	}
 	free(header);
 	return (err);
 }
@@ -601,7 +661,7 @@ xpc_pipe_send(xpc_object_t xobj, mach_port_t dst, mach_port_t local,
 {
 
 	return (xpc_pipe_send_msg(xobj, dst, MACH_MSG_TYPE_COPY_SEND, local, id,
-	    MACH_PORT_NULL));
+	    MACH_PORT_NULL, NULL));
 }
 
 /* A request whose reply is to come to the receive right reply. */
@@ -611,20 +671,23 @@ xpc_pipe_send_request(xpc_object_t xobj, mach_port_t dst, mach_port_t local,
 {
 
 	return (xpc_pipe_send_msg(xobj, dst, MACH_MSG_TYPE_COPY_SEND, local, id,
-	    reply));
+	    reply, NULL));
 }
 
 /*
  * A reply on its request's send-once right. 0: the kernel took the right
- * with the message. Otherwise the right, live or dead, is still the
- * caller's to release.
+ * with the message. Otherwise *kept says whose the right is: the caller's
+ * to release (live or dead) after a refusal here or at the kernel's header
+ * stage; gone after the kernel's body stage refused the message, which
+ * destroyed the right and told the requester (xpc_send_kept).
  */
 __private_extern__ int
-xpc_pipe_send_reply(xpc_object_t xobj, mach_port_t sonce, uint64_t id)
+xpc_pipe_send_reply(xpc_object_t xobj, mach_port_t sonce, uint64_t id,
+    bool *kept)
 {
 
 	return (xpc_pipe_send_msg(xobj, sonce, MACH_MSG_TYPE_MOVE_SEND_ONCE,
-	    MACH_PORT_NULL, id, MACH_PORT_NULL));
+	    MACH_PORT_NULL, id, MACH_PORT_NULL, kept));
 }
 
 #define LOG(...)	\

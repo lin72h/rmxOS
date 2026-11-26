@@ -249,7 +249,7 @@ __private_extern__ int xpc_pipe_send(xpc_object_t obj, mach_port_t dst,
 __private_extern__ int xpc_pipe_send_request(xpc_object_t obj, mach_port_t dst,
     mach_port_t local, uint64_t id, mach_port_t reply);
 __private_extern__ int xpc_pipe_send_reply(xpc_object_t obj, mach_port_t sonce,
-    uint64_t id);
+    uint64_t id, bool *kept);
 __private_extern__ int xpc_pipe_receive(mach_port_t local, mach_port_t *remote,
     xpc_object_t *result, uint64_t *id);
 

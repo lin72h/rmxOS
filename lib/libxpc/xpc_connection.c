@@ -761,6 +761,7 @@ xpc_send(xpc_connection_t xconn, xpc_object_t message, uint64_t id,
 	struct xpc_object *xo;
 	mach_port_t sonce;
 	kern_return_t kr;
+	bool kept;
 
 	debugf("connection=%p, message=%p, id=%d", xconn, message, id);
 
@@ -769,18 +770,22 @@ xpc_send(xpc_connection_t xconn, xpc_object_t message, uint64_t id,
 	/*
 	 * A reply goes on its request's send-once right, which it takes out
 	 * first: no later send can name it. Once used, the reply goes nowhere.
-	 * An unsent right is released here; if it is live, the kernel tells
-	 * the requester. Either way the outcome is the requester's, not this
-	 * connection's.
+	 * An unsent right the send left ours is released here; if it is live,
+	 * the kernel tells the requester. One the kernel took with a message
+	 * it then refused (an endpoint it could not copy in) was destroyed
+	 * there, which told the requester, and its name may already be
+	 * another right's (xpc_pipe_send_reply). Either way the outcome is the
+	 * requester's, not this connection's.
 	 */
 	if (reply == MACH_PORT_NULL && xo->xo_xpc_type == _XPC_TYPE_DICTIONARY &&
 	    (xo->xo_flags & _XPC_REPLY) != 0) {
 		sonce = atomic_readandclear_32(&xo->xo_reply_once);
 		if (sonce == MACH_PORT_NULL)
 			return (false);
-		if (xpc_pipe_send_reply(message, sonce, id) == 0)
+		if (xpc_pipe_send_reply(message, sonce, id, &kept) == 0)
 			return (true);
-		(void)mach_port_deallocate(mach_task_self(), sonce);
+		if (kept)
+			(void)mach_port_deallocate(mach_task_self(), sonce);
 		return (false);
 	}
 	if (xpc_connection_can_reconnect(conn) &&

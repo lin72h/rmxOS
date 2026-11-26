@@ -14,5 +14,9 @@ int op507_proc_pid(struct xpc_connection *c) { int p; pthread_mutex_lock(&c->xc_
 int op507_remote_pid(struct xpc_connection *c) { int p; pthread_mutex_lock(&c->xc_remote_lock); p=c->xc_remote_pid; pthread_mutex_unlock(&c->xc_remote_lock); return p; }
 /* xpc_connection_create(NULL) makes a listener; xpc_receive.zig projects its own remote into an ordinary one. */
 void op751_ordinary(struct xpc_connection *c) { c->xc_listener=false; }
-/* op-757: a fixture server's reply on a received request's send-once right. */
-int op757_pipe_reply(xpc_object_t o,unsigned sonce,uint64_t id) { return xpc_pipe_send_reply(o,sonce,id); }
+/*
+ * op-757: a fixture server's reply on a received request's send-once right.
+ * Its replies carry no endpoint, so no descriptor can fail at the kernel's
+ * body stage: nonzero leaves the right with the caller (op-813).
+ */
+int op757_pipe_reply(xpc_object_t o,unsigned sonce,uint64_t id) { bool kept; return xpc_pipe_send_reply(o,sonce,id,&kept); }
