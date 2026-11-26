@@ -525,6 +525,12 @@ xpc_pipe_routine_reply(xpc_object_t xobj __unused)
  * subsystem 0) left the message unread: kept. Every other send error is
  * taken: a right kept by mistake leaks, a name released twice may not be
  * this sender's any more.
+ * The body stage has its own MACH_SEND_TOO_LARGE and MACH_SEND_NO_BUFFER,
+ * both from an out-of-line port array (ipc_kmsg_copyin_ool_ports_descriptor:
+ * a count over INT_MAX / sizeof(mach_port_t), and ipc_kmsg_ool_ports_alloc's
+ * failed allocation), returned after ipc_kmsg_clean_partial has destroyed
+ * the header's rights. So this sort holds only while libxpc's replies carry
+ * port descriptors alone, as they do: none carries an out-of-line array.
  */
 static bool
 xpc_send_kept(kern_return_t kr)
@@ -697,22 +703,23 @@ xpc_pipe_send_reply(xpc_object_t xobj, mach_port_t sonce, uint64_t id,
 	} while (0)
 
 /*
- * Whether a name received in a PORT_SEND descriptor is what an endpoint
- * holds: a send right, or the dead name a send right became; null and
- * MACH_PORT_DEAD hold nothing. Our kernel also carries a passable file in a
- * port descriptor (ipc_object_copyin, ipc_entry_file_to_port) and copies it
- * out as a new descriptor with no Mach entry, for which mach_port_mod_refs
- * answers KERN_INVALID_NAME. A change of 0 changes no count, and the call is
- * a trap: no MIG reply port.
+ * Whether a received name holds right (a send right in an endpoint's slot, a
+ * send-once right in a request's), or the dead name that right became. Our
+ * kernel also carries a passable file in a port descriptor of either kind
+ * (ipc_object_copyin, ipc_entry_file_to_port) and copies it out as a new
+ * descriptor with no Mach entry, which keeps the descriptor's disposition and
+ * for which mach_port_mod_refs answers KERN_INVALID_NAME. A change of 0
+ * changes no count, and the call is a trap: no MIG reply port. It is not
+ * without effect: on a right whose port has died, the kernel turns the
+ * entry into the dead name (ipc_right_check) and answers KERN_INVALID_RIGHT,
+ * and the second call finds that dead name.
  */
 static bool
-xpc_endpoint_name_valid(mach_port_t name)
+xpc_name_holds(mach_port_t name, mach_port_right_t right)
 {
 	kern_return_t kr;
 
-	if (!MACH_PORT_VALID(name))
-		return (true);
-	kr = mach_port_mod_refs(mach_task_self(), name, MACH_PORT_RIGHT_SEND, 0);
+	kr = mach_port_mod_refs(mach_task_self(), name, right, 0);
 	if (kr == KERN_SUCCESS)
 		return (true);
 	return (kr == KERN_INVALID_RIGHT &&
@@ -721,15 +728,29 @@ xpc_endpoint_name_valid(mach_port_t name)
 }
 
 /*
+ * Whether a name received in a PORT_SEND descriptor is what an endpoint
+ * holds: a send right, or the dead name a send right became; null and
+ * MACH_PORT_DEAD hold nothing.
+ */
+static bool
+xpc_endpoint_name_valid(mach_port_t name)
+{
+
+	return (!MACH_PORT_VALID(name) ||
+	    xpc_name_holds(name, MACH_PORT_RIGHT_SEND));
+}
+
+/*
  * A successful receive owns the header right, a request's send-once right
  * and each endpoint's send right until this helper transfers them. The
  * message is refused (EINVAL), with each of its rights released once by
  * mach_msg_destroy, before any object owns one: a complex message is a
  * request's PORT_SEND_ONCE descriptor first, or none, then up to
- * XPC_MAX_ENDPOINTS PORT_SEND descriptors, at least one descriptor in all,
- * each endpoint descriptor holding a send right or a dead name
- * (xpc_endpoint_name_valid: a file there is closed by mach_msg_destroy),
- * and its list must name each endpoint descriptor once (nv_endpoints_valid).
+ * XPC_MAX_ENDPOINTS PORT_SEND descriptors, at least one descriptor in all.
+ * The request's descriptor holds a send-once right or the dead name it
+ * became, and each endpoint descriptor a send right or a dead name
+ * (xpc_name_holds: a file in either slot is closed by mach_msg_destroy).
+ * Its list must name each endpoint descriptor once (nv_endpoints_valid).
  * *idp gets the message's ID.
  */
 static int
@@ -769,7 +790,8 @@ xpc_pipe_decode(struct xpc_recv_message *message, size_t capacity,
 		desc = (mach_msg_port_descriptor_t *)(base + XPC_WIRE_DESCRIPTORS);
 		if (desc->type == MACH_MSG_PORT_DESCRIPTOR &&
 		    desc->disposition == MACH_MSG_TYPE_PORT_SEND_ONCE) {
-			if (!MACH_PORT_VALID(desc->name))
+			if (!MACH_PORT_VALID(desc->name) ||
+			    !xpc_name_holds(desc->name, MACH_PORT_RIGHT_SEND_ONCE))
 				goto invalid;
 			sonce = desc->name;
 			desc++;
