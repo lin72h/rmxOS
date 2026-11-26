@@ -153,13 +153,20 @@ reset_owner(void)
 	pid_t pid = getpid();
 
 	if (owner != pid) {
+		/*
+		 * Another process looked these names up: this child's parent,
+		 * or a vfork or posix_spawn child that shared this process's
+		 * memory. On rmxOS a Mach name is a descriptor that fork does
+		 * not copy (mach_fileops has no DFLAG_FORK), so this process
+		 * holds none of them, and the same numbers may now name its own
+		 * pipes, ptys or ports. Forget them without closing or
+		 * releasing anything, and look the server up again, as a child
+		 * does on macOS. After a vfork child logged, the parent's own
+		 * earlier names are forgotten too: they stay open, unused.
+		 */
 		task = __sys_task_self_trap();
-		release_port(&server);
-		release_port(&bootstrap);
-		/* Drop only this child's descriptor reference. Destroying the
-		 * inherited receive right would also invalidate the parent's RPC. */
-		if (reply != MACH_PORT_NULL)
-			(void)close(reply);
+		server = MACH_PORT_NULL;
+		bootstrap = MACH_PORT_NULL;
 		reply = MACH_PORT_NULL;
 		owner = pid;
 	}
