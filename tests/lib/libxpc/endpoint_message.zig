@@ -1065,7 +1065,7 @@ fn sendRequest(dest: u32, reply_port: u32, carried: u32, payload: []const u8, id
     h.msgh_size = @intCast(total);
     h.msgh_remote_port = dest;
     h.msgh_local_port = reply_port;
-    h.msgh_id = 0x10000000; // XPC_PIPE_MESSAGE_ID
+    h.msgh_id = 0x10000000; // not libxpc's XPC_PIPE_MESSAGE_ID (0x58504300); the decoder reads no ID
     std.mem.writeInt(u32, buf[24..28], 2, .little);
     const d: [*]align(4) PortDescriptor = @ptrCast(@alignCast(buf + 28));
     d[0] = .{ .name = reply_port, .pad1 = 0, .pad2 = 0, .disposition = c.MACH_MSG_TYPE_MAKE_SEND_ONCE, .kind = c.MACH_MSG_PORT_DESCRIPTOR };
@@ -1404,15 +1404,16 @@ fn endpointCapRefused(_: [*c]const c.atf_tc_t) callconv(.c) void {
 // that name: the sentinel, given one send right. Names are the lowest free
 // descriptor from 16 (sys/compat/mach/ipc/ipc_entry.c, kern_fdalloc), so the
 // loop reaches the freed name unless another thread took it first. What this
-// adds to every case of the program: one call frame and two counters on each
-// libxpc mach_msg_send.
+// adds to every case of the program: one call frame and three counters on
+// each mach_msg_send call (libxpc's, and any other library's).
 const MOVE_SEND_ONCE: u32 = 18; // MACH_MSG_TYPE_MOVE_SEND_ONCE
-const XPC_PIPE_MESSAGE_ID: c_int = 0x10000000;
+const XPC_PIPE_MESSAGE_ID: c_int = 0x58504300; // lib/libxpc/xpc/launchd.h
 const SendFn = *const fn (*c.mach_msg_header_t) callconv(.c) c.mach_msg_return_t;
 var next_send: ?SendFn = null;
 const Hook = struct {
     armed: u64 = 0,
-    sends: u64 = 0, // pipe messages through this mach_msg_send
+    all: u64 = 0, // every message through this mach_msg_send: 0 means not bound
+    sends: u64 = 0, // of those, pipe messages (XPC_PIPE_MESSAGE_ID)
     replies: u64 = 0, // of those, on a send-once right
     fired: u64 = 0,
     recorded: u32 = 0, // the refused reply's header destination
@@ -1432,6 +1433,7 @@ pub export fn mach_msg_send(h: *c.mach_msg_header_t) c.mach_msg_return_t {
     const remote: u32 = h.msgh_bits & 0x1f; // MACH_MSGH_BITS_REMOTE_MASK
     const pipe = h.msgh_id == XPC_PIPE_MESSAGE_ID;
     const kr = realSend(h);
+    bump(&hook.all);
     if (pipe) {
         bump(&hook.sends);
         if (remote == MOVE_SEND_ONCE) bump(&hook.replies);
@@ -1496,41 +1498,73 @@ fn barrier(conn: O) void {
     _Block_release(b);
 }
 
-// Names back to the start: every start name with its type, and no other
-// name, except a thread's MIG reply port (mig_get_reply_port: a receive
-// right with no send right and no context, kept until its thread exits),
-// which is printed and not counted. libxpc marks its own call reply ports
+// Names back to the start. Every right these cases test is to a port whose
+// receive right this task holds (the listener's, a client's, the case's own
+// ports), so a send reference to it shares the receive right's name: a
+// leaked or doubly released one shows in that name's references and type.
+// Only a send-once right (never shared) or a dead name is a name of its own.
+// Names a thread brings and takes away are not the cases': a thread's MIG
+// reply port (mig_get_reply_port: a receive right with no send right and no
+// context, kept until its thread exits) and a send right with no receive
+// right here (a foreign or kernel port, such as a thread's). Those, new or
+// gone, are printed with the task's thread count and not counted; that they
+// are worker threads' is an inference. libxpc marks its own call reply ports
 // with a context (XPC_REPLY_PORT_CONTEXT), so a lingering one counts.
 fn context(name: u32) u64 {
     var v: c.mach_vm_address_t = 0;
     return if (c.mach_port_get_context(c.mach_task_self(), name, &v) == 0) v else 0xffffffffffffffff;
 }
-fn threadPort(name: u32, t: u32) bool {
-    return (t & 0x1f0000) == c.MACH_PORT_TYPE_RECEIVE and refs(name, SEND) == 0 and context(name) == 0;
+fn rights(t: u32) u32 {
+    return t & 0x1f0000; // MACH_PORT_TYPE_ALL_RIGHTS
 }
+fn threadName(t: u32) bool {
+    return rights(t) == c.MACH_PORT_TYPE_RECEIVE or rights(t) == c.MACH_PORT_TYPE_SEND;
+}
+fn newThreadName(name: u32, t: u32) bool {
+    return rights(t) == c.MACH_PORT_TYPE_SEND or (rights(t) == c.MACH_PORT_TYPE_RECEIVE and refs(name, SEND) == 0 and context(name) == 0);
+}
+// The task's threads (kinfo_proc records with KERN_PROC_INC_THREAD).
+fn threads() u64 {
+    var mib = [_]c_int{ c.CTL_KERN, c.KERN_PROC, c.KERN_PROC_PID | c.KERN_PROC_INC_THREAD, c.getpid() };
+    var size: usize = 0;
+    if (c.sysctl(&mib, mib.len, null, &size, null, 0) != 0) return 0;
+    size += 4 * @sizeOf(c.kinfo_proc);
+    const buf = c.malloc(size) orelse return 0;
+    defer c.free(buf);
+    if (c.sysctl(&mib, mib.len, buf, &size, null, 0) != 0) return 0;
+    return size / @sizeOf(c.kinfo_proc);
+}
+var start_threads: u64 = 0;
 fn namesBack(case: [*:0]const u8, a: *const Names, b: *const Names, others: bool, show: bool) bool {
     var ok = true;
+    var churn: u64 = 0;
     for (a.fds[0..a.n], a.types[0..a.n]) |fd, t| {
         var seen: ?u32 = null;
         for (b.fds[0..b.n], b.types[0..b.n]) |x, u| {
             if (x == fd) seen = u;
         }
-        if (seen == null or seen.? != t) {
-            ok = false;
-            if (show) _ = c.printf("xpc_b0 case=%s name=%d start_type=0x%x end_type=0x%x\n", case, fd, t, seen orelse 0);
+        if (seen != null and seen.? == t) continue;
+        if (threadName(t)) {
+            churn += 1;
+            if (show) _ = c.printf("xpc_b0 case=%s thread_name_gone=%d start_type=0x%x end_type=0x%x (not counted)\n", case, fd, t, seen orelse 0);
+            continue;
         }
+        ok = false;
+        if (show) _ = c.printf("xpc_b0 case=%s name=%d start_type=0x%x end_type=0x%x\n", case, fd, t, seen orelse 0);
     }
     for (b.fds[0..b.n], b.types[0..b.n]) |fd, t| {
-        var old = false;
-        for (a.fds[0..a.n]) |x| old = old or x == fd;
-        if (old) continue;
-        if (threadPort(@intCast(fd), t)) {
-            if (show) _ = c.printf("xpc_b0 case=%s thread_port=%d type=0x%x (not counted)\n", case, fd, t);
+        var same = false;
+        for (a.fds[0..a.n], a.types[0..a.n]) |x, u| same = same or (x == fd and u == t);
+        if (same) continue;
+        if (newThreadName(@intCast(fd), t)) {
+            churn += 1;
+            if (show) _ = c.printf("xpc_b0 case=%s thread_name_new=%d type=0x%x send_refs=%llu (not counted)\n", case, fd, t, refs(@intCast(fd), SEND));
             continue;
         }
         ok = false;
         if (show) _ = c.printf("xpc_b0 case=%s new_name=%d type=0x%x send_refs=%llu context=0x%llx\n", case, fd, t, refs(@intCast(fd), SEND), context(@intCast(fd)));
     }
+    if (show) _ = c.printf("xpc_b0 case=%s names start=%llu end=%llu thread_names_not_counted=%llu threads start=%llu end=%llu\n", case, @as(u64, a.n), @as(u64, b.n), churn, start_threads, threads());
     if (others) {
         const same_count = a.no == b.no;
         for (a.others[0..a.no], a.kinds[0..a.no], 0..) |fd, k, i| {
@@ -1649,9 +1683,11 @@ fn replyEndpointRefused(_: [*c]const c.atf_tc_t) callconv(.c) void {
     w.init();
     call(client, dict(100, OP_ECHO), w, &callDone);
     const warm = waitMs(&w.sem, LIMIT_MS) and w.code == 100;
+    const all = load(&hook.all);
     const sends = load(&hook.sends);
     const replies = load(&hook.replies);
     names(&start_names);
+    start_threads = threads();
     put(&hook.armed, 1);
     const k = &calls[1];
     k.init();
@@ -1665,9 +1701,10 @@ fn replyEndpointRefused(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const sentinel_refs = if (sentinel != 0) refs(sentinel, SEND) else 0;
     _ = c.usleep(100_000);
     const exercised = fired and sentinel != 0 and sentinel == hook.recorded;
-    _ = c.printf("xpc_b0 case=%s observed warmup=%u sends_before=%llu replies_before=%llu fired=%u recorded=%u kr=0x%x sentinel=%u fillers=%u past=%u sentinel_send_refs=%llu completions=%llu code=%llu peer=%u recv=%u\n", case, @as(c_uint, @intFromBool(warm)), sends, replies, @as(c_uint, @intFromBool(fired)), hook.recorded, hook.kr, sentinel, hook.fillers, hook.past, sentinel_refs, load(&k.n), k.code, @as(c_uint, @intFromBool(peer != null)), srv.recv);
+    _ = c.printf("xpc_b0 case=%s observed warmup=%u all_before=%llu sends_before=%llu replies_before=%llu fired=%u recorded=%u kr=0x%x sentinel=%u fillers=%u past=%u sentinel_send_refs=%llu completions=%llu code=%llu peer=%u recv=%u\n", case, @as(c_uint, @intFromBool(warm)), all, sends, replies, @as(c_uint, @intFromBool(fired)), hook.recorded, hook.kr, sentinel, hook.fillers, hook.past, sentinel_refs, load(&k.n), k.code, @as(c_uint, @intFromBool(peer != null)), srv.recv);
     if (!exercised) _ = c.printf("xpc_b0 case=%s exercised=0: the sentinel did not take the refused reply's name, so a second release of it is not tested\n", case);
     _ = c.fflush(null);
+    fact(case, "interposer_bound", 1, @intFromBool(all >= 2));
     fact(case, "interposer_saw_libxpc_sends", 1, @intFromBool(sends >= 2 and replies >= 1));
     fact(case, "warmup_reply", 100, if (warm) w.code else NONE);
     fact(case, "reply_send_refused", 1, @intFromBool(fired));
@@ -1698,7 +1735,7 @@ fn replyEndpointRefused(_: [*c]const c.atf_tc_t) callconv(.c) void {
 // carried port P is the case's, with one send right: an endpoint descriptor
 // of P adds a send reference to P's own name in this task, and releasing it
 // takes it off again.
-const Raw = struct { s: O = null, sport: u32 = 0, r: u32 = 0, p: u32 = 0, start_refs: u64 = 0 };
+const Raw = struct { s: O = null, sport: u32 = 0, r: u32 = 0, p: u32 = 0, start_refs: u64 = 0, r_refs: u64 = 0 };
 var raw: Raw = .{};
 fn rawSetup(case: [*:0]const u8, tag: [*:0]const u8, warm: u64) void {
     raw.s = listen(tag, &serverListener, &srv, &raw.sport);
@@ -1709,7 +1746,11 @@ fn rawSetup(case: [*:0]const u8, tag: [*:0]const u8, warm: u64) void {
     fact(case, "warmup_sent", 0, @bitCast(@as(i64, sendRaw(raw.sport, raw.r, false, &.{}, rawList(warm, &.{}), warm))));
     fact(case, "warmup_arrived", 1, @intFromBool(awaitCount(&srv.count[@intCast(warm)], 1, LIMIT_MS)));
     raw.start_refs = refs(raw.p, SEND);
+    // R's send references once the warm-up's header right is gone: the
+    // peer's own (xpc_port_add_ref), 1 unless it holds more.
+    raw.r_refs = settleRefs(raw.r, SEND, 1, 1000);
     names(&start_names);
+    start_threads = threads();
 }
 const Refusal = struct { sent: i64 = 0, sent_next: i64 = 0, arrived: u64 = 0, next: bool = false, notified: u64 = 0 };
 // One message to be refused (already packed in bytes), then a valid one
@@ -1731,15 +1772,20 @@ fn refusedThenNext(once: bool, carried: []const u32, bytes: []const u8, refused:
     }
     return v;
 }
+// The peer for R ends only when R dies: its send source on R
+// (xpc_connection_send_source, DISPATCH_MACH_SEND_DEAD) cancels it
+// (xpc_connection_remote_dead). Cancelling the listener does not.
 fn rawFinish(case: [*:0]const u8, others: bool) void {
     fact(case, "carried_send_refs_back", raw.start_refs, settleRefs(raw.p, SEND, raw.start_refs, 2000));
+    // Each raw message's header right is a send right to R.
+    fact(case, "reply_port_send_refs_back", raw.r_refs, settleRefs(raw.r, SEND, raw.r_refs, 2000));
     fact(case, "names_back", 1, @intFromBool(settleNames(case, others, 2000)));
     retire(raw.s);
-    finalEvents(case);
     const task = c.mach_task_self();
-    var freed = c.mach_port_deallocate(task, raw.p) == 0;
+    var freed = c.mach_port_mod_refs(task, raw.r, c.MACH_PORT_RIGHT_RECEIVE, -1) == 0;
+    finalEvents(case);
+    freed = freed and c.mach_port_deallocate(task, raw.p) == 0;
     freed = freed and c.mach_port_mod_refs(task, raw.p, c.MACH_PORT_RIGHT_RECEIVE, -1) == 0;
-    freed = freed and c.mach_port_mod_refs(task, raw.r, c.MACH_PORT_RIGHT_RECEIVE, -1) == 0;
     fact(case, "own_ports_freed", 1, @intFromBool(freed));
     conclude(case);
 }
