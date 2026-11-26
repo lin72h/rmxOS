@@ -1583,6 +1583,36 @@ fn namesBack(case: [*:0]const u8, a: *const Names, b: *const Names, others: bool
 }
 var start_names: Names = .{};
 var end_names: Names = .{};
+var prev_names: Names = .{};
+fn sameNames(a: *const Names, b: *const Names) bool {
+    if (a.n != b.n) return false;
+    for (a.fds[0..a.n], a.types[0..a.n], b.fds[0..b.n], b.types[0..b.n]) |x, t, y, u| {
+        if (x != y or t != u) return false;
+    }
+    return true;
+}
+fn unreadable(s: *const Names) u64 {
+    var k: u64 = 0;
+    for (s.types[0..s.n]) |t| k += @intFromBool(t == 0);
+    return k;
+}
+// The start snapshot once no teardown is still changing it: no name that
+// mach_port_type cannot read (one being destroyed between the file table and
+// the read, as a finished call's reply port is: libxpc releases it after the
+// call completes), and the same twice in a row, 20 ms apart; or 2 s. Then
+// the thread count.
+fn settledStart(case: [*:0]const u8) void {
+    const start = nowMs();
+    names(&prev_names);
+    while (true) {
+        _ = c.usleep(20_000);
+        names(&start_names);
+        if ((unreadable(&start_names) == 0 and sameNames(&prev_names, &start_names)) or nowMs() - start >= 2000) break;
+        prev_names = start_names;
+    }
+    _ = c.printf("xpc_b0 case=%s start_names=%llu unreadable=%llu settle_ms=%llu\n", case, @as(u64, start_names.n), unreadable(&start_names), nowMs() - start);
+    start_threads = threads();
+}
 fn settleNames(case: [*:0]const u8, others: bool, ms: u64) bool {
     const start = nowMs();
     while (true) {
@@ -1686,8 +1716,7 @@ fn replyEndpointRefused(_: [*c]const c.atf_tc_t) callconv(.c) void {
     const all = load(&hook.all);
     const sends = load(&hook.sends);
     const replies = load(&hook.replies);
-    names(&start_names);
-    start_threads = threads();
+    settledStart(case);
     put(&hook.armed, 1);
     const k = &calls[1];
     k.init();
@@ -1749,8 +1778,7 @@ fn rawSetup(case: [*:0]const u8, tag: [*:0]const u8, warm: u64) void {
     // R's send references once the warm-up's header right is gone: the
     // peer's own (xpc_port_add_ref), 1 unless it holds more.
     raw.r_refs = settleRefs(raw.r, SEND, 1, 1000);
-    names(&start_names);
-    start_threads = threads();
+    settledStart(case);
 }
 const Refusal = struct { sent: i64 = 0, sent_next: i64 = 0, arrived: u64 = 0, next: bool = false, notified: u64 = 0 };
 // One message to be refused (already packed in bytes), then a valid one
