@@ -506,14 +506,203 @@ fn forkedChildKeepsPipes(_: [*c]const c.atf_tc_t) callconv(.c) void {
 fn forkedChildKeepsPorts(_: [*c]const c.atf_tc_t) callconv(.c) void {
     forkedChildKeeps(.ports);
 }
+// op-831: liblogstore's sender in a forked child. The parent's first asl_log
+// opens the ASL server's send right (asl_core_get_service_port's cache) and
+// notify's names; the child never looked those numbers up. It fills each with
+// a port of its own and logs once with asl_log: its log must neither release a
+// reference from those ports nor queue a message on them, and must be stored.
+extern fn asl_log(?*anyopaque, ?*anyopaque, c_int, [*:0]const u8, ...) c_int;
+extern fn asl_core_get_service_port(c_int) c_uint;
+extern fn mach_port_get_attributes(c_uint, c_uint, c_int, *[status_words]c_uint, *c_uint) c_int;
+const asl_level_notice = 5;
+const receive_status = 2; // MACH_PORT_RECEIVE_STATUS
+const status_words = 10; // MACH_PORT_RECEIVE_STATUS_COUNT
+const msgcount_word = 4; // mach_port_status_t.mps_msgcount
+const AslReport = extern struct {
+    ports: ChildReport = .{},
+    log_rc: i32 = -1,
+    service: u32 = 0,
+    status_kr: [max_targets]i32 = @splat(-1),
+    status_count: [max_targets]u32 = @splat(0),
+    msgcount: [max_targets]u32 = @splat(0),
+};
+fn aslFact(case: [*:0]const u8, name: ?c_int, label: [*:0]const u8, expected: i64, observed: i64) void {
+    if (name) |n| {
+        _ = c.printf("op831 case=%s name=%d fact=%s expected=%lld observed=%lld\n", case, n, label, @as(c_longlong, expected), @as(c_longlong, observed));
+    } else {
+        _ = c.printf("op831 case=%s fact=%s expected=%lld observed=%lld\n", case, label, @as(c_longlong, expected), @as(c_longlong, observed));
+    }
+}
+// The first asl_log can leave work that opens names after it returns: take
+// snapshots until two agree.
+fn settledSet() FdSet {
+    var last = openSet();
+    for (0..50) |_| {
+        _ = c.usleep(20000);
+        const next = openSet();
+        if (next.eql(last)) return next;
+        last = next;
+    }
+    return last;
+}
+fn aslChild(targets: []const c_int, marker: [:0]const u8, report_fd: c_int) noreturn {
+    var r: AslReport = .{};
+    var all_free = true;
+    for (targets, 0..) |fd, i| {
+        const free = c.fcntl(fd, c.F_GETFD) == -1 and std.c._errno().* == c.EBADF;
+        r.ports.free[i] = @intFromBool(free);
+        all_free = all_free and free;
+    }
+    if (all_free) {
+        holdPorts(targets, &r.ports);
+        r.ports.got = 1;
+        for (r.ports.held[0..targets.len]) |h| {
+            if (h != 1) r.ports.got = 0;
+        }
+    }
+    if (r.ports.got == 1) {
+        r.log_rc = asl_log(null, null, asl_level_notice, "%s", marker.ptr);
+        r.ports.logged = 1;
+        checkPorts(targets, &r.ports);
+        const task = __sys_task_self_trap();
+        for (targets, 0..) |fd, i| {
+            var info: [status_words]c_uint = @splat(0);
+            var count: c_uint = status_words;
+            r.status_kr[i] = mach_port_get_attributes(task, @intCast(fd), receive_status, &info, &count);
+            r.status_count[i] = count;
+            r.msgcount[i] = info[msgcount_word];
+        }
+        r.service = asl_core_get_service_port(0);
+    }
+    const bytes = std.mem.asBytes(&r);
+    _ = c.write(report_fd, bytes.ptr, bytes.len);
+    c._exit(0);
+}
+// The store's own wait, as awaitRecord: a record within 10 seconds, then the
+// count again after delivery settles. Returns that count (0 when none came).
+fn storedCount(marker: [:0]const u8) usize {
+    var start: c.struct_timespec = undefined;
+    need(c.clock_gettime(c.CLOCK_MONOTONIC, &start) == 0, "monotonic start");
+    while (true) {
+        const raw = scope.query("Message", marker, false, false);
+        defer std.heap.page_allocator.free(raw);
+        if (std.mem.count(u8, raw, "[Message ") > 0) {
+            need(std.mem.indexOf(u8, raw, "[UID 0]") != null, "record uid");
+            _ = c.usleep(200000);
+            const final = scope.query("Message", marker, false, false);
+            defer std.heap.page_allocator.free(final);
+            return std.mem.count(u8, final, "[Message ");
+        }
+        var now: c.struct_timespec = undefined;
+        need(c.clock_gettime(c.CLOCK_MONOTONIC, &now) == 0, "monotonic poll");
+        if ((now.tv_sec - start.tv_sec) * std.time.ns_per_s + now.tv_nsec - start.tv_nsec >= 10 * std.time.ns_per_s) return 0;
+        _ = c.usleep(20000);
+    }
+}
+fn forkedChildKeepsAslPort(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    need(c.geteuid() == 0, "run as root");
+    const case: [*:0]const u8 = "forkedChildKeepsAslPort";
+    var info: c.Dl_info = undefined;
+    need(c.dladdr(@ptrCast(&asl_log), &info) != 0 and info.dli_fname != null, "resolve asl_log provider");
+    _ = c.printf("op831 case=%s asl_log=%s pid=%d\n", case, info.dli_fname, c.getpid());
+    var bufs: [3][96]u8 = undefined;
+    const first = std.fmt.bufPrintZ(&bufs[0], "op831-asl-parent1-{d}", .{c.getpid()}) catch unreachable;
+    const child = std.fmt.bufPrintZ(&bufs[1], "op831-asl-child-{d}", .{c.getpid()}) catch unreachable;
+    const second = std.fmt.bufPrintZ(&bufs[2], "op831-asl-parent2-{d}", .{c.getpid()}) catch unreachable;
+    var report: [2]c_int = undefined;
+    need(c.pipe(&report) == 0, "report pipe");
+    scope.begin();
+    // The sender's names: the numbers this one call opened.
+    const before = openSet();
+    const first_rc = asl_log(null, null, asl_level_notice, "%s", first.ptr);
+    const after = settledSet();
+    var list: [max_targets]c_int = undefined;
+    var n: usize = 0;
+    var over: usize = 0;
+    var closed: usize = 0;
+    for (0..max_fd) |fd| {
+        if (after.isSet(fd) and !before.isSet(fd)) {
+            if (n < max_targets) {
+                list[n] = @intCast(fd);
+                n += 1;
+            } else over += 1;
+        }
+        if (before.isSet(fd) and !after.isSet(fd)) closed += 1;
+    }
+    const targets = list[0..n];
+    const service = asl_core_get_service_port(0);
+    _ = c.printf("op831 case=%s first_log_rc=%d opened_by_first_log=%zu closed_by_first_log=%zu over=%zu service_port=%u\n", case, first_rc, n, closed, over, service);
+    const task = __sys_task_self_trap();
+    for (targets) |t| {
+        var receive: c_uint = 0;
+        var send: c_uint = 0;
+        const rk = mach_port_get_refs(task, @intCast(t), right_receive, &receive);
+        const sk = mach_port_get_refs(task, @intCast(t), right_send, &send);
+        _ = c.printf("op831 case=%s sender_name=%d service=%d receive_kr=%d receive=%u send_kr=%d send=%u\n", case, t, @as(c_int, @intFromBool(@as(c_uint, @intCast(t)) == service)), rk, receive, sk, send);
+    }
+    _ = c.fflush(null);
+    need(n > 0 and over == 0, "the parent's first asl_log opened the sender's names (1 to 8 numbers)");
+    need(indexIn(targets, @intCast(service)) != null, "the service port is among the numbers the first asl_log opened");
+    const pid = c.fork();
+    need(pid >= 0, "fork logging child");
+    if (pid == 0) {
+        _ = c.close(report[0]);
+        aslChild(targets, child, report[1]);
+    }
+    _ = c.close(report[1]);
+    var r: AslReport = .{};
+    const got = readAll(report[0], std.mem.asBytes(&r));
+    _ = c.close(report[0]);
+    var status: c_int = -1;
+    const waited = c.waitpid(pid, &status, 0);
+    aslFact(case, null, "child_report_bytes", @sizeOf(AslReport), @intCast(got));
+    for (targets, 0..) |t, i| aslFact(case, t, "free_in_child", 1, r.ports.free[i]);
+    for (targets, 0..) |t, i| aslFact(case, t, "child_holds_number", 1, r.ports.held[i]);
+    _ = c.printf("op831 case=%s made=%u child_log_rc=%d child_service_port=%u\n", case, r.ports.made, r.log_rc, r.service);
+    aslFact(case, null, "child_got_numbers", 1, r.ports.got);
+    aslFact(case, null, "child_logged", 1, r.ports.logged);
+    var kept = true;
+    var sends = true;
+    var empty = true;
+    for (targets, 0..) |t, i| {
+        aslFact(case, t, "receive_kr", 0, r.ports.receive_kr[i]);
+        aslFact(case, t, "receive_refs", 1, r.ports.receive[i]);
+        aslFact(case, t, "send_kr", 0, r.ports.send_kr[i]);
+        aslFact(case, t, "send_refs", 1, r.ports.send[i]);
+        aslFact(case, t, "status_kr", 0, r.status_kr[i]);
+        aslFact(case, t, "status_count", status_words, r.status_count[i]);
+        aslFact(case, t, "msgcount", 0, r.msgcount[i]);
+        kept = kept and r.ports.receive_kr[i] == 0 and r.ports.receive[i] == 1;
+        sends = sends and r.ports.send_kr[i] == 0 and r.ports.send[i] == 1;
+        empty = empty and r.status_kr[i] == 0 and r.status_count[i] == status_words and r.msgcount[i] == 0;
+    }
+    aslFact(case, null, "child_wait_status", 0, if (waited == pid) status else -1);
+    _ = c.fflush(null);
+    const stored = if (r.ports.logged == 1) storedCount(child) else 0;
+    aslFact(case, null, "child_line_stored", 1, @intCast(stored));
+    _ = c.fflush(null);
+    need(got == @sizeOf(AslReport), "the child's report arrived whole");
+    need(r.ports.got == 1, "the child did not get the numbers: each free in it, then held by its own port");
+    need(r.ports.logged == 1, "the child logged");
+    need(kept, "each of the child's ports keeps its receive right after its asl_log");
+    need(sends, "each of the child's ports keeps one send reference after its asl_log");
+    need(empty, "no message is queued on any of the child's ports");
+    need(stored == 1, "the child's line is stored once");
+    need(waited == pid and status == 0, "the child exits 0");
+    _ = asl_log(null, null, asl_level_notice, "%s", second.ptr);
+    const parents = storedCount(second) + storedCount(first);
+    aslFact(case, null, "parent_lines_stored", 2, @intCast(parents));
+    _ = c.fflush(null);
+    need(parents == 2, "the parent's two lines are stored once each");
+}
 fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(tc, "require.user", "root");
     _ = c.atf_tc_set_md_var(tc, "timeout", "20");
 }
-var cases: [10]c.atf_tc_t = undefined;
+var cases: [11]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "libc_binding", "nonroot_logger", "nonroot_syslog", "nonroot_simple", "root_logger", "setgid_child", "setuid_root_child", "username_daemon", "forkedChildKeepsPipes", "forkedChildKeepsPorts" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ libcBinding, nonrootLogger, nonrootSyslog, nonrootSimple, rootLogger, setgidChild, setuidRootChild, usernameDaemon, forkedChildKeepsPipes, forkedChildKeepsPorts };
+    const names = [_][*:0]const u8{ "libc_binding", "nonroot_logger", "nonroot_syslog", "nonroot_simple", "root_logger", "setgid_child", "setuid_root_child", "username_daemon", "forkedChildKeepsPipes", "forkedChildKeepsPorts", "forkedChildKeepsAslPort" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ libcBinding, nonrootLogger, nonrootSyslog, nonrootSimple, rootLogger, setgidChild, setuidRootChild, usernameDaemon, forkedChildKeepsPipes, forkedChildKeepsPorts, forkedChildKeepsAslPort };
     for (&cases, names, bodies) |*tc, name, body| {
         var err = c.atf_tc_init(tc, name, head, body, cleanup, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
