@@ -94,8 +94,9 @@ __private_extern__ char *get_argv0();
 /* notify SPI */
 uint32_t notify_register_plain(const char *name, int *out_token);
 
-/* fork handling in asl_fd.c */
+/* fork handling in asl_fd.c and asl_core.c */
 extern void _asl_redirect_fork_child(void);
+extern void _asl_core_fork_child(void);
 
 typedef struct
 {
@@ -146,11 +147,29 @@ _asl_fork_child()
 	_asl_global.last_send = 0;
 	_asl_global.last_oq_msg = 0;
 
+	/* The parent's number: forget it, release nothing. */
 	_asl_global.server_port = MACH_PORT_NULL;
+	_asl_core_fork_child();
 
 	pthread_mutex_init(&(_asl_global.lock), NULL);
 
 	_asl_redirect_fork_child();
+}
+
+/*
+ * Register _asl_fork_child as a child handler, once, at load.  Every program
+ * that can cache the server port links this object (asl_client.o needs it
+ * too).  libthr runs child handlers in registration order: libmach's
+ * mach_init registers its handler from libmach's constructor, and a shared
+ * library's constructors run before those of the program that holds this
+ * archive, so in a child mach_init runs first.  This handler touches no Mach
+ * name.  A handler cannot be registered from a first call instead: one made
+ * inside a fork handler would wait on libthr's atfork lock.
+ */
+static void __attribute__((constructor))
+_asl_fork_register(void)
+{
+	(void)pthread_atfork(NULL, NULL, _asl_fork_child);
 }
 
 /*

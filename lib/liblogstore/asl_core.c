@@ -80,6 +80,23 @@ static pthread_mutex_t core_lock = PTHREAD_MUTEX_INITIALIZER;
 	c -= a; c -= b; c ^= (b>>15); \
 }
 
+/* The ASL server's send right, as this process looked it up. */
+static mach_port_t server_port = MACH_PORT_NULL;
+
+/*
+ * Called from _asl_fork_child(): a forked child never looked up its
+ * parent's server port (Mach names are descriptors that fork does not
+ * copy).  Forget the number without releasing it; a reset through
+ * asl_core_get_service_port() would deallocate it.
+ */
+__attribute__((visibility("hidden"))) void _asl_core_fork_child(void);
+
+__attribute__((visibility("hidden"))) void
+_asl_core_fork_child(void)
+{
+	server_port = MACH_PORT_NULL;
+}
+
 /*
  * Get ASL server mach port.
  * reset != 0 flushes cached port.
@@ -88,7 +105,6 @@ static pthread_mutex_t core_lock = PTHREAD_MUTEX_INITIALIZER;
 mach_port_t
 asl_core_get_service_port(int reset)
 {
-	static mach_port_t server_port = MACH_PORT_NULL;
 	mach_port_t tmp;
 	kern_return_t kstatus;
 	
