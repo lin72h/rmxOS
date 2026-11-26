@@ -205,3 +205,22 @@ endpoint's name is read from its description, `(endpoint) <name>`.
 - `endpointCapRefused`: 64 endpoints (the cap) arrive, 65 are refused at the
   sender (logged, the client interrupted) and a small message follows; a
   request with 64 endpoints is answered.
+
+# The decoder's refusals and a reply's lost right (op-813, op-823)
+
+The raw cases send their own messages to a listener's port from a reply port
+R of their own (`sendRaw`, `sendRawSlot`: xpc_pipe_send_msg's layout), then a
+valid message, and check that the server's descriptors and R's references
+come back to where they started.
+
+- `replyEndpointRefused`: a reply whose endpoint the kernel refuses at body
+  copyin has lost its send-once right; the program's own `mach_msg_send` is
+  the hook that puts a sentinel on the freed name, which the sender must not
+  release again.
+- `fileInEndpointSlot`: a pipe's descriptor in an endpoint's slot refuses
+  the message, the file is closed once, and the next message arrives.
+- `endpointIndexOutOfRange`, `endpointIndexTwice`, `endpointsOverCapReceived`:
+  the decoder's other refusals, each followed by a message that arrives.
+- `fileInSendOnceSlot` (op-823): a pipe's descriptor in a request's
+  send-once slot (MAKE_SEND_ONCE on a file) refuses the request, the file is
+  closed once, and the next request arrives.
