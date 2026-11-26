@@ -30,6 +30,9 @@
 // is closed once. endpointIndexOutOfRange, endpointIndexTwice and
 // endpointsOverCapReceived: the decoder's other refusals, each followed by a
 // message that arrives.
+//
+// op-823 adds fileInSendOnceSlot: a file in a request's send-once slot
+// refuses the request and is closed once, and the next request arrives.
 const std = @import("std");
 const c = @cImport({
     @cInclude("sys/cdefs.h");
@@ -1660,6 +1663,12 @@ fn rawList(value: u64, eps: []const c_int) []const u8 {
 // takes a descriptor's file as well as a send right); then size, ID and the
 // list. No descriptor: a simple message, the list at 40.
 fn sendRaw(dest: u32, reply_port: u32, once: bool, carried: []const u32, bytes: []const u8, id: u64) c_int {
+    return sendRawSlot(dest, reply_port, if (once) reply_port else null, carried, bytes, id);
+}
+// The same, with the first descriptor's name given: once_name, made a
+// send-once right (MAKE_SEND_ONCE) as a request's reply right is, or none.
+fn sendRawSlot(dest: u32, reply_port: u32, once_name: ?u32, carried: []const u32, bytes: []const u8, id: u64) c_int {
+    const once = once_name != null;
     const n = carried.len + @intFromBool(once);
     const list: usize = if (n == 0) 40 else std.mem.alignForward(usize, 28 + 12 * n, 8) + 16;
     const total = std.mem.alignForward(usize, list + bytes.len, 8);
@@ -1675,8 +1684,8 @@ fn sendRaw(dest: u32, reply_port: u32, once: bool, carried: []const u32, bytes: 
         std.mem.writeInt(u32, buf[24..28], @intCast(n), .little);
         const d: [*]align(4) PortDescriptor = @ptrCast(@alignCast(buf + 28));
         var i: usize = 0;
-        if (once) {
-            d[0] = .{ .name = reply_port, .pad1 = 0, .pad2 = 0, .disposition = c.MACH_MSG_TYPE_MAKE_SEND_ONCE, .kind = c.MACH_MSG_PORT_DESCRIPTOR };
+        if (once_name) |name| {
+            d[0] = .{ .name = name, .pad1 = 0, .pad2 = 0, .disposition = c.MACH_MSG_TYPE_MAKE_SEND_ONCE, .kind = c.MACH_MSG_PORT_DESCRIPTOR };
             i = 1;
         }
         for (carried) |name| {
@@ -1851,6 +1860,52 @@ fn fileInEndpointSlot(_: [*c]const c.atf_tc_t) callconv(.c) void {
     rawFinish(case, true);
 }
 
+// ---- fileInSendOnceSlot (op-823) ---------------------------------------------
+//
+// A request's send-once slot that holds a pipe's descriptor: the first
+// descriptor names the pipe with MAKE_SEND_ONCE. The kernel carries the file
+// as it does in an endpoint's slot (ipc_object_copyin takes the send-once
+// copyin types too), and the receiver gets a new descriptor that keeps the
+// PORT_SEND_ONCE disposition. The receiver refuses the request and closes the
+// descriptor once. The next request, with R's own send-once right, arrives,
+// and the server's pipe count is back where it started. On a decoder that
+// takes the file as the request's reply right, the request arrives and its
+// releases (mach_port_deallocate: KERN_INVALID_NAME) leave the file open.
+fn fileInSendOnceSlot(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const case = "fileInSendOnceSlot";
+    library(case);
+    rawSetup(case, "op823.sonce.server", 124);
+    const start_pipes = pipeDescriptors(&start_names);
+    var fds: [2]c_int = undefined;
+    need(c.pipe(&fds) == 0, "pipe");
+    var v = Refusal{};
+    v.sent = sendRawSlot(raw.sport, raw.r, @intCast(fds[0]), &.{}, rawList(125, &.{}), 125);
+    v.sent_next = sendRaw(raw.sport, raw.r, true, &.{}, rawList(126, &.{}), 126);
+    v.next = awaitCount(&srv.count[126], 1, LIMIT_MS);
+    _ = c.usleep(50_000);
+    v.arrived = load(&srv.count[125]);
+    // The next request goes unanswered: its send-once right comes back to R
+    // as a notification when the server releases it. Drained before the
+    // names are compared.
+    while (receiveWire(raw.r, 500) == 0) {
+        const h: *c.mach_msg_header_t = @ptrCast(&wire);
+        if (h.msgh_id == c.MACH_NOTIFY_SEND_ONCE) v.notified += 1;
+        c.mach_msg_destroy(h);
+    }
+    printRefusal(case, "send_once_file", v);
+    _ = c.close(fds[0]);
+    _ = c.close(fds[1]);
+    fact(case, "file_request_sent", 0, @bitCast(v.sent));
+    fact(case, "file_request_arrived", 0, v.arrived);
+    fact(case, "next_request_sent", 0, @bitCast(v.sent_next));
+    fact(case, "next_request_arrived", 1, @intFromBool(v.next));
+    var now: Names = undefined;
+    names(&now);
+    _ = c.printf("xpc_b0 case=%s observed pipe_descriptors start=%llu after_close=%llu\n", case, start_pipes, pipeDescriptors(&now));
+    fact(case, "pipe_descriptors_after_close", start_pipes, pipeDescriptors(&now));
+    rawFinish(case, true);
+}
+
 // ---- The decoder's other refusals (op-796's untested ones) -------------------
 
 // One endpoint descriptor; the list names index 1.
@@ -1915,10 +1970,10 @@ fn longHead(t: [*c]c.atf_tc_t) callconv(.c) void {
 fn shortHead(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "15");
 }
-var cases: [11]c.atf_tc_t = undefined;
+var cases: [12]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const ids = [_][*:0]const u8{ "endpointInReply", "endpointInMessage", "endpointReleasedBeforeUse", "secondEndpoint", "endpointNames", "endpointCapRefused", "replyEndpointRefused", "fileInEndpointSlot", "endpointIndexOutOfRange", "endpointIndexTwice", "endpointsOverCapReceived" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &endpointInReply, &endpointInMessage, &endpointReleasedBeforeUse, &secondEndpoint, &endpointNames, &endpointCapRefused, &replyEndpointRefused, &fileInEndpointSlot, &endpointIndexOutOfRange, &endpointIndexTwice, &endpointsOverCapReceived };
+    const ids = [_][*:0]const u8{ "endpointInReply", "endpointInMessage", "endpointReleasedBeforeUse", "secondEndpoint", "endpointNames", "endpointCapRefused", "replyEndpointRefused", "fileInEndpointSlot", "endpointIndexOutOfRange", "endpointIndexTwice", "endpointsOverCapReceived", "fileInSendOnceSlot" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &endpointInReply, &endpointInMessage, &endpointReleasedBeforeUse, &secondEndpoint, &endpointNames, &endpointCapRefused, &replyEndpointRefused, &fileInEndpointSlot, &endpointIndexOutOfRange, &endpointIndexTwice, &endpointsOverCapReceived, &fileInSendOnceSlot };
     for (&cases, ids, bodies, 0..) |*tc, id, body, i| {
         var err = c.atf_tc_init(tc, id, if (i == 0) &longHead else &shortHead, body, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
