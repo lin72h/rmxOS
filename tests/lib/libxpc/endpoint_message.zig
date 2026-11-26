@@ -21,6 +21,15 @@
 // received endpoint is read from its description, "(endpoint) <name>"
 // (xpc_copy_description), which endpointInMessage checks against a local
 // endpoint whose name is known.
+//
+// op-813 adds five cases (op-806's review). replyEndpointRefused: a reply
+// whose endpoint the kernel refuses at body copyin has lost its send-once
+// right, and its sender must not release that name again; the program's own
+// mach_msg_send is the hook that puts a sentinel on the freed name.
+// fileInEndpointSlot: a file in an endpoint's slot refuses the message and
+// is closed once. endpointIndexOutOfRange, endpointIndexTwice and
+// endpointsOverCapReceived: the decoder's other refusals, each followed by a
+// message that arrives.
 const std = @import("std");
 const c = @cImport({
     @cInclude("sys/cdefs.h");
@@ -73,6 +82,8 @@ extern fn xpc_get_type(O) ?*const anyopaque;
 extern fn xpc_retain(O) O;
 extern fn xpc_release(O) void;
 extern fn xpc_copy_description(O) ?[*:0]u8;
+extern fn xpc_dictionary_set_mach_recv(O, [*:0]const u8, u32) void;
+extern fn xpc_connection_send_barrier(O, ?*anyopaque) void;
 extern fn dispatch_queue_create([*:0]const u8, O) O;
 // libxpc's own nvlist (lib/libxpc/subr_nvlist.c), whose types include
 // NV_TYPE_ENDPOINT (nv.h): the wire records read a captured list with it.
@@ -82,6 +93,12 @@ extern fn nvlist_exists_type(?*const anyopaque, [*:0]const u8, c_int) bool;
 extern fn nvlist_get_nvlist_array(?*const anyopaque, [*:0]const u8) ?*const anyopaque;
 extern fn nvlist_get_nvlist_dictionary(?*const anyopaque, [*:0]const u8) ?*const anyopaque;
 extern fn nvlist_get_endpoint(?*const anyopaque, [*:0]const u8) c_int;
+// op-813: the raw cases build their lists with the same nvlist.
+extern fn nvlist_create_dictionary(c_int) ?*anyopaque;
+extern fn nvlist_add_uint64(?*anyopaque, [*:0]const u8, u64) void;
+extern fn nvlist_add_endpoint(?*anyopaque, [*:0]const u8, c_int) void;
+extern fn nvlist_pack(?*const anyopaque, *usize) ?*anyopaque;
+extern fn nvlist_error(?*const anyopaque) c_int;
 extern const _xpc_error_connection_invalid: u8;
 extern const _xpc_error_connection_interrupted: u8;
 extern const _xpc_type_connection: u8;
@@ -193,6 +210,10 @@ const Names = struct {
     types: [2048]u32 = undefined,
     n: usize = 0,
     dead: u64 = 0,
+    // op-813: every other descriptor and its kinfo type.
+    others: [512]c_int = undefined,
+    kinds: [512]c_int = undefined,
+    no: usize = 0,
 };
 fn names(s: *Names) void {
     s.* = .{};
@@ -217,6 +238,11 @@ fn names(s: *Names) void {
             s.types[s.n] = t;
             if ((t & c.MACH_PORT_TYPE_DEAD_NAME) != 0) s.dead += 1;
             s.n += 1;
+        } else {
+            need(s.no < s.others.len, "other descriptors fit the snapshot");
+            s.others[s.no] = f.kf_fd;
+            s.kinds[s.no] = f.kf_type;
+            s.no += 1;
         }
         offset += @intCast(f.kf_structsize);
     }
@@ -427,6 +453,7 @@ const OP_COUNT_REPLY: u64 = 7; // count them and reply with the count as "n"
 const OP_HOLD: u64 = 8; // (endpointInReply's server) hold the request unanswered
 const OP_RELEASE: u64 = 9; // ... answer the held request
 const OP_EXIT: u64 = 10; // ... exit
+const OP_RECV_REPLY: u64 = 11; // (replyEndpointRefused) reply with a fresh receive right as "p"
 
 fn dict(value: u64, op: u64) O {
     const d = xpc_dictionary_create(null, null, 0);
@@ -587,6 +614,10 @@ const Server = struct {
     sent: [SLOTS]u64 = @splat(0),
     conns: [8]O = @splat(null),
     nconns: u64 = 0,
+    // replyEndpointRefused: the peer that answered OP_RECV_REPLY, retained,
+    // and the receive right its reply carried.
+    peer: O = null,
+    recv: u32 = 0,
 };
 fn countEndpoints(s: *Server, o: O, slot: usize) u64 {
     const eps = xpc_dictionary_get_value(o, "eps");
@@ -646,6 +677,23 @@ fn serverPeer(ctx: ?*anyopaque, peer: O, o: O) callconv(.c) void {
         OP_COUNT_REPLY => {
             const n = countEndpoints(s, o, slot);
             reply(peer, o, code, null, n, 0);
+        },
+        // A receive right with no send right, borrowed by the reply
+        // (xpc_dictionary_set_mach_recv): its COPY_SEND descriptor is
+        // refused at the kernel's body copyin, after the header's.
+        OP_RECV_REPLY => {
+            var r: u32 = 0;
+            if (c.mach_port_allocate(c.mach_task_self(), c.MACH_PORT_RIGHT_RECEIVE, &r) == 0) {
+                const rep = xpc_dictionary_create_reply(o);
+                if (rep != null) {
+                    s.recv = r;
+                    s.peer = xpc_retain(peer);
+                    xpc_dictionary_set_uint64(rep, "value", code);
+                    xpc_dictionary_set_mach_recv(rep, "p", r);
+                    xpc_connection_send_message(peer, rep);
+                    xpc_release(rep);
+                } else _ = c.mach_port_mod_refs(c.mach_task_self(), r, c.MACH_PORT_RIGHT_RECEIVE, -1);
+            }
         },
         else => {},
     }
@@ -1343,18 +1391,460 @@ fn endpointCapRefused(_: [*c]const c.atf_tc_t) callconv(.c) void {
     conclude(case);
 }
 
+// ---- op-813: the reply's send-once right, and what an endpoint slot holds ----
+//
+// The reply-send hook is this program's own mach_msg_send. libxpc.so.5 calls
+// mach_msg_send for every pipe message (xpc_pipe_send_msg); an executable's
+// definition comes first in the dynamic lookup, so libxpc's reference binds
+// to this one, on whichever libxpc LD_LIBRARY_PATH selects. Unarmed it counts
+// pipe messages and calls the next definition (dlsym RTLD_NEXT, resolved in
+// main). Armed (replyEndpointRefused only), after a refused pipe message
+// whose header moves a send-once right, it records the header's destination
+// name and allocates ports (traps only: no MIG reply port) until one gets
+// that name: the sentinel, given one send right. Names are the lowest free
+// descriptor from 16 (sys/compat/mach/ipc/ipc_entry.c, kern_fdalloc), so the
+// loop reaches the freed name unless another thread took it first. What this
+// adds to every case of the program: one call frame and two counters on each
+// libxpc mach_msg_send.
+const MOVE_SEND_ONCE: u32 = 18; // MACH_MSG_TYPE_MOVE_SEND_ONCE
+const XPC_PIPE_MESSAGE_ID: c_int = 0x10000000;
+const SendFn = *const fn (*c.mach_msg_header_t) callconv(.c) c.mach_msg_return_t;
+var next_send: ?SendFn = null;
+const Hook = struct {
+    armed: u64 = 0,
+    sends: u64 = 0, // pipe messages through this mach_msg_send
+    replies: u64 = 0, // of those, on a send-once right
+    fired: u64 = 0,
+    recorded: u32 = 0, // the refused reply's header destination
+    kr: u32 = 0, // its send's result
+    sentinel: u32 = 0,
+    fillers: u32 = 0, // ports allocated below the recorded name, then freed
+    fillers_freed: u32 = 0,
+    past: u32 = 0, // the first name past the recorded one, if the loop overshot
+};
+var hook: Hook = .{};
+fn realSend(h: *c.mach_msg_header_t) c.mach_msg_return_t {
+    if (next_send) |f| return f(h);
+    return c.mach_msg(h, c.MACH_SEND_MSG, h.msgh_size, 0, 0, c.MACH_MSG_TIMEOUT_NONE, 0);
+}
+pub export fn mach_msg_send(h: *c.mach_msg_header_t) c.mach_msg_return_t {
+    const name: u32 = h.msgh_remote_port;
+    const remote: u32 = h.msgh_bits & 0x1f; // MACH_MSGH_BITS_REMOTE_MASK
+    const pipe = h.msgh_id == XPC_PIPE_MESSAGE_ID;
+    const kr = realSend(h);
+    if (pipe) {
+        bump(&hook.sends);
+        if (remote == MOVE_SEND_ONCE) bump(&hook.replies);
+    }
+    if (pipe and remote == MOVE_SEND_ONCE and kr != 0 and @atomicRmw(u64, &hook.armed, .Xchg, 0, .seq_cst) == 1) {
+        hook.recorded = name;
+        hook.kr = @bitCast(kr);
+        sentinelAt(name);
+        put(&hook.fired, 1);
+    }
+    return kr;
+}
+fn sentinelAt(want: u32) void {
+    const task = c.mach_task_self();
+    var fillers: [64]u32 = undefined;
+    var n: usize = 0;
+    while (n < fillers.len) {
+        var p: u32 = 0;
+        if (c.mach_port_allocate(task, c.MACH_PORT_RIGHT_RECEIVE, &p) != 0) break;
+        if (p == want) {
+            if (c.mach_port_insert_right(task, p, p, c.MACH_MSG_TYPE_MAKE_SEND) == 0) {
+                hook.sentinel = p;
+            } else _ = c.mach_port_mod_refs(task, p, c.MACH_PORT_RIGHT_RECEIVE, -1);
+            break;
+        }
+        fillers[n] = p;
+        n += 1;
+        if (p > want) {
+            hook.past = p;
+            break;
+        }
+    }
+    hook.fillers = @intCast(n);
+    for (fillers[0..n]) |p| {
+        if (c.mach_port_mod_refs(task, p, c.MACH_PORT_RIGHT_RECEIVE, -1) == 0) hook.fillers_freed += 1;
+    }
+}
+fn observer(case: [*:0]const u8) void {
+    var info: c.Dl_info = undefined;
+    const p: ?*const anyopaque = if (next_send) |f| @ptrCast(f) else null;
+    const found = p != null and c.dladdr(p, &info) != 0 and info.dli_fname != null;
+    const path: [*c]const u8 = if (found) info.dli_fname else "none (mach_msg)";
+    _ = c.printf("xpc_b0 case=%s observer=mach_msg_send next=%s\n", case, path);
+    _ = c.fflush(null);
+}
+// The barrier runs on conn's send queue (xpc_connection_send_barrier is a
+// dispatch_sync there): when it returns, every send queued before it,
+// xpc_send included, has returned.
+const BarrierBlock = extern struct {
+    isa: ?*anyopaque,
+    flags: c_int,
+    reserved: c_int,
+    invoke: *const fn (*BarrierBlock) callconv(.c) void,
+    descriptor: *const Descriptor,
+};
+fn barrierInvoke(_: *BarrierBlock) callconv(.c) void {}
+const barrier_descriptor = Descriptor{ .reserved = 0, .size = @sizeOf(BarrierBlock) };
+fn barrier(conn: O) void {
+    var literal = BarrierBlock{ .isa = @ptrCast(&_NSConcreteStackBlock), .flags = 0, .reserved = 0, .invoke = &barrierInvoke, .descriptor = &barrier_descriptor };
+    const b = _Block_copy(&literal);
+    xpc_connection_send_barrier(conn, b);
+    _Block_release(b);
+}
+
+// Names back to the start: every start name with its type, and no other
+// name, except a thread's MIG reply port (mig_get_reply_port: a receive
+// right with no send right and no context, kept until its thread exits),
+// which is printed and not counted. libxpc marks its own call reply ports
+// with a context (XPC_REPLY_PORT_CONTEXT), so a lingering one counts.
+fn context(name: u32) u64 {
+    var v: c.mach_vm_address_t = 0;
+    return if (c.mach_port_get_context(c.mach_task_self(), name, &v) == 0) v else 0xffffffffffffffff;
+}
+fn threadPort(name: u32, t: u32) bool {
+    return (t & 0x1f0000) == c.MACH_PORT_TYPE_RECEIVE and refs(name, SEND) == 0 and context(name) == 0;
+}
+fn namesBack(case: [*:0]const u8, a: *const Names, b: *const Names, others: bool, show: bool) bool {
+    var ok = true;
+    for (a.fds[0..a.n], a.types[0..a.n]) |fd, t| {
+        var seen: ?u32 = null;
+        for (b.fds[0..b.n], b.types[0..b.n]) |x, u| {
+            if (x == fd) seen = u;
+        }
+        if (seen == null or seen.? != t) {
+            ok = false;
+            if (show) _ = c.printf("xpc_b0 case=%s name=%d start_type=0x%x end_type=0x%x\n", case, fd, t, seen orelse 0);
+        }
+    }
+    for (b.fds[0..b.n], b.types[0..b.n]) |fd, t| {
+        var old = false;
+        for (a.fds[0..a.n]) |x| old = old or x == fd;
+        if (old) continue;
+        if (threadPort(@intCast(fd), t)) {
+            if (show) _ = c.printf("xpc_b0 case=%s thread_port=%d type=0x%x (not counted)\n", case, fd, t);
+            continue;
+        }
+        ok = false;
+        if (show) _ = c.printf("xpc_b0 case=%s new_name=%d type=0x%x send_refs=%llu context=0x%llx\n", case, fd, t, refs(@intCast(fd), SEND), context(@intCast(fd)));
+    }
+    if (others) {
+        const same_count = a.no == b.no;
+        for (a.others[0..a.no], a.kinds[0..a.no], 0..) |fd, k, i| {
+            if (!same_count or b.others[i] != fd or b.kinds[i] != k) ok = false;
+        }
+        if (!same_count or !ok) {
+            if (show) {
+                for (b.others[0..b.no], b.kinds[0..b.no]) |fd, k| _ = c.printf("xpc_b0 case=%s end_descriptor=%d kind=%d\n", case, fd, k);
+                _ = c.printf("xpc_b0 case=%s other_descriptors start=%llu end=%llu\n", case, @as(u64, a.no), @as(u64, b.no));
+            }
+            if (!same_count) ok = false;
+        }
+    }
+    _ = c.fflush(null);
+    return ok;
+}
+var start_names: Names = .{};
+var end_names: Names = .{};
+fn settleNames(case: [*:0]const u8, others: bool, ms: u64) bool {
+    const start = nowMs();
+    while (true) {
+        names(&end_names);
+        const last = nowMs() - start >= ms;
+        if (namesBack(case, &start_names, &end_names, others, last)) {
+            _ = namesBack(case, &start_names, &end_names, others, true);
+            return true;
+        }
+        if (last) return false;
+        _ = c.usleep(20_000);
+    }
+}
+fn pipeDescriptors(s: *const Names) u64 {
+    var k: u64 = 0;
+    for (s.kinds[0..s.no]) |x| k += @intFromBool(x == c.KF_TYPE_PIPE);
+    return k;
+}
+
+// A list the case packs itself, as libxpc packs a dictionary: "value", then
+// each of eps as an endpoint entry "e<i>" holding that index.
+var packed_list: [8192]u8 = undefined;
+fn rawList(value: u64, eps: []const c_int) []const u8 {
+    const nv = nvlist_create_dictionary(0) orelse c.atf_tc_fail("setup: payload list");
+    defer nvlist_destroy(nv);
+    nvlist_add_uint64(nv, "value", value);
+    var key: [16]u8 = undefined;
+    for (eps, 0..) |e, i| {
+        const k = std.fmt.bufPrintZ(&key, "e{d}", .{i}) catch unreachable;
+        nvlist_add_endpoint(nv, k.ptr, e);
+    }
+    need(nvlist_error(nv) == 0, "payload list entries");
+    var size: usize = 0;
+    const p = nvlist_pack(nv, &size) orelse c.atf_tc_fail("setup: payload pack");
+    defer c.free(p);
+    need(size <= packed_list.len, "payload fits");
+    @memcpy(packed_list[0..size], @as([*]const u8, @ptrCast(p))[0..size]);
+    return packed_list[0..size];
+}
+// A message the case sends itself to a listener's port from a reply port of
+// its own (MAKE_SEND in the header: the listener's peer for that port gets
+// it), laid out as xpc_pipe_send_msg lays one out (XPC_WIRE_DATA): with
+// once, a send-once right made from the reply port first, as a request
+// carries; then each of carried as an endpoint's descriptor (COPY_SEND, which
+// takes a descriptor's file as well as a send right); then size, ID and the
+// list. No descriptor: a simple message, the list at 40.
+fn sendRaw(dest: u32, reply_port: u32, once: bool, carried: []const u32, bytes: []const u8, id: u64) c_int {
+    const n = carried.len + @intFromBool(once);
+    const list: usize = if (n == 0) 40 else std.mem.alignForward(usize, 28 + 12 * n, 8) + 16;
+    const total = std.mem.alignForward(usize, list + bytes.len, 8);
+    const buf: [*]align(8) u8 = @ptrCast(@alignCast(c.calloc(1, total) orelse c.atf_tc_fail("setup: raw buffer")));
+    defer c.free(buf);
+    const h: *c.mach_msg_header_t = @ptrCast(buf);
+    h.msgh_bits = (if (n != 0) COMPLEX else 0) | c.MACH_MSGH_BITS(c.MACH_MSG_TYPE_COPY_SEND, c.MACH_MSG_TYPE_MAKE_SEND);
+    h.msgh_size = @intCast(total);
+    h.msgh_remote_port = dest;
+    h.msgh_local_port = reply_port;
+    h.msgh_id = XPC_PIPE_MESSAGE_ID;
+    if (n != 0) {
+        std.mem.writeInt(u32, buf[24..28], @intCast(n), .little);
+        const d: [*]align(4) PortDescriptor = @ptrCast(@alignCast(buf + 28));
+        var i: usize = 0;
+        if (once) {
+            d[0] = .{ .name = reply_port, .pad1 = 0, .pad2 = 0, .disposition = c.MACH_MSG_TYPE_MAKE_SEND_ONCE, .kind = c.MACH_MSG_PORT_DESCRIPTOR };
+            i = 1;
+        }
+        for (carried) |name| {
+            d[i] = .{ .name = name, .pad1 = 0, .pad2 = 0, .disposition = c.MACH_MSG_TYPE_COPY_SEND, .kind = c.MACH_MSG_PORT_DESCRIPTOR };
+            i += 1;
+        }
+    }
+    std.mem.writeInt(u64, buf[list - 16 ..][0..8], bytes.len, .little);
+    std.mem.writeInt(u64, buf[list - 8 ..][0..8], id, .little);
+    @memcpy(buf[list..][0..bytes.len], bytes);
+    return c.mach_msg(h, c.MACH_SEND_MSG | c.MACH_SEND_TIMEOUT, h.msgh_size, 0, 0, 1000, 0);
+}
+
+// ---- replyEndpointRefused ----------------------------------------------------
+//
+// The server answers a request with a reply that borrows a receive right
+// with no send right (xpc_dictionary_set_mach_recv). The kernel takes the
+// reply's send-once right at header copyin, refuses the endpoint's COPY_SEND
+// at body copyin (MACH_SEND_INVALID_RIGHT) and destroys the send-once right
+// then (ipc_kmsg_clean_partial), so the client's call completes with an
+// error, and the right's name is free again. The hook puts the sentinel on
+// that name before the sender returns: a sender that releases the name again
+// takes the sentinel's only send right.
+fn replyEndpointRefused(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const case = "replyEndpointRefused";
+    library(case);
+    observer(case);
+    var sport: u32 = 0;
+    const s = listen("op813.refused.server", &serverListener, &srv, &sport);
+    cli.init();
+    const client = clientOf(s, &cli);
+    // Warm-up: one request and its reply through the unarmed hook.
+    const w = &calls[0];
+    w.init();
+    call(client, dict(100, OP_ECHO), w, &callDone);
+    const warm = waitMs(&w.sem, LIMIT_MS) and w.code == 100;
+    const sends = load(&hook.sends);
+    const replies = load(&hook.replies);
+    names(&start_names);
+    put(&hook.armed, 1);
+    const k = &calls[1];
+    k.init();
+    call(client, dict(101, OP_RECV_REPLY), k, &callDone);
+    const done = waitMs(&k.sem, LIMIT_MS);
+    const fired = awaitCount(&hook.fired, 1, LIMIT_MS);
+    put(&hook.armed, 0);
+    const peer = srv.peer;
+    if (peer != null) barrier(peer);
+    const sentinel = hook.sentinel;
+    const sentinel_refs = if (sentinel != 0) refs(sentinel, SEND) else 0;
+    _ = c.usleep(100_000);
+    const exercised = fired and sentinel != 0 and sentinel == hook.recorded;
+    _ = c.printf("xpc_b0 case=%s observed warmup=%u sends_before=%llu replies_before=%llu fired=%u recorded=%u kr=0x%x sentinel=%u fillers=%u past=%u sentinel_send_refs=%llu completions=%llu code=%llu peer=%u recv=%u\n", case, @as(c_uint, @intFromBool(warm)), sends, replies, @as(c_uint, @intFromBool(fired)), hook.recorded, hook.kr, sentinel, hook.fillers, hook.past, sentinel_refs, load(&k.n), k.code, @as(c_uint, @intFromBool(peer != null)), srv.recv);
+    if (!exercised) _ = c.printf("xpc_b0 case=%s exercised=0: the sentinel did not take the refused reply's name, so a second release of it is not tested\n", case);
+    _ = c.fflush(null);
+    fact(case, "interposer_saw_libxpc_sends", 1, @intFromBool(sends >= 2 and replies >= 1));
+    fact(case, "warmup_reply", 100, if (warm) w.code else NONE);
+    fact(case, "reply_send_refused", 1, @intFromBool(fired));
+    fact(case, "sentinel_takes_reply_name", 1, @intFromBool(exercised));
+    fact(case, "sentinel_send_refs_after_send", 1, sentinel_refs);
+    fact(case, "call_completions", 1, load(&k.n));
+    fact(case, "call_error", 1, @intFromBool(done and (k.code == INVALID or k.code == INTERRUPTED)));
+    // The case's own ports: the sentinel and the borrowed receive right.
+    var freed = hook.fillers_freed == hook.fillers;
+    if (sentinel != 0) {
+        if (refs(sentinel, SEND) > 0) freed = freed and c.mach_port_deallocate(c.mach_task_self(), sentinel) == 0;
+        freed = freed and c.mach_port_mod_refs(c.mach_task_self(), sentinel, c.MACH_PORT_RIGHT_RECEIVE, -1) == 0;
+    }
+    if (srv.recv != 0) freed = freed and c.mach_port_mod_refs(c.mach_task_self(), srv.recv, c.MACH_PORT_RIGHT_RECEIVE, -1) == 0;
+    fact(case, "own_ports_freed", 1, @intFromBool(freed));
+    fact(case, "server_names_back", 1, @intFromBool(settleNames(case, false, 2000)));
+    if (peer != null) xpc_release(peer);
+    retire(client);
+    retire(s);
+    finalEvents(case);
+    conclude(case);
+}
+
+// ---- Raw messages to a listener ---------------------------------------------
+//
+// Each raw case sends from a reply port R of its own to a server listener;
+// its first message, a valid one, makes the listener's peer for R. The
+// carried port P is the case's, with one send right: an endpoint descriptor
+// of P adds a send reference to P's own name in this task, and releasing it
+// takes it off again.
+const Raw = struct { s: O = null, sport: u32 = 0, r: u32 = 0, p: u32 = 0, start_refs: u64 = 0 };
+var raw: Raw = .{};
+fn rawSetup(case: [*:0]const u8, tag: [*:0]const u8, warm: u64) void {
+    raw.s = listen(tag, &serverListener, &srv, &raw.sport);
+    const task = c.mach_task_self();
+    need(c.mach_port_allocate(task, c.MACH_PORT_RIGHT_RECEIVE, &raw.r) == 0, "reply port");
+    need(c.mach_port_allocate(task, c.MACH_PORT_RIGHT_RECEIVE, &raw.p) == 0, "carried port");
+    need(c.mach_port_insert_right(task, raw.p, raw.p, c.MACH_MSG_TYPE_MAKE_SEND) == 0, "carried send right");
+    fact(case, "warmup_sent", 0, @bitCast(@as(i64, sendRaw(raw.sport, raw.r, false, &.{}, rawList(warm, &.{}), warm))));
+    fact(case, "warmup_arrived", 1, @intFromBool(awaitCount(&srv.count[@intCast(warm)], 1, LIMIT_MS)));
+    raw.start_refs = refs(raw.p, SEND);
+    names(&start_names);
+}
+const Refusal = struct { sent: i64 = 0, sent_next: i64 = 0, arrived: u64 = 0, next: bool = false, notified: u64 = 0 };
+// One message to be refused (already packed in bytes), then a valid one
+// from the same reply port: its value arrives when the peer read on.
+fn refusedThenNext(once: bool, carried: []const u32, bytes: []const u8, refused: u64, next: u64) Refusal {
+    var v = Refusal{};
+    v.sent = sendRaw(raw.sport, raw.r, once, carried, bytes, refused);
+    v.sent_next = sendRaw(raw.sport, raw.r, false, &.{}, rawList(next, &.{}), next);
+    v.next = awaitCount(&srv.count[@intCast(next)], 1, LIMIT_MS);
+    _ = c.usleep(50_000);
+    v.arrived = load(&srv.count[@intCast(refused)]);
+    // A refused request's send-once right goes back to R as a notification.
+    if (once) {
+        while (receiveWire(raw.r, 500) == 0) {
+            const h: *c.mach_msg_header_t = @ptrCast(&wire);
+            if (h.msgh_id == c.MACH_NOTIFY_SEND_ONCE) v.notified += 1;
+            c.mach_msg_destroy(h);
+        }
+    }
+    return v;
+}
+fn rawFinish(case: [*:0]const u8, others: bool) void {
+    fact(case, "carried_send_refs_back", raw.start_refs, settleRefs(raw.p, SEND, raw.start_refs, 2000));
+    fact(case, "names_back", 1, @intFromBool(settleNames(case, others, 2000)));
+    retire(raw.s);
+    finalEvents(case);
+    const task = c.mach_task_self();
+    var freed = c.mach_port_deallocate(task, raw.p) == 0;
+    freed = freed and c.mach_port_mod_refs(task, raw.p, c.MACH_PORT_RIGHT_RECEIVE, -1) == 0;
+    freed = freed and c.mach_port_mod_refs(task, raw.r, c.MACH_PORT_RIGHT_RECEIVE, -1) == 0;
+    fact(case, "own_ports_freed", 1, @intFromBool(freed));
+    conclude(case);
+}
+fn printRefusal(case: [*:0]const u8, form: [*:0]const u8, v: Refusal) void {
+    _ = c.printf("xpc_b0 case=%s observed form=%s sent=%lld sent_next=%lld refused_arrived=%llu next_arrived=%u send_once_notified=%llu carried_send_refs=%llu start=%llu\n", case, form, v.sent, v.sent_next, v.arrived, @as(c_uint, @intFromBool(v.next)), v.notified, refs(raw.p, SEND), raw.start_refs);
+    _ = c.fflush(null);
+}
+
+// ---- fileInEndpointSlot ------------------------------------------------------
+//
+// An endpoint's slot that holds a pipe's descriptor. rmxOS's kernel carries
+// a passable file in a port descriptor (ipc_object_copyin,
+// ipc_entry_file_to_port) and the receiver gets it as a new descriptor with
+// no Mach entry. The receiver refuses the message and closes it; its
+// descriptor table is back where it started, and the next message arrives.
+fn fileInEndpointSlot(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const case = "fileInEndpointSlot";
+    library(case);
+    rawSetup(case, "op813.file.server", 110);
+    const start_pipes = pipeDescriptors(&start_names);
+    var fds: [2]c_int = undefined;
+    need(c.pipe(&fds) == 0, "pipe");
+    const carried = [_]u32{@intCast(fds[0])};
+    const v = refusedThenNext(false, &carried, rawList(111, &.{0}), 111, 112);
+    printRefusal(case, "file", v);
+    _ = c.close(fds[0]);
+    _ = c.close(fds[1]);
+    fact(case, "file_message_sent", 0, @bitCast(v.sent));
+    fact(case, "file_message_arrived", 0, v.arrived);
+    fact(case, "next_message_arrived", 1, @intFromBool(v.next));
+    var now: Names = undefined;
+    names(&now);
+    _ = c.printf("xpc_b0 case=%s observed pipe_descriptors start=%llu after_close=%llu\n", case, start_pipes, pipeDescriptors(&now));
+    fact(case, "pipe_descriptors_after_close", start_pipes, pipeDescriptors(&now));
+    rawFinish(case, true);
+}
+
+// ---- The decoder's other refusals (op-796's untested ones) -------------------
+
+// One endpoint descriptor; the list names index 1.
+fn endpointIndexOutOfRange(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const case = "endpointIndexOutOfRange";
+    library(case);
+    rawSetup(case, "op813.range.server", 113);
+    const carried = [_]u32{raw.p};
+    const v = refusedThenNext(false, &carried, rawList(114, &.{1}), 114, 115);
+    printRefusal(case, "range", v);
+    fact(case, "refused_sent", 0, @bitCast(v.sent));
+    fact(case, "refused_message_arrived", 0, v.arrived);
+    fact(case, "next_message_arrived", 1, @intFromBool(v.next));
+    rawFinish(case, false);
+}
+// Two endpoint descriptors; the list names index 0 twice (as many entries as
+// descriptors, one index repeated).
+fn endpointIndexTwice(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const case = "endpointIndexTwice";
+    library(case);
+    rawSetup(case, "op813.twice.server", 116);
+    const carried = [_]u32{ raw.p, raw.p };
+    const v = refusedThenNext(false, &carried, rawList(117, &.{ 0, 0 }), 117, 118);
+    printRefusal(case, "twice", v);
+    fact(case, "refused_sent", 0, @bitCast(v.sent));
+    fact(case, "refused_message_arrived", 0, v.arrived);
+    fact(case, "next_message_arrived", 1, @intFromBool(v.next));
+    rawFinish(case, false);
+}
+// 65 endpoint descriptors, the list naming each once: in a message (65
+// descriptors), and after a request's send-once right (66).
+fn endpointsOverCapReceived(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const case = "endpointsOverCapReceived";
+    library(case);
+    rawSetup(case, "op813.over.server", 119);
+    var carried: [CAP + 1]u32 = undefined;
+    var eps: [CAP + 1]c_int = undefined;
+    for (&carried, &eps, 0..) |*n, *e, i| {
+        n.* = raw.p;
+        e.* = @intCast(i);
+    }
+    const a = refusedThenNext(false, &carried, rawList(120, &eps), 120, 121);
+    printRefusal(case, "message", a);
+    fact(case, "message_sent", 0, @bitCast(a.sent));
+    fact(case, "message_arrived", 0, a.arrived);
+    fact(case, "next_after_message_arrived", 1, @intFromBool(a.next));
+    fact(case, "send_refs_after_message", raw.start_refs, settleRefs(raw.p, SEND, raw.start_refs, 2000));
+    const b = refusedThenNext(true, &carried, rawList(122, &eps), 122, 123);
+    printRefusal(case, "request", b);
+    fact(case, "request_sent", 0, @bitCast(b.sent));
+    fact(case, "request_arrived", 0, b.arrived);
+    fact(case, "next_after_request_arrived", 1, @intFromBool(b.next));
+    fact(case, "request_send_once_released", 1, b.notified);
+    rawFinish(case, false);
+}
+
 extern fn atf_tp_main(c_int, [*c][*c]u8, *const fn ([*c]c.atf_tp_t) callconv(.c) c.atf_error_t) c_int;
-// A console command runs the six in one batch under a 120 s cap: 30 + 5 x 15.
+// The first case may take 30 s (a forked child), each other 15 s.
 fn longHead(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "30");
 }
 fn shortHead(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "15");
 }
-var cases: [6]c.atf_tc_t = undefined;
+var cases: [11]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const ids = [_][*:0]const u8{ "endpointInReply", "endpointInMessage", "endpointReleasedBeforeUse", "secondEndpoint", "endpointNames", "endpointCapRefused" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &endpointInReply, &endpointInMessage, &endpointReleasedBeforeUse, &secondEndpoint, &endpointNames, &endpointCapRefused };
+    const ids = [_][*:0]const u8{ "endpointInReply", "endpointInMessage", "endpointReleasedBeforeUse", "secondEndpoint", "endpointNames", "endpointCapRefused", "replyEndpointRefused", "fileInEndpointSlot", "endpointIndexOutOfRange", "endpointIndexTwice", "endpointsOverCapReceived" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ &endpointInReply, &endpointInMessage, &endpointReleasedBeforeUse, &secondEndpoint, &endpointNames, &endpointCapRefused, &replyEndpointRefused, &fileInEndpointSlot, &endpointIndexOutOfRange, &endpointIndexTwice, &endpointsOverCapReceived };
     for (&cases, ids, bodies, 0..) |*tc, id, body, i| {
         var err = c.atf_tc_init(tc, id, if (i == 0) &longHead else &shortHead, body, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;
@@ -1364,5 +1854,8 @@ fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
     return c.atf_no_error();
 }
 pub export fn main(argc: c_int, argv: [*c][*c]u8) c_int {
+    // The definition the hook calls: the one libxpc would bind without it.
+    const rtld_next: ?*anyopaque = @ptrFromInt(std.math.maxInt(usize)); // RTLD_NEXT
+    if (c.dlsym(rtld_next, "mach_msg_send")) |f| next_send = @ptrCast(@alignCast(f));
     return atf_tp_main(argc, argv, &add);
 }
