@@ -697,12 +697,38 @@ xpc_pipe_send_reply(xpc_object_t xobj, mach_port_t sonce, uint64_t id,
 	} while (0)
 
 /*
+ * Whether a name received in a PORT_SEND descriptor is what an endpoint
+ * holds: a send right, or the dead name a send right became; null and
+ * MACH_PORT_DEAD hold nothing. Our kernel also carries a passable file in a
+ * port descriptor (ipc_object_copyin, ipc_entry_file_to_port) and copies it
+ * out as a new descriptor with no Mach entry, for which mach_port_mod_refs
+ * answers KERN_INVALID_NAME. A change of 0 changes no count, and the call is
+ * a trap: no MIG reply port.
+ */
+static bool
+xpc_endpoint_name_valid(mach_port_t name)
+{
+	kern_return_t kr;
+
+	if (!MACH_PORT_VALID(name))
+		return (true);
+	kr = mach_port_mod_refs(mach_task_self(), name, MACH_PORT_RIGHT_SEND, 0);
+	if (kr == KERN_SUCCESS)
+		return (true);
+	return (kr == KERN_INVALID_RIGHT &&
+	    mach_port_mod_refs(mach_task_self(), name,
+	    MACH_PORT_RIGHT_DEAD_NAME, 0) == KERN_SUCCESS);
+}
+
+/*
  * A successful receive owns the header right, a request's send-once right
  * and each endpoint's send right until this helper transfers them. The
  * message is refused (EINVAL), with each of its rights released once by
  * mach_msg_destroy, before any object owns one: a complex message is a
  * request's PORT_SEND_ONCE descriptor first, or none, then up to
  * XPC_MAX_ENDPOINTS PORT_SEND descriptors, at least one descriptor in all,
+ * each endpoint descriptor holding a send right or a dead name
+ * (xpc_endpoint_name_valid: a file there is closed by mach_msg_destroy),
  * and its list must name each endpoint descriptor once (nv_endpoints_valid).
  * *idp gets the message's ID.
  */
@@ -754,7 +780,8 @@ xpc_pipe_decode(struct xpc_recv_message *message, size_t capacity,
 		endpoints = desc;
 		for (i = 0; i < ndesc; i++) {
 			if (desc[i].type != MACH_MSG_PORT_DESCRIPTOR ||
-			    desc[i].disposition != MACH_MSG_TYPE_PORT_SEND)
+			    desc[i].disposition != MACH_MSG_TYPE_PORT_SEND ||
+			    !xpc_endpoint_name_valid(desc[i].name))
 				goto invalid;
 			ports.xpt_names[i] = desc[i].name;
 		}
