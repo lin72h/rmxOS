@@ -29,6 +29,8 @@ mach_port_t mach_task_self_ = 0;
 
  __attribute__((visibility("hidden"))) mach_port_t _task_reply_port;
 extern void mig_init(void);
+/* mach_misc.c, beside the thread-port key it clears. */
+__attribute__((visibility("hidden"))) extern void _mach_thread_port_fork_child(void);
 
 void
 mach_init(void)
@@ -42,6 +44,13 @@ mach_init(void)
 	/* we may need to call this again after fork */
 	if (mach_inited_pid != (pid = getpid())) {
 		mig_init();
+		/*
+		 * A forked child: like the MIG reply slot, the calling thread's
+		 * thread-port cache names a parent's port.  Forget it, without
+		 * releasing a number the child never looked up.
+		 */
+		if (mach_inited_pid != 0)
+			_mach_thread_port_fork_child();
 		root_flag = getenv("ROOT_BOOTSTRAP");
 		root_bootstrap = (root_flag != NULL) && (strcmp(root_flag, "T") == 0);
 

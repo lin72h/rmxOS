@@ -228,13 +228,22 @@ struct mach_thread_port_cache {
 
 static pthread_once_t thread_port_once = PTHREAD_ONCE_INIT;
 static pthread_key_t thread_port_key;
+static bool thread_port_key_made;
 
+/*
+ * A cache made under another pid holds a number this process never looked
+ * up: a forked child's Mach names are new (they are descriptors that fork
+ * does not copy), and a vfork or rfork(RFSPAWN) child shares its parent's
+ * memory and runs no fork handler.  Such a cache is forgotten: freed, its
+ * port not released.  A cache this process made is released as before.
+ */
 static void
 thread_port_destroy(void *value)
 {
 	struct mach_thread_port_cache *cache = value;
 
-	(void)mach_port_deallocate(mach_task_self(), cache->port);
+	if (cache->pid == getpid())
+		(void)mach_port_deallocate(mach_task_self(), cache->port);
 	free(cache);
 }
 
@@ -243,6 +252,29 @@ thread_port_key_init(void)
 {
 	if (pthread_key_create(&thread_port_key, thread_port_destroy) != 0)
 		abort();
+	thread_port_key_made = true;
+}
+
+/*
+ * mach_init()'s fork child path: the calling thread's slot holds the
+ * parent's cache.  Clear the slot and free the cache, without releasing the
+ * parent's number in the child.
+ */
+__attribute__((visibility("hidden"))) void _mach_thread_port_fork_child(void);
+
+__attribute__((visibility("hidden"))) void
+_mach_thread_port_fork_child(void)
+{
+	struct mach_thread_port_cache *cache;
+
+	if (!thread_port_key_made)
+		return;
+	cache = pthread_getspecific(thread_port_key);
+	if (cache == NULL || cache->pid == getpid())
+		return;
+	if (pthread_setspecific(thread_port_key, NULL) != 0)
+		abort();
+	free(cache);
 }
 
 mach_port_t
@@ -260,11 +292,11 @@ pthread_mach_thread_np(uintptr_t self)
 		abort();
 	cache = pthread_getspecific(thread_port_key);
 	pid = getpid();
-	/* After fork the inherited send right still names the parent thread. */
+	/* Made under another pid: forget it, release nothing (see above). */
 	if (cache != NULL && cache->pid != pid) {
 		if (pthread_setspecific(thread_port_key, NULL) != 0)
 			abort();
-		thread_port_destroy(cache);
+		free(cache);
 		cache = NULL;
 	}
 	if (cache == NULL) {
