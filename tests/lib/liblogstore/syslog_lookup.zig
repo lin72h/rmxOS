@@ -13,6 +13,7 @@ const c = @cImport({
     @cDefine("__BSD_VISIBLE", "1");
     @cInclude("atf-c.h");
     @cInclude("stdio.h");
+    @cInclude("stdlib.h");
     @cInclude("unistd.h");
     @cInclude("grp.h");
     @cInclude("pwd.h");
@@ -512,6 +513,8 @@ fn forkedChildKeepsPorts(_: [*c]const c.atf_tc_t) callconv(.c) void {
 // a port of its own and logs once with asl_log: its log must neither release a
 // reference from those ports nor queue a message on them, and must be stored.
 extern fn asl_log(?*anyopaque, ?*anyopaque, c_int, [*:0]const u8, ...) c_int;
+extern fn asl_log_descriptor(?*anyopaque, ?*anyopaque, c_int, c_int, u32) c_int;
+const asl_log_descriptor_read = 1;
 extern fn asl_core_get_service_port(c_int) c_uint;
 extern fn mach_port_get_attributes(c_uint, c_uint, c_int, *[status_words]c_uint, *c_uint) c_int;
 const asl_level_notice = 5;
@@ -695,14 +698,53 @@ fn forkedChildKeepsAslPort(_: [*c]const c.atf_tc_t) callconv(.c) void {
     _ = c.fflush(null);
     need(parents == 2, "the parent's two lines are stored once each");
 }
+fn forkedChildOfDescriptorRedirectExits(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    const case = "forkedChildOfDescriptorRedirectExits";
+    var fds: [2]c_int = undefined;
+    need(c.pipe(&fds) == 0, "redirect pipe");
+    defer _ = c.close(fds[1]);
+    const rc = asl_log_descriptor(null, null, asl_level_notice, fds[0], asl_log_descriptor_read);
+    aslFact(case, null, "asl_log_descriptor_rc", 0, rc);
+    _ = c.fflush(null);
+    need(rc == 0, "register the parent's read descriptor");
+
+    var start: c.struct_timespec = undefined;
+    need(c.clock_gettime(c.CLOCK_MONOTONIC, &start) == 0, "monotonic start");
+    const pid = c.fork();
+    need(pid >= 0, "fork redirect child");
+    if (pid == 0) c.exit(0);
+
+    var status: c_int = -1;
+    var elapsed: i64 = 0;
+    var waited: c.pid_t = 0;
+    while (true) {
+        waited = c.waitpid(pid, &status, c.WNOHANG);
+        var now: c.struct_timespec = undefined;
+        need(c.clock_gettime(c.CLOCK_MONOTONIC, &now) == 0, "monotonic poll");
+        elapsed = (now.tv_sec - start.tv_sec) * std.time.ns_per_s + now.tv_nsec - start.tv_nsec;
+        if (waited == pid or (waited == -1 and c.__error().* != c.EINTR)) break;
+        const remaining = 10 * std.time.ns_per_s - elapsed;
+        if (remaining <= 0) {
+            _ = c.kill(pid, c.SIGKILL);
+            _ = c.waitpid(pid, &status, 0);
+            break;
+        }
+        _ = c.usleep(@intCast(@min(1000, @divTrunc(remaining, std.time.ns_per_us))));
+    }
+    aslFact(case, null, "child_wait_status", 0, if (waited == pid) status else -1);
+    _ = c.printf("op839 case=%s child_elapsed_ns=%lld limit_ns=1000000000\n", case, @as(c_longlong, elapsed));
+    _ = c.fflush(null);
+    need(waited == pid and status == 0, "the redirect child exits normally with status 0");
+    need(elapsed < std.time.ns_per_s, "the redirect child exits in under one second");
+}
 fn head(tc: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(tc, "require.user", "root");
     _ = c.atf_tc_set_md_var(tc, "timeout", "20");
 }
-var cases: [11]c.atf_tc_t = undefined;
+var cases: [12]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "libc_binding", "nonroot_logger", "nonroot_syslog", "nonroot_simple", "root_logger", "setgid_child", "setuid_root_child", "username_daemon", "forkedChildKeepsPipes", "forkedChildKeepsPorts", "forkedChildKeepsAslPort" };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ libcBinding, nonrootLogger, nonrootSyslog, nonrootSimple, rootLogger, setgidChild, setuidRootChild, usernameDaemon, forkedChildKeepsPipes, forkedChildKeepsPorts, forkedChildKeepsAslPort };
+    const names = [_][*:0]const u8{ "libc_binding", "nonroot_logger", "nonroot_syslog", "nonroot_simple", "root_logger", "setgid_child", "setuid_root_child", "username_daemon", "forkedChildKeepsPipes", "forkedChildKeepsPorts", "forkedChildKeepsAslPort", "forkedChildOfDescriptorRedirectExits" };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ libcBinding, nonrootLogger, nonrootSyslog, nonrootSimple, rootLogger, setgidChild, setuidRootChild, usernameDaemon, forkedChildKeepsPipes, forkedChildKeepsPorts, forkedChildKeepsAslPort, forkedChildOfDescriptorRedirectExits };
     for (&cases, names, bodies) |*tc, name, body| {
         var err = c.atf_tc_init(tc, name, head, body, cleanup, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;

@@ -174,6 +174,8 @@ redirect_atexit(void)
 {
     int i;
 
+    if (redirect_descriptors == NULL) return;
+
     /* stdout is linebuffered, so flush the buffer */
     if (redirect_descriptors[STDOUT_FILENO].buf) fflush(stdout);
 
