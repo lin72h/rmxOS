@@ -68,6 +68,7 @@ const Report = extern struct {
     held: u8 = 0,
     called: u8 = 0,
     watched: u8 = 0,
+    target: u32 = 0,
     made: u32 = 0,
     again: u32 = 0,
     create: i32 = -1,
@@ -123,7 +124,7 @@ fn watcher(arg: ?*anyopaque) callconv(.c) ?*anyopaque {
     finish(w.fd, &w.r);
 }
 fn child(ending: Ending, target: u32, fd: c_int) noreturn {
-    var r: Report = .{};
+    var r: Report = .{ .target = target };
     r.free = @intFromBool(fcntl(@intCast(target), f_getfd) == -1 and __error().* == ebadf);
     if (r.free == 1) holdPort(target, &r);
     if (r.held != 1) finish(fd, &r);
@@ -158,15 +159,13 @@ fn readAll(fd: c_int, buf: []u8) usize {
 fn need(ok: bool, text: [*:0]const u8) void {
     if (!ok) c.atf_tc_fail("%s", text);
 }
-fn forkedChild(ending: Ending) void {
-    const case: [*:0]const u8 = switch (ending) {
-        .call => "forkedChildKeepsThreadPort",
-        .thread_exit => "forkedChildThreadExitKeepsPort",
-    };
-    const n = threadPort();
-    const before = refs(n);
-    _ = c.printf("op831 case=%s thread_port=%u parent_send_refs=%u pid=%d\n", case, n, before, getpid());
-    need(n != 0 and n != 0xffffffff, "the parent's thread port");
+fn forkedChild(case: [*:0]const u8, ending: Ending, grandchild: bool) void {
+    var n = if (grandchild) 0 else threadPort();
+    const before = if (grandchild) 0 else refs(n);
+    if (!grandchild) {
+        _ = c.printf("op831 case=%s thread_port=%u parent_send_refs=%u pid=%d\n", case, n, before, getpid());
+        need(n != 0 and n != 0xffffffff, "the parent's thread port");
+    }
     var fds: [2]c_int = undefined;
     need(pipe(&fds) == 0, "report pipe");
     _ = c.fflush(null);
@@ -174,6 +173,20 @@ fn forkedChild(ending: Ending) void {
     need(pid >= 0, "fork");
     if (pid == 0) {
         _ = close(fds[0]);
+        if (grandchild) {
+            const m = threadPort();
+            const send = refs(m);
+            _ = c.printf("op831 case=%s thread_port=%u parent_send_refs=%u pid=%d\n", case, m, send, getpid());
+            _ = c.fflush(null);
+            if (m == 0 or m == 0xffffffff or send != 1) _exit(1);
+            const nested = fork();
+            if (nested == 0) child(.call, m, fds[1]);
+            var status: c_int = -1;
+            if (nested < 0 or waitpid(nested, &status, 0) != nested) status = -1;
+            _ = c.printf("op831 case=%s name=%u fact=grandchild_wait_status expected=0 observed=%d\n", case, m, status);
+            _ = c.fflush(null);
+            _exit(if (status == 0) 0 else 1);
+        }
         child(ending, n, fds[1]);
     }
     _ = close(fds[1]);
@@ -182,6 +195,7 @@ fn forkedChild(ending: Ending) void {
     _ = close(fds[0]);
     var status: c_int = -1;
     const waited = waitpid(pid, &status, 0);
+    if (grandchild) n = r.target;
     fact(case, n, "child_report_bytes", @sizeOf(Report), @intCast(got));
     fact(case, n, "free_in_child", 1, r.free);
     fact(case, n, "child_holds_number", 1, r.held);
@@ -198,8 +212,8 @@ fn forkedChild(ending: Ending) void {
     fact(case, n, "send_kr", 0, r.send_kr);
     fact(case, n, "send_refs", 1, r.send);
     fact(case, n, "child_wait_status", 0, if (waited == pid) status else -1);
-    const after = refs(n);
-    fact(case, n, "parent_send_refs_after", before, after);
+    const after = if (grandchild) 0 else refs(n);
+    if (!grandchild) fact(case, n, "parent_send_refs_after", before, after);
     _ = c.fflush(null);
     need(got == @sizeOf(Report), "the child's report arrived whole");
     need(r.free == 1 and r.held == 1, "the child did not get the number: free in it, then held by its own port");
@@ -210,23 +224,35 @@ fn forkedChild(ending: Ending) void {
     need(r.receive_kr == 0 and r.receive == 1, "the child's port at the number keeps its receive right");
     need(r.send_kr == 0 and r.send == 1, "the child's port at the number keeps one send reference");
     need(waited == pid and status == 0, "the child exits 0");
-    need(after == before, "the parent's thread port keeps its send references");
+    if (!grandchild) need(after == before, "the parent's thread port keeps its send references");
 }
 fn forkedChildKeepsThreadPort(_: [*c]const c.atf_tc_t) callconv(.c) void {
-    forkedChild(.call);
+    forkedChild("forkedChildKeepsThreadPort", .call, false);
 }
 fn forkedChildThreadExitKeepsPort(_: [*c]const c.atf_tc_t) callconv(.c) void {
-    forkedChild(.thread_exit);
+    forkedChild("forkedChildThreadExitKeepsPort", .thread_exit, false);
+}
+fn forkFromWorker(_: ?*anyopaque) callconv(.c) ?*anyopaque {
+    forkedChild("forkedFromOtherThreadKeepsPort", .call, false);
+    return null;
+}
+fn forkedFromOtherThreadKeepsPort(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    var thread: c.pthread_t = undefined;
+    need(c.pthread_create(&thread, null, forkFromWorker, null) == 0, "create forking thread");
+    need(c.pthread_join(thread, null) == 0, "join forking thread");
+}
+fn grandchildKeepsPort(_: [*c]const c.atf_tc_t) callconv(.c) void {
+    forkedChild("grandchildKeepsPort", .call, true);
 }
 fn forkHead(t: [*c]c.atf_tc_t) callconv(.c) void {
     _ = c.atf_tc_set_md_var(t, "descr", "%s", "A forked child's own port at its parent's thread-port number keeps its rights");
     _ = c.atf_tc_set_md_var(t, "timeout", "%s", "20");
 }
-var cases: [3]c.atf_tc_t = undefined;
+var cases: [5]c.atf_tc_t = undefined;
 fn add(tp: [*c]c.atf_tp_t) callconv(.c) c.atf_error_t {
-    const names = [_][*:0]const u8{ "queue_port_steady", "forkedChildKeepsThreadPort", "forkedChildThreadExitKeepsPort" };
-    const heads = [_]*const fn ([*c]c.atf_tc_t) callconv(.c) void{ head, forkHead, forkHead };
-    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ body, forkedChildKeepsThreadPort, forkedChildThreadExitKeepsPort };
+    const names = [_][*:0]const u8{ "queue_port_steady", "forkedChildKeepsThreadPort", "forkedChildThreadExitKeepsPort", "forkedFromOtherThreadKeepsPort", "grandchildKeepsPort" };
+    const heads = [_]*const fn ([*c]c.atf_tc_t) callconv(.c) void{ head, forkHead, forkHead, forkHead, forkHead };
+    const bodies = [_]*const fn ([*c]const c.atf_tc_t) callconv(.c) void{ body, forkedChildKeepsThreadPort, forkedChildThreadExitKeepsPort, forkedFromOtherThreadKeepsPort, grandchildKeepsPort };
     for (&cases, names, heads, bodies) |*tc, name, h, b| {
         var err = c.atf_tc_init(tc, name, h, b, null, c.atf_tp_get_config(tp));
         if (c.atf_is_error(err)) return err;

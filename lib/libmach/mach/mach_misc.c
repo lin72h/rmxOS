@@ -256,9 +256,9 @@ thread_port_key_init(void)
 }
 
 /*
- * mach_init()'s fork child path: the calling thread's slot holds the
- * parent's cache.  Clear the slot and free the cache, without releasing the
- * parent's number in the child.
+ * mach_init()'s fork child path: no child code has run on the calling thread
+ * yet.  Clear any cache in its slot without releasing a number belonging
+ * to another process.
  */
 __attribute__((visibility("hidden"))) void _mach_thread_port_fork_child(void);
 
@@ -270,7 +270,7 @@ _mach_thread_port_fork_child(void)
 	if (!thread_port_key_made)
 		return;
 	cache = pthread_getspecific(thread_port_key);
-	if (cache == NULL || cache->pid == getpid())
+	if (cache == NULL)
 		return;
 	if (pthread_setspecific(thread_port_key, NULL) != 0)
 		abort();
